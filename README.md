@@ -1,6 +1,6 @@
 # rwmod — RimWorld Mod Manager
 
-[![CI](https://github.com/qxkt222/rwmod/actions/workflows/ci.yml/badge.svg)](https://github.com/qxkt222/rwmod/actions)
+[![CI](https://github.com/qxkt222/rwmod-rimworld-mod-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/qxkt222/rwmod-rimworld-mod-manager/actions)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://python.org)
 
 全离线 RimWorld Mod 管理器 — 无需 Steam 客户端即可匿名下载、更新、备份与管理 RimWorld Mod，支持合集批量下载、依赖管理、排序分析、实时队列与安全加固。
