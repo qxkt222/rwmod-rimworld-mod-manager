@@ -79,7 +79,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title="rwmod Web",
-    version="0.4.1",
+    version="0.4.2",
     lifespan=lifespan,
     docs_url="/api/docs",
     openapi_url="/api/openapi.json",
