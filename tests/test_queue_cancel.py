@@ -51,7 +51,7 @@ class TestQueueCancel:
         item = QueueItem(id="123")
         q.items.append(item)
         q.remove("123")  # popped + added to _cancelled
-        cfg = Config(steamcmd_path=tmp_path / "steamcmd.exe")
+        cfg = Config(steamcmd_path=tmp_path / "steamcmd.exe", mods_dir=tmp_path)
 
         async def _run() -> None:
             await q._download_one(cfg, item, force=False)
@@ -66,7 +66,7 @@ class TestQueueCancel:
         q = DownloadQueue()
         item = QueueItem(id="123")
         q.items.append(item)
-        cfg = Config(steamcmd_path=tmp_path / "steamcmd.exe")
+        cfg = Config(steamcmd_path=tmp_path / "steamcmd.exe", mods_dir=tmp_path)
 
         def _cancel_during_download(*args: object, **kwargs: object) -> bool:
             q._cancelled.add("123")
@@ -85,7 +85,7 @@ class TestQueueCancel:
         q = DownloadQueue()
         item = QueueItem(id="123")
         q.items.append(item)
-        cfg = Config(steamcmd_path=tmp_path / "steamcmd.exe")
+        cfg = Config(steamcmd_path=tmp_path / "steamcmd.exe", mods_dir=tmp_path)
 
         async def _run() -> None:
             await q._download_one(cfg, item, force=False)

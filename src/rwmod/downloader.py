@@ -31,6 +31,8 @@ RETRY_DELAY = 5
 
 
 def _find_existing(mods_dir: Path, mod_id: str) -> Path | None:
+    if not mods_dir.exists():
+        return None
     for d in mods_dir.iterdir():
         if not d.is_dir():
             continue
