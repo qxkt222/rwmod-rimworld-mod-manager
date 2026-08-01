@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.4.2] - 2026-08-01
+
+### Fixed
+- **合集下载彻底修复** — `is_collection`/`fetch_collection_children`/
+  `fetch_item_dependencies` 之前用 POST 调用 `IPublishedFileService/QueryFiles`，
+  Steam 返回 405 导致合集从未被识别、依赖检测从未生效。现改用专用端点
+  `ISteamRemoteStorage/GetCollectionDetails`（返回完整子项列表）与
+  `GetPublishedFileDetails`（依赖检测）（`workshop.py`）
+- **合集 ID 不再遗漏** — 拉取结果改为「API + 精确 HTML 爬取」双源合并（并集），
+  任一来源出现的子项都不丢；HTML 爬取改用精确的 `sharedfile_<id>` 模式，
+  不再混入侧栏相关推荐噪音（已验证 API=爬取=页面 childCount=593）
+- **合集预览接口异常兜底 + 性能优化** — 后端 try/except 返回错误信息而非 500；
+  原来 593 个子项每个都全目录扫描 + 查一次数据库，改为一次元数据扫描 +
+  一次历史查询（`routers/workshop.py`）
+- **前端预览不再显示 "undefined"** — `previewCollection` 先检查 HTTP 状态，
+  失败时显示后端 detail（`panels/collection.ts`）
+- **测试扩充** — workshop 新增 14 项 mock 测试（合集检测/子项解析/双源合并/
+  依赖解析），全套 222 项通过
+
 ## [0.4.1] - 2026-08-01
 
 ### 安全 (P1)

@@ -1,6 +1,6 @@
 [project]
 name = "rwmod"
-version = "0.4.1"
+version = "0.4.2"
 description = "Fully offline RimWorld Mod Manager — anonymous SteamCMD downloads, auto-updates, backups, dependency & load-order management"
 readme = "README.md"
 license = {text = "MIT"}
