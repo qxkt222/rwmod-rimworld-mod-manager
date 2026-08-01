@@ -16,14 +16,19 @@ from rwmod.workshop import check_mod_updates, fetch_item_details
 router = APIRouter(prefix="/api/mods", tags=["mods"])
 
 # ── lightweight in-memory cache ───────────────────────────────────
-_mods_cache: dict[str, Any] = {}
+# Keyed by mods_dir so switching config directories doesn't reuse stale data.
+_mods_cache: dict[str, dict[str, Any]] = {}
 _CACHE_TTL = 3  # seconds
 
 
 def _cached_mod_list(cfg: Config) -> list[dict]:
     now = time.time()
-    if _mods_cache and now - _mods_cache.get("_ts", 0) < _CACHE_TTL:
-        return _mods_cache["data"]
+    key = str(cfg.mods_dir)
+    entry = _mods_cache.get(key)
+    if entry and now - entry.get("_ts", 0) < _CACHE_TTL:
+        data = entry.get("data")
+        if isinstance(data, list):
+            return data
     if not cfg.mods_dir.exists():
         return []
     metas = get_cached_mods(cfg.mods_dir)
@@ -42,8 +47,7 @@ def _cached_mod_list(cfg: Config) -> list[dict]:
                 "tags": tags,
             }
         )
-    _mods_cache["data"] = data
-    _mods_cache["_ts"] = now
+    _mods_cache[key] = {"data": data, "_ts": now}
     return data
 
 

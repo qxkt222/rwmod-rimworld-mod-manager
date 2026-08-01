@@ -16,6 +16,7 @@ from pathlib import Path
 __all__ = ["try_skymods"]
 
 from rwmod.config import Config
+from rwmod.utils import safe_extract_zip
 
 _log = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ def try_skymods(mod_id: str, config: Config) -> Path | None:
 
     try:
         req = urllib.request.Request(search_url, headers={"User-Agent": _USER_AGENT})
-        with urllib.request.urlopen(req, timeout=20) as resp:
+        with urllib.request.urlopen(req, timeout=20) as resp:  # nosec B310 — HTTPS-only Skymods URL
             html = resp.read().decode("utf-8", errors="replace")
     except OSError as e:
         _log.warning("Skymods 搜索失败 (%s): %s", mod_id, e)
@@ -129,10 +130,14 @@ def _download_and_extract(url: str, mod_id: str, config: Config) -> Path | None:
             tmp_path.unlink()
             return None
 
-        # Extract to temp directory
+        # Extract to temp directory (with path-traversal protection)
         extract_dir = Path(tempfile.mkdtemp())
-        with zipfile.ZipFile(tmp_path, "r") as zf:
-            zf.extractall(extract_dir)
+        try:
+            with zipfile.ZipFile(tmp_path, "r") as zf:
+                safe_extract_zip(zf, extract_dir)
+        except (zipfile.BadZipFile, OSError) as e:
+            _log.warning("Skymods zip 解压失败 (%s): %s", mod_id, e)
+            return None
 
         mod_folder = _find_mod_folder(extract_dir)
         if not mod_folder:

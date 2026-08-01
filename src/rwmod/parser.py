@@ -174,7 +174,7 @@ def resolve_workshop_ids(package_ids: list[str], mods_dir: Path) -> tuple[list[s
     known: list[str] = []
     unknown: list[str] = []
     for pid in package_ids:
-        wid = pkg_to_wid.get(pid)
+        wid = pkg_to_wid.get(pid, "")
         if wid:
             known.append(wid)
         else:

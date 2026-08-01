@@ -1,4 +1,4 @@
-﻿"""Tests for tags.py \u2014 mod tag/category management."""
+"""Tests for tags.py \u2014 mod tag/category management."""
 
 from __future__ import annotations
 
@@ -8,7 +8,14 @@ from unittest.mock import patch
 import pytest
 
 from rwmod.database import close_db, init_db
-from rwmod.tags import add_tag, get_mods_by_tag, get_tags, list_all_tags, remove_all_tags, remove_tag
+from rwmod.tags import (
+    add_tag,
+    get_mods_by_tag,
+    get_tags,
+    list_all_tags,
+    remove_all_tags,
+    remove_tag,
+)
 
 
 @pytest.fixture

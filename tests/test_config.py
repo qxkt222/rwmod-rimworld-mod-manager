@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from rwmod.config import Config
 
 
@@ -81,3 +83,31 @@ class TestConfigSave:
             assert f.exists()
             content = f.read_text()
             assert 'mods_dir = "Z:/Test"' in content
+
+
+class TestConfigValidate:
+    def test_requires_steamcmd_only(self, tmp_path: Path):
+        """RimWorld game dir is optional — only SteamCMD is required."""
+        cfg = Config(steamcmd_path=tmp_path / "steamcmd.exe")
+        (tmp_path / "steamcmd.exe").touch()
+        cfg.mods_dir = tmp_path / "Mods"
+        cfg.rimworld_dir = tmp_path / "NonexistentGameDir"  # missing — must not fail
+        cfg.validate()
+        assert cfg.mods_dir.exists()
+
+    def test_missing_steamcmd_raises(self, tmp_path: Path):
+        cfg = Config(steamcmd_path=tmp_path / "steamcmd.exe")  # not touched
+        cfg.mods_dir = tmp_path / "Mods"
+        try:
+            cfg.validate()
+        except Exception as exc:
+            assert "SteamCMD" in str(exc)
+        else:
+            pytest.fail("validate() should raise when SteamCMD is missing")
+
+    def test_creates_mods_dir(self, tmp_path: Path):
+        cfg = Config(steamcmd_path=tmp_path / "steamcmd.exe")
+        (tmp_path / "steamcmd.exe").touch()
+        cfg.mods_dir = tmp_path / "Created" / "Mods"
+        cfg.validate()
+        assert cfg.mods_dir.exists()

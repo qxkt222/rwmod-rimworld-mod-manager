@@ -10,13 +10,14 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from rwmod.database import close_db, init_db
@@ -43,8 +44,14 @@ from rwmod.routers.rimsort import router as rimsort_router
 from rwmod.routers.saves import router as saves_router
 from rwmod.routers.tags import router as tags_router
 from rwmod.routers.workshop import router as workshop_router
+from rwmod.utils import bundle_root
 
-STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "static"
+# Resolved via bundle_root(): works from a source checkout AND from a
+# PyInstaller one-file EXE (where __file__ lives in a temp dir, not the bundle).
+STATIC_DIR = bundle_root() / "static"
+
+# Connected WebSocket clients (for queue status broadcasts to the UI).
+_ws_clients: set[WebSocket] = set()
 
 init_logging()
 _log = get_log("rwmod.server")
@@ -52,7 +59,7 @@ _log.info("Server starting — log: %s", Path.home() / ".rwmod.log")
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_db()
     au = get_autoupdate()
     await au.start_background()
@@ -61,6 +68,10 @@ async def lifespan(app: FastAPI):
     from rwmod.app_state import AppState
 
     app.state.rwmod = AppState()
+
+    # Push real-time queue snapshots to all connected WebSocket clients.
+    get_queue().on_update(broadcast_queue_update)
+
     yield
     await au.stop_background()
     close_db()
@@ -68,7 +79,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="rwmod Web",
-    version="0.3.0",
+    version="0.4.1",
     lifespan=lifespan,
     docs_url="/api/docs",
     openapi_url="/api/openapi.json",
@@ -86,7 +97,9 @@ app.add_middleware(
 
 
 @app.middleware("http")
-async def request_tracing(request: Request, call_next):
+async def request_tracing(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
     """Add X-Request-ID + log timing + record metrics."""
     req_id = request.headers.get("X-Request-ID", str(uuid.uuid4())[:8])
     start = time.perf_counter()
@@ -113,7 +126,7 @@ async def request_tracing(request: Request, call_next):
 
 
 @app.exception_handler(RwmodError)
-async def rwmod_error_handler(request: Request, exc: RwmodError):
+async def rwmod_error_handler(request: Request, exc: RwmodError) -> JSONResponse:
     """Map all RwmodError subclasses to structured JSON responses."""
     _log.warning("%s %s → %s: %s", request.method, request.url.path, exc.status_code, exc.detail)
     return JSONResponse(
@@ -123,7 +136,7 @@ async def rwmod_error_handler(request: Request, exc: RwmodError):
 
 
 @app.exception_handler(Exception)
-async def catchall_handler(request: Request, exc: Exception):
+async def catchall_handler(request: Request, exc: Exception) -> JSONResponse:
     """Catch unhandled exceptions — log full traceback, return 500."""
     _log.error("未处理异常: %s %s — %s", request.method, request.url.path, exc, exc_info=True)
     return JSONResponse(
@@ -154,15 +167,16 @@ app.include_router(saves_router)
 
 # ── static files ───────────────────────────────────────────────────
 @app.get("/")
-def index():
+def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
 
 
 # ── WebSocket ─────────────────────────────────────────────────────
 @app.websocket("/ws")
-async def ws_endpoint(ws: WebSocket):
+async def ws_endpoint(ws: WebSocket) -> None:
     """WebSocket for real-time status updates to frontend."""
     await ws.accept()
+    _ws_clients.add(ws)
     try:
         while True:
             data = await ws.receive_text()
@@ -183,6 +197,25 @@ async def ws_endpoint(ws: WebSocket):
                 await ws.send_json({"type": "echo", "cmd": cmd})
     except WebSocketDisconnect:
         pass
+    finally:
+        _ws_clients.discard(ws)
+
+
+async def _broadcast_ws(payload: dict) -> None:
+    """Send a JSON message to every connected WebSocket client."""
+    dead: list[WebSocket] = []
+    for ws in list(_ws_clients):
+        try:
+            await ws.send_json(payload)
+        except Exception:  # noqa: BLE001 — a dead socket must not break the loop
+            dead.append(ws)
+    for ws in dead:
+        _ws_clients.discard(ws)
+
+
+async def broadcast_queue_update(snapshot: list[dict]) -> None:
+    """Registered as the queue's on_update callback — pushes snapshots to UI."""
+    await _broadcast_ws({"type": "queue_update", "items": snapshot})
 
 
 def _queue_pending_count() -> int:
@@ -203,4 +236,4 @@ if STATIC_DIR.exists():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("rwmod.server:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run("rwmod.server:app", host="0.0.0.0", port=8000, reload=False)  # nosec B104 — LAN access by design

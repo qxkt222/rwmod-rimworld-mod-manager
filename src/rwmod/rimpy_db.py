@@ -153,7 +153,7 @@ class RimPyDB:
         _log.info("Downloading RimPy database...")
         try:
             req = Request(DATABASE_URL, headers={"User-Agent": "rwmod/1.0"})
-            with urlopen(req, timeout=30) as resp:
+            with urlopen(req, timeout=30) as resp:  # nosec B310 — HTTPS-only RimPy DB URL
                 raw = resp.read()
             data = json.loads(raw)
             if not isinstance(data, dict):

@@ -41,6 +41,9 @@ def _get_conn() -> sqlite3.Connection:
         _conn.execute("PRAGMA foreign_keys=ON")
         _conn.execute("PRAGMA cache_size=-8000")  # 8MB page cache
         _conn.execute("PRAGMA synchronous=NORMAL")  # safe with WAL
+        # The single connection is shared across FastAPI threadpool workers;
+        # wait up to 5s for a busy lock instead of failing immediately.
+        _conn.execute("PRAGMA busy_timeout=5000")
         return _conn
 
 
@@ -184,22 +187,28 @@ def clear_history() -> None:
 # ── queue persistence ──────────────────────────────────────────────
 
 
-def queue_upsert(workshop_id: str, **kwargs) -> None:
+# Whitelist of columns queue_upsert may update — drops unknown keys so caller
+# input can never reach the SQL as identifiers (B608).
+_QUEUE_UPDATE_COLUMNS = frozenset({"name", "status", "progress", "msg"})
+
+
+def queue_upsert(workshop_id: str, **kwargs: object) -> None:
     """Insert or update a queue item. kwargs: name, status, progress, msg."""
     db = _get_conn()
-    name = kwargs.get("name", "")
-    status = kwargs.get("status", "pending")
-    progress = kwargs.get("progress", 0.0)
-    msg = kwargs.get("msg", "")
+    safe = {k: v for k, v in kwargs.items() if k in _QUEUE_UPDATE_COLUMNS}
+    name = safe.get("name", "")
+    status = safe.get("status", "pending")
+    progress = safe.get("progress", 0.0)
+    msg = safe.get("msg", "")
 
-    sets = [f"{k} = ?" for k in kwargs]
+    sets = [f"{k} = ?" for k in safe]
     # Parameter list: INSERT values first, then SET values
     params: list = [workshop_id, name, status, progress, msg]
-    params.extend(kwargs[k] for k in kwargs)
+    params.extend(safe[k] for k in safe)
 
     sets.append("updated_at = datetime('now')")
     db.execute(
-        f"INSERT INTO download_queue (workshop_id, name, status, progress, msg)"
+        f"INSERT INTO download_queue (workshop_id, name, status, progress, msg)"  # nosec B608 — keys whitelisted by _QUEUE_UPDATE_COLUMNS
         f" VALUES (?,?,?,?,?)"
         f" ON CONFLICT(workshop_id) DO UPDATE SET {', '.join(sets)}",
         params,

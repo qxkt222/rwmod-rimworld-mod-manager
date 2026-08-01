@@ -88,7 +88,8 @@ def verify_token(token: str) -> str | None:
         if payload.get("exp", 0) < time.time():
             return None
 
-        return payload.get("sub")
+        sub = payload.get("sub")
+        return sub if isinstance(sub, str) else None
     except Exception:
         return None
 

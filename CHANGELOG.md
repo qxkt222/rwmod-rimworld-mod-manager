@@ -1,5 +1,58 @@
 # Changelog
 
+## [0.4.1] - 2026-08-01
+
+### 安全 (P1)
+- **修复备份接口路径穿越** — `delete_backup`/`restore_mod` 现在只接受纯文件名
+  （拒绝 `../`、`..\`、子目录），zip 解压前校验成员路径，无法再删除/写入
+  备份目录以外的任意文件（`backup.py`, `routers/backups.py`, `utils.safe_extract_zip`）
+- **修复 SteamCMD 超时失效** — 改用 `proc.communicate(timeout=...)`，卡死的
+  SteamCMD 进程会在 10 分钟后被真正终止，不再永久挂起（`steamcmd.py`）
+- **Skymods 解压同样启用 zip 路径穿越防护**（`skymods.py`）
+
+### 稳定性 / 功能 (P2)
+- **异步端点不再阻塞事件循环** — `/api/download`、`/api/import/*`、
+  `/api/download/stream`（合集分支）统一用 `asyncio.to_thread` 执行 SteamCMD，
+  下载期间其他 API 请求不再无响应（`routers/download.py`, `autoupdate.py`）
+- **WebSocket 实时队列广播** — 队列状态变化通过 `/ws` 推送到前端，
+  队列面板不再需要手动刷新（`server.py`, `queue.py`）
+- **移除首页自动触发更新检查** — 打开首页不再自动联网检查/覆盖下载，
+  仅由「一键更新」按钮显式触发（`routers/dashboard.py`）
+- **队列取消语义** — 取消下载中的项目后状态保持 cancelled，不再被
+  后台任务改回 done/failed（`queue.py`）
+- **SQLite 并发** — 连接增加 `PRAGMA busy_timeout=5000`，降低多线程写库冲突
+- **config API 脱敏** — 不再向前端返回 `steam_api_key`，改为 `has_steam_api_key`
+  （`routers/config.py`, 前端 `api.ts`）
+- **`Config.validate()` 放宽** — 仅要求 SteamCMD 存在；RimWorld 游戏目录为可选
+
+### 清理 (P3)
+- **前端接入 hash 路由** — 支持 `#saves`/`#tags` 深链接与浏览器前进/后退；
+  删除死代码 `store.ts`/`ui.ts`（`router.ts`, `main.ts`, `cmd.ts`）
+- **缓存隔离** — mods/dashboard 缓存按 `mods_dir` 区分，切换目录不再串数据
+- **tools 脚本清理** — 移除硬编码 `D:\` 路径与 UTF-8 乱码，改为相对路径
+- **README 架构图** — 路由数修正为 17 个，快速开始注明 bun/npm 均可
+- **测试扩充** — 新增 skymods/rimsort/队列取消/备份穿越/SteamCMD 超时等 43 项测试
+  （覆盖率 49% → 56%）
+- **CI** — bandit 使用 `-ll` 作为硬性门禁
+
+## [0.4.0] - 2026-07-21
+
+### Added
+- **合集 3 层降级拉取** — Steam Web API → HTML 抓取 → 用户 API Key
+- **存档解析** (`save_parser.py`) — 从 RimWorld save 文件读取 mod 列表
+- **Mod 标签** (`tags.py`) — 本地标签分组管理
+- **优化** — 批量请求并发、Steam 连接复用
+
+### Fixed
+- **CLI `import-collection` 崩溃** — `workshop_download()` 返回 `DownloadResult`，
+  旧代码按元组解包导致 `TypeError`，现已改为使用 `output_lines`/`success`
+- **CLI `list_mods` 类型注解** — 4 元组 (folder, name, pkg, wid) 注解修正
+- **`search_workshop` URL 编码** — 使用不存在的 `urllib.request.quote` → `urllib.parse.quote`
+- **`downloader._try_broadcast` 引用不存在的 `server.broadcast_queue_update`**
+  — 改为显式 no-op 钩子，消除静默失败路径
+- **mypy 清理** — 163 → 0 错误（routers 按 FastAPI 惯例豁免 no-untyped-def；
+  业务模块补全注解；`type-arg` 统一豁免）
+
 ## [0.3.0] - 2026-07-17
 
 ### Added

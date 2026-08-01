@@ -15,7 +15,7 @@ import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 
-from rwmod.utils import safe_filename
+from rwmod.utils import safe_extract_zip, safe_filename
 
 _log = logging.getLogger(__name__)
 
@@ -82,12 +82,15 @@ def restore_mod(
         return {"ok": False, "msg": f"未找到 {workshop_id} 的备份"}
 
     if backup_filename:
-        target = backup_dir / backup_filename
-        if not target.exists():
+        target = _resolve_backup_path(backup_dir, backup_filename)
+        if target is None or not target.exists():
             return {"ok": False, "msg": f"备份文件不存在: {backup_filename}"}
     else:
         # Latest backup (sorted by timestamp in filename)
         target = backups[-1]["path"]
+
+    if target is None:
+        return {"ok": False, "msg": f"备份文件不存在: {backup_filename}"}
 
     # Remove current mod if exists
     meta = _backup_metadata(target)
@@ -96,10 +99,13 @@ def restore_mod(
     if current.exists():
         shutil.rmtree(current)
 
-    # Extract
+    # Extract (with path-traversal protection on zip members)
     _log.info("回滚: %s → %s", target.name, folder_name)
-    with zipfile.ZipFile(target, "r") as zf:
-        zf.extractall(mods_dir)
+    try:
+        with zipfile.ZipFile(target, "r") as zf:
+            safe_extract_zip(zf, mods_dir)
+    except (zipfile.BadZipFile, OSError) as e:
+        return {"ok": False, "msg": f"备份解压失败: {e}"}
 
     return {"ok": True, "msg": f"已恢复 {folder_name}", "restored_folder": folder_name}
 
@@ -139,9 +145,14 @@ def list_backups(backup_dir: Path, workshop_id: str | None = None) -> list[dict]
 
 
 def delete_backup(backup_dir: Path, filename: str) -> bool:
-    """Delete a specific backup zip. Returns True if deleted."""
-    path = backup_dir / filename
-    if not path.exists():
+    """Delete a specific backup zip. Returns True if deleted.
+
+    Rejects any filename that isn't a plain file name (contains a path
+    separator or ``..``), preventing path-traversal deletion outside
+    backup_dir.
+    """
+    path = _resolve_backup_path(backup_dir, filename)
+    if path is None or not path.exists():
         return False
     path.unlink()
     _log.info("删除备份: %s", filename)
@@ -171,6 +182,25 @@ def cleanup_backups(backup_dir: Path, keep_per_mod: int = 5) -> int:
 
 
 # ── internal helpers ───────────────────────────────────────────────
+
+
+def _resolve_backup_path(backup_dir: Path, filename: str) -> Path | None:
+    """Resolve a backup filename safely — rejects traversal outside backup_dir.
+
+    Only plain file names are accepted (no path separators, no ``..``).
+    Returns None for anything unsafe.
+    """
+    if not filename or filename in (".", ".."):
+        return None
+    name = Path(filename).name
+    if name != filename:
+        return None  # contains a path separator or dots — not a plain filename
+    path = backup_dir / name
+    try:
+        path.resolve().relative_to(backup_dir.resolve())
+    except ValueError:
+        return None
+    return path
 
 
 def _safe_filename(name: str) -> str:

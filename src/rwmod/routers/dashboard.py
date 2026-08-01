@@ -1,6 +1,5 @@
 """Dashboard router."""
 
-import asyncio
 import os
 import time
 from typing import Any
@@ -16,15 +15,18 @@ from rwmod.steamcmd import SteamCMD
 router = APIRouter(prefix="/api", tags=["dashboard"])
 
 # ── lightweight in-memory cache for dashboard stats ───────────────
-_cache: dict[str, Any] = {}
+# Keyed by mods_dir so switching config directories doesn't reuse stale data.
+_cache: dict[str, dict[str, Any]] = {}
 _CACHE_TTL = 5  # seconds
 
 
 def _cached_dashboard(cfg: Config) -> dict:
     """Return cached dashboard stats if fresh, otherwise recompute."""
     now = time.time()
-    if _cache and now - _cache.get("_ts", 0) < _CACHE_TTL:
-        return _cache
+    key = str(cfg.mods_dir)
+    entry = _cache.get(key)
+    if entry and now - entry.get("_ts", 0) < _CACHE_TTL:
+        return entry
 
     mods_count = 0
     total_size = 0
@@ -34,25 +36,32 @@ def _cached_dashboard(cfg: Config) -> dict:
                 mods_count += 1
                 try:
                     with os.scandir(d) as entries:
-                        for entry in entries:
-                            if entry.is_file():
-                                total_size += entry.stat().st_size
+                        for e in entries:
+                            if e.is_file():
+                                total_size += e.stat().st_size
                 except OSError:
                     pass
 
-    _cache["mods_count"] = mods_count
-    _cache["disk_usage_mb"] = round(total_size / 1024 / 1024, 1)
-    _cache["_ts"] = now
-    return _cache
+    entry = {
+        "mods_count": mods_count,
+        "disk_usage_mb": round(total_size / 1024 / 1024, 1),
+        "_ts": now,
+    }
+    _cache[key] = entry
+    return entry
 
 
 @router.get("/dashboard")
 async def dashboard(
     cfg: Config = Depends(get_config), au: AutoUpdateManager = Depends(get_autoupdate)
 ):
-    """Dashboard stats: mod count, update status, disk usage, recent activity."""
+    """Dashboard stats: mod count, update status, disk usage, recent activity.
+
+    Update checks are *not* auto-triggered here — they are only started by the
+    explicit "一键更新" button (POST /api/auto-update/run), so merely opening
+    the dashboard can never kick off a full re-download.
+    """
     cached = _cached_dashboard(cfg)
-    asyncio.create_task(au.run_check())
     history = get_download_history(limit=10)
     return {
         "mods_count": cached["mods_count"],

@@ -34,6 +34,8 @@ class DownloadQueue:
     _running: bool = False
     _semaphore: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(MAX_CONCURRENT))
     _callbacks: list[Callable] = field(default_factory=list)
+    # Workshop IDs whose in-flight download should be treated as cancelled.
+    _cancelled: set[str] = field(default_factory=set)
 
     def add(self, mod_ids: list[str]) -> list[QueueItem]:
         new_items: list[QueueItem] = []
@@ -50,10 +52,20 @@ class DownloadQueue:
         return new_items
 
     def remove(self, mod_id: str) -> bool:
+        """Remove a queue item (or cancel an in-flight download).
+
+        For a *pending* item it is removed entirely; a *downloading* item is
+        marked cancelled and kept in the list so the UI shows the cancellation.
+        The in-flight SteamCMD process can't be aborted mid-flight, but the
+        task is marked cancelled so its status is never flipped back to
+        done/failed afterwards.
+        """
         for i, item in enumerate(self.items):
             if item.id == mod_id:
+                self._cancelled.add(mod_id)
                 if item.status == "downloading":
                     item.status = "cancelled"
+                    item.msg = "已取消（后台任务可能继续完成）"
                     self._persist(item)
                 else:
                     self.items.pop(i)
@@ -105,6 +117,11 @@ class DownloadQueue:
 
     async def _download_one(self, config: Config, item: QueueItem, force: bool) -> None:
         async with self._semaphore:
+            # Item was removed (cancelled) while this task waited for a slot
+            if item.id in self._cancelled:
+                self._cancelled.discard(item.id)
+                return
+
             item.status = "downloading"
             item.progress = 0.1
             item.msg = "检查中..."
@@ -134,6 +151,15 @@ class DownloadQueue:
             await self._notify()
 
             ok = await asyncio.to_thread(download_one, config, item.id, force=force)
+
+            # Cancelled while the download was in flight — keep cancelled state
+            if item.id in self._cancelled:
+                self._cancelled.discard(item.id)
+                item.status = "cancelled"
+                item.msg = "已取消（后台任务可能继续完成）"
+                self._persist(item)
+                await self._notify()
+                return
 
             if ok:
                 final = _find_existing(config.mods_dir, item.id)

@@ -11,11 +11,8 @@ Usage:
 
 from __future__ import annotations
 
-from pathlib import Path
-
 __all__ = ["t", "set_locale", "get_locale", "AVAILABLE_LOCALES"]
 
-_I18N_DIR = Path(__file__).resolve().parent / "i18n"
 _DEFAULT_LOCALE = "zh-CN"
 _current_locale = _DEFAULT_LOCALE
 _translations: dict[str, dict[str, str]] = {}
@@ -39,7 +36,7 @@ def get_locale() -> str:
     return _current_locale
 
 
-def t(key: str, **kwargs) -> str:
+def t(key: str, **kwargs: object) -> str:
     """Translate a key to the current locale. Supports format placeholders.
 
     Args:

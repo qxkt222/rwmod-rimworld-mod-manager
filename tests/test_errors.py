@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import pytest
-
 from rwmod.errors import (
-    RwmodError,
     ConfigError,
-    SteamCmdError,
-    WorkshopError,
-    ModNotFoundError,
-    DownloadError,
-    ValidationError,
     ConflictError,
+    DownloadError,
+    ModNotFoundError,
+    RwmodError,
+    SteamCmdError,
+    ValidationError,
+    WorkshopError,
 )
 
 
@@ -84,7 +82,15 @@ class TestConflictError:
 
 class TestExceptionInheritance:
     def test_all_inherit_from_rwmod_error(self):
-        for cls in [ConfigError, SteamCmdError, WorkshopError, ModNotFoundError, DownloadError, ValidationError, ConflictError]:
+        for cls in [
+            ConfigError,
+            SteamCmdError,
+            WorkshopError,
+            ModNotFoundError,
+            DownloadError,
+            ValidationError,
+            ConflictError,
+        ]:
             assert issubclass(cls, RwmodError)
 
     def test_is_catchable_as_rwmod_error(self):

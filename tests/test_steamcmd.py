@@ -6,8 +6,8 @@ without needing actual SteamCMD installed.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -81,18 +81,14 @@ class TestParseWorkshopError:
     def test_ok_result(self, steamcmd: SteamCMD, tmp_path: Path):
         log = steamcmd.steam_dir / "logs" / "workshop_log.txt"
         log.parent.mkdir(parents=True, exist_ok=True)
-        log.write_text(
-            "[AppID 294100] Download item 12345 result : OK\n"
-        )
+        log.write_text("[AppID 294100] Download item 12345 result : OK\n")
         kind, _ = steamcmd._parse_workshop_error("12345")
         assert kind == ErrorKind.OK
 
     def test_failure_result(self, steamcmd: SteamCMD, tmp_path: Path):
         log = steamcmd.steam_dir / "logs" / "workshop_log.txt"
         log.parent.mkdir(parents=True, exist_ok=True)
-        log.write_text(
-            "[AppID 294100] Download item 12345 result : Failure\n"
-        )
+        log.write_text("[AppID 294100] Download item 12345 result : Failure\n")
         kind, _ = steamcmd._parse_workshop_error("12345")
         assert kind == ErrorKind.FAILURE
 
@@ -110,9 +106,7 @@ class TestParseWorkshopError:
     def test_wrong_appid(self, steamcmd: SteamCMD, tmp_path: Path):
         log = steamcmd.steam_dir / "logs" / "workshop_log.txt"
         log.parent.mkdir(parents=True, exist_ok=True)
-        log.write_text(
-            "[AppID 294100] Get details for item 12345 failed : Wrong AppID 241100\n"
-        )
+        log.write_text("[AppID 294100] Get details for item 12345 failed : Wrong AppID 241100\n")
         kind, detail = steamcmd._parse_workshop_error("12345")
         assert kind == ErrorKind.OK  # no result line → default OK
         assert "Wrong AppID" in detail
@@ -120,9 +114,7 @@ class TestParseWorkshopError:
     def test_access_denied_result(self, steamcmd: SteamCMD, tmp_path: Path):
         log = steamcmd.steam_dir / "logs" / "workshop_log.txt"
         log.parent.mkdir(parents=True, exist_ok=True)
-        log.write_text(
-            "[AppID 294100] Download item 12345 result : Access Denied\n"
-        )
+        log.write_text("[AppID 294100] Download item 12345 result : Access Denied\n")
         kind, _ = steamcmd._parse_workshop_error("12345")
         assert kind == ErrorKind.ACCESS_DENIED
 
@@ -140,9 +132,7 @@ class TestParseWorkshopError:
     def test_different_mod_not_matched(self, steamcmd: SteamCMD, tmp_path: Path):
         log = steamcmd.steam_dir / "logs" / "workshop_log.txt"
         log.parent.mkdir(parents=True, exist_ok=True)
-        log.write_text(
-            "[AppID 294100] Download item 99999 result : OK\n"
-        )
+        log.write_text("[AppID 294100] Download item 99999 result : OK\n")
         kind, _ = steamcmd._parse_workshop_error("12345")
         assert kind == ErrorKind.OK  # no result for 12345 → default OK
 
@@ -155,3 +145,58 @@ class TestSteamCMDProperties:
     def test_workshop_content_dir(self, steamcmd: SteamCMD):
         assert "294100" in str(steamcmd.workshop_content_dir)
         assert "workshop" in str(steamcmd.workshop_content_dir)
+
+
+class TestWorkshopDownload:
+    """Exercises the real subprocess orchestration with a mocked Popen."""
+
+    def test_timeout(self, steamcmd: SteamCMD):
+        from unittest.mock import MagicMock, patch
+
+        proc = MagicMock()
+        proc.communicate.side_effect = subprocess.TimeoutExpired(cmd=["steamcmd"], timeout=1)
+        proc.stdout = object()
+        with patch("rwmod.steamcmd.subprocess.Popen", return_value=proc):
+            result = steamcmd.workshop_download("123")
+        assert result.error_kind == ErrorKind.TIMEOUT
+        proc.kill.assert_called_once()
+
+    def test_success(self, steamcmd: SteamCMD):
+        from unittest.mock import MagicMock, patch
+
+        content = steamcmd.workshop_content_dir / "123"
+        content.mkdir(parents=True)
+        log = steamcmd.steam_dir / "logs" / "workshop_log.txt"
+        log.parent.mkdir(parents=True)
+        log.write_text("[AppID 294100] Download item 123 result : OK\n")
+
+        proc = MagicMock()
+        proc.communicate.return_value = ("[AppID 294100] Download item 123 result : OK\n", "")
+        proc.stdout = object()
+        with patch("rwmod.steamcmd.subprocess.Popen", return_value=proc):
+            result = steamcmd.workshop_download("123")
+        assert result.success
+        assert result.output_lines[0].endswith("result : OK")
+
+    def test_missing_content_treated_as_failure(self, steamcmd: SteamCMD):
+        from unittest.mock import MagicMock, patch
+
+        log = steamcmd.steam_dir / "logs" / "workshop_log.txt"
+        log.parent.mkdir(parents=True)
+        log.write_text("[AppID 294100] Download item 123 result : OK\n")
+
+        proc = MagicMock()
+        proc.communicate.return_value = ("[AppID 294100] Download item 123 result : OK\n", "")
+        proc.stdout = object()
+        with patch("rwmod.steamcmd.subprocess.Popen", return_value=proc):
+            result = steamcmd.workshop_download("123")
+        assert not result.success
+        assert result.error_kind == ErrorKind.FAILURE
+
+    def test_oserror_startup(self, steamcmd: SteamCMD):
+        from unittest.mock import patch
+
+        with patch("rwmod.steamcmd.subprocess.Popen", side_effect=OSError("no exe")):
+            result = steamcmd.workshop_download("123")
+        assert not result.success
+        assert result.error_kind == ErrorKind.UNKNOWN
