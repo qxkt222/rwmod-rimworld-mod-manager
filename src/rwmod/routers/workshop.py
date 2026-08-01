@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends
 from rwmod.config import Config
 from rwmod.database import get_download_history
 from rwmod.deps import get_config
-from rwmod.downloader import _find_existing, extract_mod_id
+from rwmod.downloader import extract_mod_id
 from rwmod.mod_cache import get_cached_mods
 from rwmod.workshop import (
     fetch_collection_children,
@@ -51,20 +51,35 @@ def workshop_detail(mod_id: str):
 @router.get("/collection/preview/{collection_id}")
 def collection_preview(collection_id: str, cfg: Config = Depends(get_config)):
     cid = extract_mod_id(collection_id) or collection_id
-    mod_ids = fetch_collection_children(cid)
+    try:
+        mod_ids = fetch_collection_children(cid)
+    except Exception as e:
+        return {"error": f"获取合集失败: {e}"}
     if not mod_ids:
         return {"error": "未能获取合集内容"}
-    installed, new_mods, failed_before = [], [], []
+
+    # Build the installed workshop-id → folder map with a single metadata scan
+    # (avoid re-scanning mods_dir once per child — 593 children × full scan).
+    installed_lookup: dict[str, str] = {}
+    if cfg.mods_dir.exists():
+        for m in get_cached_mods(cfg.mods_dir):
+            if m.workshop_id:
+                installed_lookup[m.workshop_id] = m.folder
+
+    # Which workshop IDs previously failed (single history query, not per child).
+    failed_hist = {h["workshop_id"] for h in get_download_history(limit=100, status="failed")}
+
+    installed: list[dict] = []
+    new_mods: list[str] = []
+    failed_before: list[str] = []
     for mid in mod_ids:
-        existing = _find_existing(cfg.mods_dir, mid)
-        if existing:
-            installed.append({"id": mid, "name": existing.name})
+        if mid in installed_lookup:
+            installed.append({"id": mid, "name": installed_lookup[mid]})
+        elif mid in failed_hist:
+            failed_before.append(mid)
         else:
-            hist = get_download_history(limit=20, status="failed")
-            if any(h["workshop_id"] == mid for h in hist):
-                failed_before.append(mid)
-            else:
-                new_mods.append(mid)
+            new_mods.append(mid)
+
     return {
         "collection_id": cid,
         "total": len(mod_ids),

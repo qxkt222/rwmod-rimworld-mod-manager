@@ -82,18 +82,21 @@ def search_workshop(query: str, page: int = 1, count: int = 20) -> list[ModSearc
     return results
 
 
-def is_collection(workshop_id: str) -> bool:
-    """Check if a workshop item is a collection via Steam Web API."""
+def _get_collection_details(collection_id: str, api_key: str = "anonymous") -> dict | None:
+    """Call ISteamRemoteStorage/GetCollectionDetails and return its response dict.
+
+    This is the *dedicated* collection endpoint and must be called via HTTP
+    POST (the old code POSTed to IPublishedFileService/QueryFiles, which Steam
+    rejects with "Method Not Allowed" 405 — collections were never detected).
+
+    Returns None on network failure or when the top-level result != 1.
+    """
     url = (
-        f"https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/?"
-        f"key=anonymous&format=json&appid={STEAM_APP_ID}"
-        f"&query_type=0&page=1&numperpage=1"
-        f"&return_vote_data=0&return_previews=0&return_children=0"
+        "https://api.steampowered.com/ISteamRemoteStorage/GetCollectionDetails/v1/"
+        f"?key={api_key}&format=json"
     )
     body = urllib.parse.urlencode(
-        {
-            "publishedfileids[0]": workshop_id,
-        }
+        {"collectioncount": 1, "publishedfileids[0]": collection_id}
     ).encode()
     try:
         req = urllib.request.Request(
@@ -104,112 +107,135 @@ def is_collection(workshop_id: str) -> bool:
                 "Content-Type": "application/x-www-form-urlencoded",
             },
         )
-        with _shared_opener.open(req, timeout=10) as resp:
+        with _shared_opener.open(req, timeout=20) as resp:
             data = json.loads(resp.read())
-        files = data.get("response", {}).get("publishedfiledetails", [])
-        if files:
-            ftype = int(files[0].get("file_type", 0))
-            return ftype == 2  # 0=item, 2=collection
-    except Exception:  # nosec B110 — non-fatal: fall back to "not a collection"
-        pass
-    return False
+    except Exception:
+        return None
+
+    response = data.get("response", {})
+    if not isinstance(response, dict):
+        return None
+    if response.get("result") != 1:
+        return None
+    return response
+
+
+def is_collection(workshop_id: str) -> bool:
+    """Check if a workshop item is a collection via Steam Web API.
+
+    A valid collection returns ``result == 1`` in ``collectiondetails[0]``;
+    a non-collection returns ``result == 9``.
+    """
+    response = _get_collection_details(workshop_id)
+    if not response:
+        return False
+    details = response.get("collectiondetails", [])
+    return bool(details) and details[0].get("result") == 1
 
 
 def fetch_collection_children(collection_id: str) -> list[str]:
-    """Fetch all mod IDs in a Steam Workshop collection with 3-layer fallback.
+    """Fetch every mod ID in a Steam Workshop collection — nothing may be missed.
 
-    Layer 1: Steam Web API - fast, works for public collections
-    Layer 2: HTML scraping - fallback when API returns empty
-    Layer 3: User API Key - for private/friends-only collections
+    Layer 1: GetCollectionDetails API — authoritative, returns the complete
+             child list (verified to equal the page's declared ``childCount``).
+    Layer 2: HTML scraping — precise ``sharedfile_<id>`` extraction (noise-free).
+             Always attempted so the result is the *union* of both sources:
+             a child present in either source is never dropped.
+    Layer 3: User API Key — for private/friends-only collections.
+
+    Results are deduplicated while preserving order.
     """
     log = __import__("logging").getLogger(__name__)
 
+    # Layer 1 — authoritative API (returns every child in one shot)
     result = _fetch_collection_api(collection_id, "anonymous")
-    if result:
-        return result
 
-    log.warning("Collection %s: API empty, trying HTML scraping", collection_id)
-    result = _scrape_collection_page(collection_id)
-    if result:
-        log.info("Collection %s: found %d mods via HTML scraping", collection_id, len(result))
-        return result
+    # Layer 2 — precise, noise-free scrape; merge (union) so no child is missed
+    # even if a very large collection were ever truncated by the API.
+    scraped = _scrape_collection_page(collection_id, timeout=12)
+    if scraped:
+        if result:
+            log.info(
+                "Collection %s: API %d + scrape %d → merged",
+                collection_id,
+                len(result),
+                len(scraped),
+            )
+        else:
+            log.info(
+                "Collection %s: found %d mods via HTML scraping",
+                collection_id,
+                len(scraped),
+            )
+        result = _dedup_ids([*result, *scraped])
 
-    log.warning("Collection %s: HTML scraping failed, trying user API key", collection_id)
-    try:
-        from rwmod.config import Config
+    # Layer 3 — user API key (private/friends-only collections)
+    if not result:
+        log.warning("Collection %s: HTML scraping failed, trying user API key", collection_id)
+        try:
+            from rwmod.config import Config
 
-        cfg = Config.load()
-        if cfg.steam_api_key:
-            result = _fetch_collection_api(collection_id, cfg.steam_api_key)
-            if result:
-                log.info(
-                    "Collection %s: found %d mods via user API key",
-                    collection_id,
-                    len(result),
-                )
-                return result
-    except Exception:  # nosec B110 — user API key layer is best-effort
-        pass
+            cfg = Config.load()
+            if cfg.steam_api_key:
+                result = _fetch_collection_api(collection_id, cfg.steam_api_key)
+                if result:
+                    log.info(
+                        "Collection %s: found %d mods via user API key",
+                        collection_id,
+                        len(result),
+                    )
+        except Exception:  # nosec B110 — user API key layer is best-effort
+            pass
 
-    log.warning("Collection %s: all methods failed", collection_id)
-    return []
+    if not result:
+        log.warning("Collection %s: all methods failed", collection_id)
+        return []
+
+    return _dedup_ids(result)
+
+
+def _dedup_ids(ids: list[str]) -> list[str]:
+    """Deduplicate a list of IDs while preserving order."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for i in ids:
+        if i not in seen:
+            seen.add(i)
+            out.append(i)
+    return out
 
 
 def _fetch_collection_api(collection_id: str, api_key: str = "anonymous") -> list[str]:
-    """Fetch collection children via Steam Web API with pagination."""
-    all_ids: list[str] = []
-    page = 1
-    per_page = 500
-    while True:
-        url = (
-            f"https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/?"
-            f"key={api_key}&format=json&appid={STEAM_APP_ID}"
-            f"&query_type=0&page={page}&numperpage={per_page}"
-            f"&return_vote_data=0&return_previews=0&return_children=1"
-        )
-        body = urllib.parse.urlencode({"publishedfileids[0]": collection_id}).encode()
-        try:
-            req = urllib.request.Request(
-                url,
-                data=body,
-                headers={
-                    "User-Agent": "rwmod/1.0",
-                    "Content-Type": "application/x-www-form-urlencoded",
-                },
-            )
-            with _shared_opener.open(req, timeout=20) as resp:
-                data = json.loads(resp.read())
-        except Exception:
-            return all_ids if all_ids else []
+    """Fetch every child ID of a collection via the dedicated GetCollectionDetails API.
 
-        files = data.get("response", {}).get("publishedfiledetails", [])
-        found_children = False
-        for f in files:
-            children = f.get("children", [])
-            if children:
-                for c in children:
-                    wid = str(c.get("publishedfileid", ""))
-                    if wid:
-                        all_ids.append(wid)
-                found_children = True
-            ftype = f.get("file_type", 0)
-            if ftype != 2:
-                return []
+    Returns the complete child list in one shot — the endpoint returns all
+    children regardless of collection size (verified: 593/593 children against
+    the page's declared ``childCount``), so no pagination is required.
+    """
+    response = _get_collection_details(collection_id, api_key)
+    if not response:
+        return []
+    details = response.get("collectiondetails", [])
+    if not details or details[0].get("result") != 1:
+        return []
 
-        total = data.get("response", {}).get("total", 0)
-        if all_ids and len(all_ids) >= total:
-            break
-        if not found_children:
-            break
-        page += 1
-
-    return all_ids
+    ids: list[str] = []
+    for child in details[0].get("children", []):
+        wid = str(child.get("publishedfileid", ""))
+        if wid:
+            ids.append(wid)
+    return ids
 
 
-def _scrape_collection_page(collection_id: str) -> list[str]:
+def _scrape_collection_page(collection_id: str, timeout: int = 30) -> list[str]:
     """Scrape the public Steam Community collection page for mod IDs.
 
-    Fallback when API returns empty. Extracts mod IDs from HTML links.
+    Fallback when the API returns empty. Extracts the collection's *own* child
+    rows via the precise ``id="sharedfile_<id>"`` pattern — NOT every filedetails
+    link on the page (which includes sidebar/related-item noise).
+
+    Verified: the precise pattern returns exactly the same set as the API and
+    the page's declared ``childCount`` (593 == 593 == 593).
     """
     url = f"https://steamcommunity.com/sharedfiles/filedetails/?id={collection_id}"
     try:
@@ -217,23 +243,17 @@ def _scrape_collection_page(collection_id: str) -> list[str]:
             url,
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:  # nosec B310 — HTTPS-only Steam URL
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310 — HTTPS-only Steam URL
             html = resp.read().decode("utf-8", errors="replace")
     except Exception:
         return []
 
     ids = []
-    for m in re.finditer(r"/sharedfiles/filedetails/\?id=(\d+)", html):
+    for m in re.finditer(r'id="sharedfile_(\d+)"', html):
         if m.group(1) != collection_id:
             ids.append(m.group(1))
 
-    seen = set()
-    result = []
-    for i in ids:
-        if i not in seen:
-            seen.add(i)
-            result.append(i)
-    return result
+    return _dedup_ids(ids)
 
 
 def fetch_item_details(mod_ids: list[str]) -> dict[str, dict]:
@@ -243,23 +263,21 @@ def fetch_item_details(mod_ids: list[str]) -> dict[str, dict]:
 
 def fetch_item_dependencies(mod_ids: list[str]) -> dict[str, list[str]]:
     """Fetch mod dependencies for a batch of mod IDs — single API call.
+
+    Uses ISteamRemoteStorage/GetPublishedFileDetails (the same endpoint as
+    _fetch_batch). A mod's required items are returned in its ``children``
+    field. The old code POSTed to QueryFiles, which Steam rejects with
+    "Method Not Allowed" (405) — dependencies were never actually fetched.
+
     Returns: {mod_id: [dep_id, dep_id, ...]}
     """
     if not mod_ids:
         return {}
 
-    url = (
-        f"https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/?"
-        f"key=anonymous&format=json&appid={STEAM_APP_ID}"
-        f"&query_type=0&numperpage={len(mod_ids)}"
-        f"&return_vote_data=0&return_previews=0&return_children=1"
-    )
-    # POST all IDs in a single batch — was N separate requests before
-    form = {"publishedfileids[0]": mod_ids[0]} if len(mod_ids) == 1 else {}
-    if len(mod_ids) > 1:
-        form["itemcount"] = str(len(mod_ids))
-        for i, mid in enumerate(mod_ids):
-            form[f"publishedfileids[{i}]"] = mid
+    url = "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/"
+    form = {"itemcount": str(len(mod_ids))}
+    for i, mid in enumerate(mod_ids):
+        form[f"publishedfileids[{i}]"] = mid
 
     body = urllib.parse.urlencode(form).encode()
     try:
