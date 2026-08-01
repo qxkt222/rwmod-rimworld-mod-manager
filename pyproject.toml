@@ -34,8 +34,8 @@ rwmod = "rwmod.cli:app"
 rwmod-web = "rwmod.server:app"
 
 [project.urls]
-Homepage = "https://github.com/qxkt222/rwmod"
-Repository = "https://github.com/qxkt222/rwmod"
+Homepage = "https://github.com/qxkt222/rwmod-rimworld-mod-manager"
+Repository = "https://github.com/qxkt222/rwmod-rimworld-mod-manager"
 
 [build-system]
 requires = ["hatchling"]
