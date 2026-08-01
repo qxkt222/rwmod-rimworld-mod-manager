@@ -11,6 +11,8 @@ import json
 import logging
 import time
 import urllib.request
+from collections.abc import Callable
+from typing import Any
 
 _log = logging.getLogger(__name__)
 
@@ -68,7 +70,7 @@ def mark_online() -> None:
 # ── graceful fallback helpers ──────────────────────────────────────
 
 
-def safe_fetch(fetch_fn, *args, **kwargs):
+def safe_fetch(fetch_fn: Callable[..., Any], *args: object, **kwargs: object) -> Any:
     """Wrap a Steam API fetch function with offline fallback.
 
     If the API call fails, marks offline and returns empty/default.
@@ -88,7 +90,7 @@ def safe_fetch(fetch_fn, *args, **kwargs):
         return _get_default(fetch_fn)
 
 
-def _get_default(fn) -> dict | list:
+def _get_default(fn: Callable[..., Any]) -> dict | list:
     """Return appropriate empty value for known fetch functions."""
     name = getattr(fn, "__name__", "")
     if "dependencies" in name or "details" in name or "batch" in name:
@@ -106,7 +108,7 @@ def _ping_steam(timeout: float = 5.0) -> bool:
     url = "https://api.steampowered.com/ISteamWebAPIUtil/GetServerInfo/v1/"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "rwmod/1.0"})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310 — HTTPS-only Steam URL
             data = json.loads(resp.read())
             return "response" in data
     except Exception:

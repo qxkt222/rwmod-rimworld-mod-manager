@@ -25,8 +25,12 @@ def restore_backup(
     from rwmod.backup import restore_mod
 
     body = payload or {}
+    filename = body.get("filename")
     return restore_mod(
-        cfg.mods_dir, workshop_id, cfg.backup_dir, backup_filename=body.get("filename")
+        cfg.mods_dir,
+        workshop_id,
+        cfg.backup_dir,
+        backup_filename=filename if isinstance(filename, str) and filename else None,
     )
 
 

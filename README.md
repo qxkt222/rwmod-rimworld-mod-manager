@@ -3,7 +3,7 @@
 [![CI](https://github.com/qxkt222/rwmod/actions/workflows/ci.yml/badge.svg)](https://github.com/qxkt222/rwmod/actions)
 [![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://python.org)
 
-全离线 RimWorld Mod 管理器 — 无需 Steam 客户端，匿名下载、更新检查、备份回滚。
+全离线 RimWorld Mod 管理器 — 无需 Steam 客户端即可匿名下载、更新、备份与管理 RimWorld Mod，支持合集批量下载、依赖管理、排序分析、实时队列与安全加固。
 
 ## ✨ 功能
 
@@ -12,6 +12,8 @@
 | 📥 **下载** | SteamCMD 匿名下载 + Skymods 备用源，支持合集批量下载 |
 | 🔍 **搜索** | Steam Workshop 搜索（Web API，无需 API Key） |
 | 🔄 **一键更新** | 自动检测可用更新，后台下载，队列管理 |
+| 🔌 **实时队列** | WebSocket 实时推送队列状态，前端无需手动刷新 |
+| 🛡 **安全加固** | 备份/解压路径穿越防护、Steam API Key 脱敏、进程超时保护 |
 | 🧩 **依赖管理** | 下载前预览依赖树，自动补装缺失依赖 |
 | 💾 **备份回滚** | 更新前自动备份旧版，一键恢复 |
 | 📊 **健康检查** | Mod 活跃度（维持/停更/废弃/下架） |
@@ -26,6 +28,8 @@
 # 安装依赖
 uv sync
 cd frontend && bun install && bun run build && cd ..
+# 或使用 npm：cd frontend && npm install && npm run build && cd ..
+#（bun.lock / package.json 二者皆可，Docker 构建使用 npm）
 
 # 启动服务
 uv run uvicorn rwmod.server:app --host 0.0.0.0 --port 8000
@@ -82,19 +86,23 @@ src/rwmod/
 ├── server.py           # FastAPI app factory (85行)
 ├── deps.py             # 依赖注入 (Config/DB/Queue)
 ├── errors.py           # 统一异常体系
-├── routers/            # 12 个路由模块
-│   ├── mods.py         # Mod 列表/健康/兼容/导出
-│   ├── download.py     # 下载/导入/SSE流
-│   ├── workshop.py     # 搜索/依赖/合集预览
-│   ├── queue.py        # 下载队列
-│   ├── backups.py      # 备份管理
-│   ├── profiles.py     # 配置档案
-│   ├── dashboard.py    # 首页统计
-│   ├── rimsort.py      # RimSort 集成
-│   ├── history.py      # 下载历史
+├── routers/            # 17 个路由模块（全部 /api 前缀）
+│   ├── auth.py         # 登录 / token 校验
 │   ├── auto_update.py  # 自动更新
+│   ├── backups.py      # 备份管理
 │   ├── config.py       # 配置管理
-│   └── health.py       # 状态检测
+│   ├── dashboard.py    # 首页统计
+│   ├── download.py     # 下载 / 导入 / SSE 流
+│   ├── health.py       # 状态检测
+│   ├── history.py      # 下载历史
+│   ├── metrics.py      # Prometheus 指标
+│   ├── mods.py         # Mod 列表 / 健康 / 兼容 / 导出
+│   ├── profiles.py     # 配置档案
+│   ├── queue.py        # 下载队列
+│   ├── rimsort.py      # RimSort 集成
+│   ├── saves.py        # 存档分析
+│   ├── tags.py         # Mod 标签
+│   └── workshop.py     # 搜索 / 依赖 / 合集预览
 ├── [业务模块]          # download/workshop/backup/etc.
 ├── models/             # Pydantic 响应模型
 └── py.typed            # PEP 561 类型标记

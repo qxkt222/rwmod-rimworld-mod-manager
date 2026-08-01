@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import sys
 import tomllib
 from pathlib import Path
 
 from rwmod.errors import ConfigError
+from rwmod.utils import bundle_root
 
 __all__ = ["Config"]
 
@@ -17,8 +19,25 @@ class Config:
 
     @classmethod
     def _default_steamcmd_path(cls) -> Path:
-        """Lazily resolve built-in steamcmd path."""
-        p = Path(__file__).resolve().parent.parent.parent / "steamcmd" / "steamcmd.exe"
+        """Lazily resolve the built-in steamcmd path (source / frozen aware).
+
+        Frozen (PyInstaller) layouts:
+          1. Installed next to rwmod.exe ({app}\\steamcmd\\steamcmd.exe) — the
+             layout produced by rwmod.iss.
+          2. Bundled copy inside the one-file extraction dir (sys._MEIPASS).
+        """
+        if getattr(sys, "frozen", False):
+            exe_dir = Path(sys.executable).resolve().parent
+            p = exe_dir / "steamcmd" / "steamcmd.exe"
+            if p.exists():
+                return p
+            if hasattr(sys, "_MEIPASS"):
+                p = Path(sys._MEIPASS) / "steamcmd" / "steamcmd.exe"
+                if p.exists():
+                    return p
+            return exe_dir / "steamcmd" / "steamcmd.exe"
+
+        p = bundle_root() / "steamcmd" / "steamcmd.exe"
         return p if p.exists() else Path("D:/steamcmd/steamcmd.exe")
 
     def __init__(
@@ -68,13 +87,15 @@ class Config:
         self.CONFIG_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     def validate(self) -> None:
-        errors = []
+        """Validate minimal requirements for core operations.
+
+        SteamCMD is required for downloads; the mods dir is created lazily.
+        RimWorld game dir is *not* required here — it is only needed by
+        optional features (compat / load-order / saves) which handle its
+        absence themselves.
+        """
         if not self.steamcmd_path.exists():
-            errors.append(f"SteamCMD not found: {self.steamcmd_path}")
-        if not self.rimworld_dir.exists():
-            errors.append(f"RimWorld dir not found: {self.rimworld_dir}")
-        if errors:
-            raise ConfigError("\n".join(errors))
+            raise ConfigError(f"SteamCMD not found: {self.steamcmd_path}")
         self.mods_dir.mkdir(parents=True, exist_ok=True)
 
 

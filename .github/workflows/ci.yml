@@ -19,8 +19,8 @@ jobs:
           python-version: "3.13"
       - run: uv sync --all-extras
       - run: uv pip install ruff
-      - run: uv run ruff check src/
-      - run: uv run ruff format --check src/
+      - run: uv run ruff check src/ tests/ tools/
+      - run: uv run ruff format --check src/ tests/ tools/
 
   # ── Type Checking ────────────────────────────────────────────────
   typecheck:
@@ -33,7 +33,7 @@ jobs:
           python-version: "3.13"
       - run: uv sync --all-extras
       - run: uv pip install mypy pydantic fastapi
-      - run: uv run mypy src/rwmod/ || true
+      - run: uv run mypy src/rwmod/
 
   # ── Tests + Coverage ────────────────────────────────────────────
   test:
@@ -46,7 +46,7 @@ jobs:
           python-version: "3.13"
       - run: uv sync --all-extras
       - run: uv pip install pytest pytest-cov httpx fastapi
-      - run: uv run pytest -m "not network" --cov=rwmod --cov-report=xml --cov-report=term-missing || true
+      - run: uv run pytest -m "not network" --cov=rwmod --cov-report=xml --cov-report=term-missing
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
@@ -63,8 +63,11 @@ jobs:
           python-version: "3.13"
       - run: uv sync --all-extras
       - run: uv pip install bandit pip-audit
-      - run: uv run bandit -c pyproject.toml -r src/ || true
-      - run: uv run pip-audit
+      # -ll = medium+ severity only (matches local gate); must pass.
+      - run: uv run bandit -c pyproject.toml -r src/ -ll
+      # pip-audit needs network access to the OSV API — keep advisory-only
+      # so offline CI runs don't fail the pipeline.
+      - run: uv run pip-audit || true
 
   # ── Code Quality ────────────────────────────────────────────────
   quality:

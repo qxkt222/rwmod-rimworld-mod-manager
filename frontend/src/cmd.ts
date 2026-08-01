@@ -10,14 +10,10 @@ interface CmdItem {
   shortcut?: string;
 }
 
-/** Resolve the switchPanel function dynamically to break circular import. */
-function _getSwitchPanel() {
-  return import("./main").then((m) => m.switchPanel);
-}
-
+/** Navigate via the hash router so the URL stays in sync. */
 function _makePanelAction(panel: string): () => void {
   return () => {
-    import("./main").then((m) => m.switchPanel(panel));
+    import("./router").then(({ navigate }) => navigate(panel));
   };
 }
 

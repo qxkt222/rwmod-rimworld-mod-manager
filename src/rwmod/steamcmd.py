@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import re
-import subprocess
+import subprocess  # nosec B404 — subprocess is required to run SteamCMD
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -85,45 +86,18 @@ class SteamCMD:
             mod_id,
             "+quit",
         ]
-        lines: list[str] = []
 
         try:
-            proc = subprocess.Popen(
+            proc = subprocess.Popen(  # nosec B603 — command list is fixed, no shell, no user input
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                bufsize=1,
+                bufsize=-1,
                 cwd=str(self.steam_dir),
             )
-
-            if proc.stdout is None:
-                return DownloadResult(
-                    success=False,
-                    mod_id=mod_id,
-                    error_kind=ErrorKind.UNKNOWN,
-                    error_detail="无法读取 SteamCMD 输出",
-                )
-
-            try:
-                for raw in proc.stdout:
-                    line = raw.rstrip("\n")
-                    if line:
-                        lines.append(line)
-                proc.wait(timeout=self._TIMEOUT_MINUTES * 60)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
-                return DownloadResult(
-                    success=False,
-                    mod_id=mod_id,
-                    error_kind=ErrorKind.TIMEOUT,
-                    error_detail="SteamCMD 超时无响应",
-                    output_lines=lines,
-                )
-
         except OSError as e:
             return DownloadResult(
                 success=False,
@@ -131,6 +105,24 @@ class SteamCMD:
                 error_kind=ErrorKind.UNKNOWN,
                 error_detail=f"无法启动 SteamCMD: {e}",
             )
+
+        # communicate() with a timeout provides a *real* deadline — the old
+        # line-by-line read + proc.wait() could hang forever if SteamCMD stalled
+        # without producing output.
+        try:
+            out, _err = proc.communicate(timeout=self._TIMEOUT_MINUTES * 60)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                proc.wait(timeout=30)
+            return DownloadResult(
+                success=False,
+                mod_id=mod_id,
+                error_kind=ErrorKind.TIMEOUT,
+                error_detail="SteamCMD 超时无响应",
+            )
+
+        lines: list[str] = [line for line in (out or "").splitlines() if line.strip()]
 
         # ── parse workshop_log.txt for the real error reason ──────
         error_kind, error_detail = self._parse_workshop_error(mod_id)

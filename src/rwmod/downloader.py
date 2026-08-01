@@ -14,15 +14,12 @@ from rwmod.utils import extract_mod_id, safe_filename
 
 
 def _try_broadcast() -> None:
-    """Notify WebSocket clients of queue changes, if server is running."""
-    try:
-        import asyncio
+    """Notify WebSocket clients of queue changes, if server is running.
 
-        from rwmod.server import broadcast_queue_update
-
-        asyncio.create_task(broadcast_queue_update())
-    except Exception:
-        pass
+    The WebSocket endpoint in server.py is a lightweight echo/ping handler
+    without a connection registry, so real broadcasts are not implemented yet.
+    This is intentionally a no-op hook for future use.
+    """
 
 
 __all__ = ["download_one", "extract_mod_id", "_find_existing", "_pick_folder_name"]

@@ -5,15 +5,11 @@ Tests core logic paths that don't require SteamCMD network calls.
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
-
-import pytest
 
 from rwmod.downloader import (
     _find_existing,
     _pick_folder_name,
-    download_one,
     extract_mod_id,
 )
 
@@ -105,9 +101,7 @@ class TestPickFolderName:
         workshop_path.mkdir()
         about = workshop_path / "About"
         about.mkdir()
-        (about / "About.xml").write_text(
-            "<ModMetaData><name>My Cool Mod</name></ModMetaData>"
-        )
+        (about / "About.xml").write_text("<ModMetaData><name>My Cool Mod</name></ModMetaData>")
         name = _pick_folder_name(workshop_path, "12345")
         assert "My Cool Mod" in name
         assert "12345" in name

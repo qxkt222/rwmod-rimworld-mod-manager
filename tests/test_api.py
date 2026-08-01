@@ -179,3 +179,62 @@ class TestErrorHandling:
         resp = client.post("/api/download", json={"ids": []})
         # Should be 400 or have error detail
         assert resp.status_code in (200, 400, 422)
+
+
+class TestDownloadAPIWithPatchedDownloader:
+    """Download/import endpoints run SteamCMD in a thread — patched here."""
+
+    def test_download_success(self, client: TestClient):
+        from unittest.mock import patch
+
+        from rwmod.routers import download as dl_router
+
+        with patch.object(dl_router, "download_one", return_value=True):
+            resp = client.post("/api/download", json={"ids": ["123456"]})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 1
+        assert data["results"][0] == {"id": "123456", "ok": True}
+
+    def test_download_failure_recorded(self, client: TestClient):
+        from unittest.mock import patch
+
+        from rwmod.routers import download as dl_router
+
+        with patch.object(dl_router, "download_one", return_value=False):
+            resp = client.post("/api/download", json={"ids": ["999"]})
+        assert resp.status_code == 200
+        assert resp.json()["results"][0]["ok"] is False
+
+    def test_import_file(self, client: TestClient):
+        from unittest.mock import patch
+
+        from rwmod.routers import download as dl_router
+
+        with patch.object(dl_router, "download_one", return_value=True):
+            resp = client.post(
+                "/api/import/file",
+                files={"file": ("mods.txt", b"123456\n# comment\n654321\n", "text/plain")},
+            )
+        assert resp.status_code == 200
+        assert resp.json()["total"] == 2
+
+
+class TestConfigApiKeyMasking:
+    def test_config_does_not_leak_api_key(self, client: TestClient):
+        resp = client.get("/api/config")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "steam_api_key" not in data
+        assert "has_steam_api_key" in data
+
+
+class TestBackupTraversalAPI:
+    def test_delete_backup_rejects_traversal(self, client: TestClient):
+        resp = client.delete("/api/backups/..%5Cvictim.zip")
+        # Starlette may 404 on some encoded separators — either way the file
+        # must never be deleted; when routed, backup.delete_backup returns False.
+        if resp.status_code == 200:
+            assert resp.json()["ok"] is False
+        else:
+            assert resp.status_code in (404, 422)

@@ -55,7 +55,7 @@ class AutoUpdateManager:
             cfg = Config.load()
             from rwmod.workshop import check_mod_updates
 
-            updates = check_mod_updates(str(cfg.mods_dir))
+            updates = await asyncio.to_thread(check_mod_updates, str(cfg.mods_dir))
 
             self._check_result.clear()
             self._check_result.extend(updates)
@@ -87,7 +87,7 @@ class AutoUpdateManager:
                 cfg = Config.load()
                 from rwmod.workshop import check_mod_updates
 
-                updates = check_mod_updates(str(cfg.mods_dir))
+                updates = await asyncio.to_thread(check_mod_updates, str(cfg.mods_dir))
                 if updates:
                     _log.info("发现 %s 个可用更新", len(updates))
                     self._check_result.clear()

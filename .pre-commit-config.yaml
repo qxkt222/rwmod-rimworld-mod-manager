@@ -25,8 +25,8 @@ repos:
     rev: v1.15.0
     hooks:
       - id: mypy
-        args: [--config-file=pyproject.toml]
-        additional_dependencies: [pydantic, fastapi]
+        args: [--config-file=pyproject.toml, src/rwmod]
+        additional_dependencies: [pydantic, fastapi, typer, uvicorn, websockets, python-multipart]
         pass_filenames: false
 
   - repo: https://github.com/pre-commit/pre-commit-hooks

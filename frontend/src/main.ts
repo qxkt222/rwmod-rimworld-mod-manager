@@ -7,6 +7,7 @@
  */
 import "./style.css";
 import { api, type ModEntry, type ConfigData } from "./api";
+import { initRouter } from "./router";
 import { connectWS, type WSMessage } from "./ws";
 import { initDashboardPanel } from "./panels/dashboard";
 import { toast } from "./toast";
@@ -383,6 +384,8 @@ document.getElementById("app")!.innerHTML = /* html */ `
 `;
 
 // ── panel navigation ──────────────────────────────────────────
+// Tab/sidebar clicks and browser back/forward are handled by the hash router
+// (router.ts → initRouter(switchPanel) at startup).
 export function switchPanel(name: string) {
   currentPanel = name;
   document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
@@ -398,19 +401,6 @@ export function switchPanel(name: string) {
   // Lazy-init the panel on first visit
   _lazyInit(name);
 }
-
-// ── tab click handlers ─────────────────────────────────────────
-document.querySelector("#nav-tabs")?.addEventListener("click", (e) => {
-  const btn = (e.target as HTMLElement).closest("[data-panel]");
-  if (!btn) return;
-  switchPanel((btn as HTMLElement).dataset.panel!);
-});
-
-document.querySelector("#sidebar")?.addEventListener("click", (e) => {
-  const item = (e.target as HTMLElement).closest("[data-panel]");
-  if (!item) return;
-  switchPanel((item as HTMLElement).dataset.panel!);
-});
 
 // ── global actions ─────────────────────────────────────────────
 export function setStatus(color: string, msg: string) {
@@ -503,6 +493,9 @@ document.getElementById("btn-export")?.addEventListener("click", async () => {
 
 // ── startup ────────────────────────────────────────────────────
 (async () => {
+  // Hash-based routing (back/forward + deep links), including #saves / #tags
+  initRouter(switchPanel);
+
   // Init dashboard (eager — it's the landing page)
   _lazyInit("dashboard");
 

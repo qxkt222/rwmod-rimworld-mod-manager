@@ -47,7 +47,7 @@ def search_workshop(query: str, page: int = 1, count: int = 20) -> list[ModSearc
         f"https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/?"
         f"key=anonymous&format=json&appid={STEAM_APP_ID}"
         f"&query_type=0&page={page}&numperpage={count}"
-        f"&search_text={urllib.request.quote(query)}"
+        f"&search_text={urllib.parse.quote(query)}"
         f"&return_vote_data=1&return_previews=1&return_children=0"
     )
 
@@ -108,9 +108,9 @@ def is_collection(workshop_id: str) -> bool:
             data = json.loads(resp.read())
         files = data.get("response", {}).get("publishedfiledetails", [])
         if files:
-            ftype = files[0].get("file_type", 0)
+            ftype = int(files[0].get("file_type", 0))
             return ftype == 2  # 0=item, 2=collection
-    except Exception:
+    except Exception:  # nosec B110 — non-fatal: fall back to "not a collection"
         pass
     return False
 
@@ -148,7 +148,7 @@ def fetch_collection_children(collection_id: str) -> list[str]:
                     len(result),
                 )
                 return result
-    except Exception:
+    except Exception:  # nosec B110 — user API key layer is best-effort
         pass
 
     log.warning("Collection %s: all methods failed", collection_id)
@@ -157,7 +157,7 @@ def fetch_collection_children(collection_id: str) -> list[str]:
 
 def _fetch_collection_api(collection_id: str, api_key: str = "anonymous") -> list[str]:
     """Fetch collection children via Steam Web API with pagination."""
-    all_ids = []
+    all_ids: list[str] = []
     page = 1
     per_page = 500
     while True:
@@ -217,7 +217,7 @@ def _scrape_collection_page(collection_id: str) -> list[str]:
             url,
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:  # nosec B310 — HTTPS-only Steam URL
             html = resp.read().decode("utf-8", errors="replace")
     except Exception:
         return []

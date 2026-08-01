@@ -1,4 +1,4 @@
-﻿"""Tests for save_parser.py \u2014 .rws save file parsing."""
+"""Tests for save_parser.py \u2014 .rws save file parsing."""
 
 from __future__ import annotations
 
@@ -9,21 +9,21 @@ from rwmod.save_parser import _extract_game_version, analyze_save, find_save_fil
 
 class TestParseSaveMods:
     def test_from_string_content(self):
-        content = '''<?xml version="1.0"?>
+        content = """<?xml version="1.0"?>
 <saves>
   <modIds>
     <li>brrainz.harmony</li>
     <li>ludeon.rimworld</li>
     <li>author.mod1</li>
   </modIds>
-</saves>'''
+</saves>"""
         mods = parse_save_mods(content)
         assert mods == ["brrainz.harmony", "ludeon.rimworld", "author.mod1"]
 
     def test_from_path(self, tmp_path: Path):
         f = tmp_path / "test.rws"
         f.write_text(
-            '<saves><modIds><li>test.mod</li><li>other.mod</li></modIds></saves>',
+            "<saves><modIds><li>test.mod</li><li>other.mod</li></modIds></saves>",
             encoding="utf-8",
         )
         mods = parse_save_mods(f)
@@ -60,10 +60,10 @@ class TestAnalyzeSave:
     def test_full_analysis(self, tmp_path: Path):
         f = tmp_path / "MyColony.rws"
         f.write_text(
-            '<saves>'
-            '<gameVersion>1.5.4297 rev1117</gameVersion>'
-            '<modIds><li>mod.a</li><li>mod.b</li><li>mod.c</li></modIds>'
-            '</saves>',
+            "<saves>"
+            "<gameVersion>1.5.4297 rev1117</gameVersion>"
+            "<modIds><li>mod.a</li><li>mod.b</li><li>mod.c</li></modIds>"
+            "</saves>",
         )
         installed = {"mod.a", "mod.b", "mod.d"}
         result = analyze_save(f, installed)
@@ -77,9 +77,7 @@ class TestAnalyzeSave:
 
     def test_all_installed(self, tmp_path: Path):
         f = tmp_path / "Complete.rws"
-        f.write_text(
-            '<saves><modIds><li>mod.a</li><li>mod.b</li></modIds></saves>'
-        )
+        f.write_text("<saves><modIds><li>mod.a</li><li>mod.b</li></modIds></saves>")
         result = analyze_save(f, {"mod.a", "mod.b"})
         assert result["loadable"]
         assert result["completeness"] == 1.0

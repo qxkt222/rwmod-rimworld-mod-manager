@@ -17,7 +17,8 @@ def get_config_route(cfg: Config = Depends(get_config)):
         "mods_dir": str(cfg.mods_dir),
         "rimworld_dir": str(cfg.rimworld_dir),
         "backup_dir": str(cfg.backup_dir),
-        "steam_api_key": cfg.steam_api_key,
+        # Never expose the raw API key to the client — only whether one is set.
+        "has_steam_api_key": bool(cfg.steam_api_key),
         "steamcmd_exists": cfg.steamcmd_path.exists(),
         "mods_dir_exists": cfg.mods_dir.exists(),
     }

@@ -91,3 +91,55 @@ class TestBackupMod:
         ok = delete_backup(backup_dir, zip_path.name)
         assert ok
         assert not zip_path.exists()
+
+
+class TestBackupPathTraversal:
+    def test_delete_rejects_traversal(self, tmp_path: Path):
+        backup_dir = tmp_path / "backups"
+        backup_dir.mkdir()
+        victim = tmp_path / "victim.zip"
+        victim.write_bytes(b"data")
+
+        assert delete_backup(backup_dir, "..\\victim.zip") is False
+        assert delete_backup(backup_dir, "../victim.zip") is False
+        assert delete_backup(backup_dir, "sub/victim.zip") is False
+        assert victim.exists()
+
+    def test_restore_rejects_traversal_filename(self, tmp_path: Path):
+        backup_dir = tmp_path / "backups"
+        backup_dir.mkdir()
+        result = restore_mod(tmp_path / "Mods", "123", backup_dir, backup_filename="..\\evil.zip")
+        assert not result["ok"]
+
+    def test_restore_rejects_zip_path_traversal(self, tmp_path: Path):
+        """A backup zip containing ../ entries must not escape mods_dir."""
+        mods_dir = tmp_path / "Mods"
+        mods_dir.mkdir()
+        backup_dir = tmp_path / "backups"
+        backup_dir.mkdir()
+        evil = backup_dir / "123__mod__20240101_000000.zip"
+        with zipfile.ZipFile(evil, "w") as zf:
+            zf.writestr("../evil.txt", "boom")
+
+        result = restore_mod(mods_dir, "123", backup_dir)
+        assert not result["ok"]
+        assert not (tmp_path / "evil.txt").exists()
+
+    def test_restore_accepts_plain_filename(self, tmp_path: Path):
+        mods_dir = tmp_path / "Mods"
+        mods_dir.mkdir()
+        mod_dir = mods_dir / "my_mod"
+        mod_dir.mkdir()
+        (mod_dir / "About").mkdir()
+        (mod_dir / "About" / "About.xml").write_text("<ModMetaData/>")
+
+        backup_dir = tmp_path / "backups"
+        zip_path = backup_mod(mods_dir, "123", "my_mod", backup_dir)
+        assert zip_path is not None
+        import shutil
+
+        shutil.rmtree(mod_dir)
+
+        result = restore_mod(mods_dir, "123", backup_dir, backup_filename=zip_path.name)
+        assert result["ok"]
+        assert (mods_dir / "my_mod" / "About" / "About.xml").exists()

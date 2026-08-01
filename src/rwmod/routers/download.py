@@ -34,7 +34,8 @@ async def download_mods(payload: dict, cfg: Config = Depends(get_config)):
     cfg.validate()
     results: list[dict] = []
     for mid in parsed:
-        ok = download_one(cfg, mid, force=force)
+        # download_one runs SteamCMD (up to 10 min) — must not block the loop
+        ok = await asyncio.to_thread(download_one, cfg, mid, force=force)
         results.append({"id": mid, "ok": ok})
         status = "success" if ok else "failed"
         record_download(mid, status)
@@ -74,7 +75,7 @@ async def download_stream(id: str, force: bool = False, cfg: Config = Depends(ge
             fail = 0
             for i, cid in enumerate(to_download, 1):
                 yield f"data: {_sse_event('info', msg=f'[{i}/{len(to_download)}] 下载 {cid}...')}\n\n"
-                if download_one(cfg, cid, force=force):
+                if await asyncio.to_thread(download_one, cfg, cid, force=force):
                     ok += 1
                     yield f"data: {_sse_event('info', msg=f'  ✓ {cid}')}\n\n"
                 else:
@@ -117,7 +118,10 @@ async def import_file(
         tmp = f.name
     try:
         ids = parse_modlist_file(Path(tmp))
-        results = [{"id": mid, "ok": download_one(cfg, mid, force=force)} for mid in ids]
+        results = []
+        for mid in ids:
+            ok = await asyncio.to_thread(download_one, cfg, mid, force=force)
+            results.append({"id": mid, "ok": ok})
         return {"total": len(results), "results": results}
     finally:
         Path(tmp).unlink(missing_ok=True)
@@ -135,7 +139,10 @@ async def import_collection_api(payload: dict, cfg: Config = Depends(get_config)
     if not mod_ids:
         raise HTTPException(404, "未能获取合集内容")
     _log.info("合集 %s 包含 %s 个 Mod", collection_id, len(mod_ids))
-    results = [{"id": mid, "ok": download_one(cfg, mid, force=force)} for mid in mod_ids]
+    results = []
+    for mid in mod_ids:
+        ok = await asyncio.to_thread(download_one, cfg, mid, force=force)
+        results.append({"id": mid, "ok": ok})
     return {"total": len(results), "results": results}
 
 
@@ -153,7 +160,10 @@ async def import_sort_api(
         installed = get_installed_package_ids(cfg.mods_dir)
         missing = [pid for pid in package_ids if pid not in installed]
         known, unknown = resolve_workshop_ids(missing, cfg.mods_dir)
-        results = [{"id": mid, "ok": download_one(cfg, mid, force=force)} for mid in known]
+        results = []
+        for mid in known:
+            ok = await asyncio.to_thread(download_one, cfg, mid, force=force)
+            results.append({"id": mid, "ok": ok})
         return {
             "total_packages": len(package_ids),
             "missing": len(missing),

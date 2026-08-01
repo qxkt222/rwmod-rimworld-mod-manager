@@ -42,6 +42,20 @@ def setup() -> None:
     typer.echo(f"✓ 配置已保存 → {Config.CONFIG_PATH}")
 
 
+@app.command(name="web")
+def web(
+    host: str = typer.Option("0.0.0.0", "--host", help="监听地址"),  # nosec B104 — LAN access by design
+    port: int = typer.Option(8000, "--port", help="监听端口"),
+) -> None:
+    """启动 Web UI (FastAPI + 前端静态资源).
+
+    打包后的 rwmod.exe web 即通过此命令启动图形界面。
+    """
+    import uvicorn
+
+    uvicorn.run("rwmod.server:app", host=host, port=port, reload=False)
+
+
 # ── config ─────────────────────────────────────────────────────────
 
 
@@ -137,13 +151,13 @@ def import_collection(
     steamcmd = SteamCMD(cfg.steamcmd_path)
 
     typer.echo(f"正在获取合集 {collection_id} 的元数据...")
-    rc, lines = steamcmd.workshop_download(collection_id)
-    for line in lines:
+    result = steamcmd.workshop_download(collection_id)
+    for line in result.output_lines:
         low = line.lower()
         if any(kw in low for kw in ("download", "success", "error", "fail")):
             typer.echo(f"  {line}")
 
-    if rc != 0:
+    if not result.success:
         typer.echo("获取合集元数据失败", err=True)
         raise typer.Exit(1)
 
@@ -210,7 +224,7 @@ def list_mods() -> None:
         typer.echo(f"Mods 目录不存在: {cfg.mods_dir}")
         return
 
-    entries: list[tuple[str, str, str]] = []
+    entries: list[tuple[str, str, str, str]] = []
     for d in sorted(cfg.mods_dir.iterdir()):
         if not d.is_dir():
             continue

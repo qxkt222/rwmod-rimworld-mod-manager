@@ -77,7 +77,7 @@ function readPanelFromHash(): PanelName | null {
   const known = new Set([
     "dashboard", "download", "collection", "import", "mods",
     "search", "queue", "rimsort", "profiles", "history",
-    "backups", "config", "updates",
+    "backups", "config", "updates", "saves", "tags",
   ]);
   return known.has(hash) ? hash : null;
 }

@@ -7,7 +7,6 @@ __pycache__/
 .eggs/
 dist/
 build/
-*.spec
 
 # Virtual env
 .venv/
@@ -52,3 +51,14 @@ htmlcov/
 
 # SteamCMD (binary — not version controlled)
 steamcmd/
+
+# Pre-commit output logs (local — never commit)
+precommit_err.txt
+precommit_out.txt
+
+# Commit message draft (local working file)
+commit_msg.txt
+
+# Type-check / lint caches
+.mypy_cache/
+.ruff_cache/

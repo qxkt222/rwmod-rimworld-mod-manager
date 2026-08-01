@@ -8,13 +8,13 @@ from unittest.mock import patch
 import pytest
 
 from rwmod.database import (
-    init_db,
     close_db,
-    queue_upsert,
-    queue_delete,
-    queue_load_pending,
-    queue_load_all,
+    init_db,
     queue_clear_done,
+    queue_delete,
+    queue_load_all,
+    queue_load_pending,
+    queue_upsert,
 )
 
 
@@ -51,6 +51,7 @@ class TestQueueUpsert:
         queue_upsert("123", status="pending")
         first = queue_load_all()[0]["updated_at"]
         import time
+
         time.sleep(1)
         queue_upsert("123", status="done")
         second = queue_load_all()[0]["updated_at"]
