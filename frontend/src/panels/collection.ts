@@ -52,7 +52,13 @@ async function previewCollection() {
 
   try {
     const resp = await fetch(`/api/collection/preview/${encodeURIComponent(cid)}`);
-    const d = await resp.json();
+    const d = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      // FastAPI returns {"detail": ...} on 4xx/5xx — show it instead of undefined.
+      const detail = (d as any).detail || `HTTP ${resp.status}`;
+      log.innerHTML = `<span style="color:#f7768e">预览失败: ${detail}</span>`;
+      return;
+    }
     if (d.error) { log.innerHTML = `<span style="color:#f7768e">${d.error}</span>`; return; }
     log.innerHTML =
       `<span style="color:#9ece6a">合集 ${d.collection_id}: ${d.total} 个 Mod</span>\n` +
