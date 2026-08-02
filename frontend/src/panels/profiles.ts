@@ -2,6 +2,7 @@
  * Profile panel — save/restore ModsConfig.xml snapshots.
  * RimWorld players can switch between mod sets with one click.
  */
+import { api } from "../api";
 import { toast } from "../toast";
 
 interface ProfileEntry {
@@ -13,7 +14,44 @@ interface ProfileEntry {
 
 export function initProfilePanel() {
   document.getElementById("btn-profile-save")?.addEventListener("click", saveProfile);
+  document.getElementById("btn-undo")?.addEventListener("click", undoLast);
   refreshProfiles();
+  refreshUndoStatus();
+}
+
+async function refreshUndoStatus() {
+  const el = document.getElementById("undo-status");
+  if (!el) return;
+  try {
+    const data = await api.listUndo();
+    if (!data.snapshots.length) {
+      el.innerHTML = '<span style="color:var(--gray-text)">暂无撤销快照。破坏性操作（排序/恢复）前会自动备份。</span>';
+    } else {
+      const latest = data.snapshots[0];
+      el.innerHTML = `<span style="color:var(--gray-text)">最近快照: <code>${esc(latest.name)}</code>（${latest.size_kb} KB）</span>`;
+    }
+  } catch (e: any) {
+    el.innerHTML = `<span style="color:var(--red)">加载失败: ${esc(e.message)}</span>`;
+  }
+}
+
+async function undoLast() {
+  const el = document.getElementById("undo-status");
+  if (!el) return;
+  if (!confirm("撤销上次操作？将恢复最近一次操作前的 ModsConfig.xml。")) return;
+  try {
+    const data = await api.undoLast();
+    if (data.ok) {
+      el.innerHTML = `<span style="color:var(--green)">✅ ${esc(data.msg)}</span>`;
+      toast(data.msg, "success");
+    } else {
+      el.innerHTML = `<span style="color:var(--red)">❌ ${esc(data.msg)}</span>`;
+      toast(data.msg, "error");
+    }
+  } catch (e: any) {
+    el.innerHTML = `<span style="color:var(--red)">❌ 撤销失败: ${esc(e.message)}</span>`;
+    toast(`撤销失败: ${e.message}`, "error");
+  }
 }
 
 async function refreshProfiles() {

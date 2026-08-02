@@ -7,6 +7,7 @@ Profiles are stored as named XML copies in ~/.rwmod/profiles/.
 from __future__ import annotations
 
 import logging
+import os
 import xml.etree.ElementTree as ET
 from datetime import UTC, datetime
 from pathlib import Path
@@ -141,10 +142,12 @@ def restore_profile(name: str, target_path: Path) -> dict:
         return {"ok": False, "msg": f"Profile 不存在: {safe_name}"}
 
     try:
-        # Backup existing ModsConfig.xml if present
+        # Backup existing ModsConfig.xml if present.
+        # Use os.replace so an existing .bak is overwritten instead of
+        # raising FileExistsError (which crashed restore on Windows).
         if target_path.exists():
             backup = target_path.with_suffix(".xml.rwmod.bak")
-            target_path.rename(backup)
+            os.replace(target_path, backup)
             _log.info("备份现有 ModsConfig.xml → %s", backup.name)
 
         content = src.read_text(encoding="utf-8")

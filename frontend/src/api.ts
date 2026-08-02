@@ -82,6 +82,45 @@ export const api = {
       body: JSON.stringify(cfg),
     }),
 
+  /** Export a .rwmod bundle (profiles/backups/tags/config) as a downloadable file. */
+  exportBundle: async (includeBackups: boolean): Promise<void> => {
+    const resp = await fetch(`${BASE}/transfer/export`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ include_backups: includeBackups }),
+    });
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({}));
+      throw new Error((body as any).detail || `${resp.status} ${resp.statusText}`);
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = resp.headers.get("content-disposition")?.match(/filename="?([^";]+)"?/)?.[1] || "rwmod-backup.rwmod";
+    a.click();
+    URL.revokeObjectURL(url);
+  },
+
+  /** Import a .rwmod bundle, restoring profiles/backups/tags/config. */
+  importBundle: (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return req<{ ok: boolean; msg: string; profiles: number; backups: number }>("/transfer/import", {
+      method: "POST",
+      body: fd,
+    });
+  },
+
+  /** List available undo snapshots of ModsConfig.xml. */
+  listUndo: () => req<{ snapshots: { name: string; size_kb: number }[]; modsconfig_path: string }>("/undo"),
+
+  /** Restore the most recent pre-operation snapshot of ModsConfig.xml. */
+  undoLast: () =>
+    req<{ ok: boolean; msg: string; restored: string | null }>("/undo", {
+      method: "POST",
+    }),
+
   /** SSE download stream — returns an AbortController + async generator */
   downloadStream(
     id: string,

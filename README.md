@@ -21,6 +21,8 @@
 | 📐 **排序分析** | Harmony 位置、Core/DLC 顺序、已知冲突检测 |
 | 💿 **配置档案** | 保存/切换 ModsConfig.xml 快照 |
 | 📤 **合集导出** | 从已安装 Mod 反向生成 Workshop ID 列表 |
+| 📦 **一键迁移** | 导出/导入 `.rwmod` 包（profiles/备份/标签/配置），跨机器迁移 |
+| ↩️ **操作撤销** | 破坏性操作（排序/恢复）前自动快照 ModsConfig.xml，一键回滚 |
 
 ## 🚀 快速开始
 
@@ -86,10 +88,11 @@ src/rwmod/
 ├── server.py           # FastAPI app factory (85行)
 ├── deps.py             # 依赖注入 (Config/DB/Queue)
 ├── errors.py           # 统一异常体系
-├── routers/            # 17 个路由模块（全部 /api 前缀）
+├── routers/            # 19 个路由模块（全部 /api 前缀）
 │   ├── auth.py         # 登录 / token 校验
 │   ├── auto_update.py  # 自动更新
 │   ├── backups.py      # 备份管理
+│   ├── compat.py       # 兼容性检查
 │   ├── config.py       # 配置管理
 │   ├── dashboard.py    # 首页统计
 │   ├── download.py     # 下载 / 导入 / SSE 流
@@ -102,6 +105,8 @@ src/rwmod/
 │   ├── rimsort.py      # RimSort 集成
 │   ├── saves.py        # 存档分析
 │   ├── tags.py         # Mod 标签
+│   ├── transfer.py     # 一键导出 / 导入
+│   ├── undo.py         # 操作撤销
 │   └── workshop.py     # 搜索 / 依赖 / 合集预览
 ├── [业务模块]          # download/workshop/backup/etc.
 ├── models/             # Pydantic 响应模型

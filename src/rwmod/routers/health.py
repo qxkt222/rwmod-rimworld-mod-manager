@@ -1,6 +1,8 @@
 """Health / status router."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+
+from rwmod.auth import get_current_user
 
 router = APIRouter(prefix="/api", tags=["status"])
 
@@ -22,7 +24,7 @@ def get_locale_api():
 
 
 @router.post("/locale")
-def set_locale_api(payload: dict):
+def set_locale_api(payload: dict, _user: str = Depends(get_current_user)):
     """Set the current locale (zh-CN or en)."""
     from rwmod.i18n import set_locale
 

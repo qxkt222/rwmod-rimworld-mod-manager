@@ -36,6 +36,12 @@ class DownloadQueue:
     _callbacks: list[Callable] = field(default_factory=list)
     # Workshop IDs whose in-flight download should be treated as cancelled.
     _cancelled: set[str] = field(default_factory=set)
+    # Persistent background worker that drains pending items as they arrive.
+    _worker: asyncio.Task | None = None
+    _config: Config | None = None
+    _force: bool = False
+    _wake: asyncio.Event = field(default_factory=asyncio.Event)
+    _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def add(self, mod_ids: list[str]) -> list[QueueItem]:
         new_items: list[QueueItem] = []
@@ -102,18 +108,44 @@ class DownloadQueue:
         ]
 
     async def start(self, config: Config, force: bool = False) -> None:
-        if self._running:
-            return
+        """Start (or resume) draining the queue.
+
+        Uses a single persistent worker task so that items added *while* the
+        queue is already running are picked up too — the old implementation
+        returned early when ``_running`` was True, silently dropping any
+        pending items added after the first ``start()`` call.
+        """
+        async with self._lock:
+            self._config = config
+            self._force = force
+            if self._worker is None or self._worker.done():
+                self._worker = asyncio.create_task(self._worker_loop())
+            self._wake.set()
+
+    async def _worker_loop(self) -> None:
+        """Drain pending items forever until the queue is empty and idle."""
         self._running = True
+        try:
+            while True:
+                # Grab the next pending item (if any).
+                item = next((i for i in self.items if i.status == "pending"), None)
+                if item is None:
+                    # Nothing to do — wait for a wake-up (new item or start()).
+                    self._wake.clear()
+                    with contextlib.suppress(asyncio.TimeoutError):
+                        await asyncio.wait_for(self._wake.wait(), timeout=30)
+                    # Re-check after wake or timeout.
+                    continue
 
-        pending = [i for i in self.items if i.status == "pending"]
-        tasks = [self._download_one(config, item, force) for item in pending]
-
-        if tasks:
-            await asyncio.gather(*tasks)
-
-        self._running = False
-        await self._notify()
+                # start() always sets _config before waking the worker, so it
+                # is never None here; guard anyway to satisfy the type checker.
+                config = self._config
+                if config is None:
+                    continue
+                await self._download_one(config, item, self._force)
+        finally:
+            self._running = False
+            await self._notify()
 
     async def _download_one(self, config: Config, item: QueueItem, force: bool) -> None:
         async with self._semaphore:

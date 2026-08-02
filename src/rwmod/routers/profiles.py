@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from rwmod.auth import get_current_user
 from rwmod.config import Config
 from rwmod.deps import get_config
 
@@ -9,7 +10,10 @@ router = APIRouter(prefix="/api", tags=["profiles"])
 
 
 @router.get("/profiles")
-def list_profiles(cfg: Config = Depends(get_config)):
+def list_profiles(
+    cfg: Config = Depends(get_config),
+    _user: str = Depends(get_current_user),
+):
     from rwmod.profile import list_profiles as _list
     from rwmod.profile import resolve_modsconfig_path
 
@@ -22,7 +26,11 @@ def list_profiles(cfg: Config = Depends(get_config)):
 
 
 @router.post("/profiles/save")
-def save_profile(payload: dict, cfg: Config = Depends(get_config)):
+def save_profile(
+    payload: dict,
+    cfg: Config = Depends(get_config),
+    _user: str = Depends(get_current_user),
+):
     name: str = payload.get("name", "").strip()
     if not name:
         raise HTTPException(400, "需要提供 profile 名称")
@@ -38,16 +46,26 @@ def save_profile(payload: dict, cfg: Config = Depends(get_config)):
 
 
 @router.post("/profiles/{name}/restore")
-def restore_profile(name: str, cfg: Config = Depends(get_config)):
+def restore_profile(
+    name: str,
+    cfg: Config = Depends(get_config),
+    _user: str = Depends(get_current_user),
+):
     from rwmod.profile import resolve_modsconfig_path
     from rwmod.profile import restore_profile as _restore
+    from rwmod.undo import snapshot_modsconfig
 
     target = resolve_modsconfig_path(cfg.rimworld_dir) or (cfg.rimworld_dir / "ModsConfig.xml")
+    if target.exists():
+        snapshot_modsconfig(target, label="restore")
     return _restore(name, target)
 
 
 @router.delete("/profiles/{name}")
-def delete_profile(name: str):
+def delete_profile(
+    name: str,
+    _user: str = Depends(get_current_user),
+):
     from rwmod.profile import delete_profile as _delete
 
     return {"ok": _delete(name)}

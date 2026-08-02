@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, Depends
 
+from rwmod.auth import get_current_user
 from rwmod.config import Config
 from rwmod.database import get_download_history
 from rwmod.deps import get_config
@@ -17,7 +18,12 @@ router = APIRouter(prefix="/api", tags=["workshop"])
 
 
 @router.get("/search")
-def search(q: str = "", page: int = 1, cfg: Config = Depends(get_config)):
+def search(
+    q: str = "",
+    page: int = 1,
+    cfg: Config = Depends(get_config),
+    _user: str = Depends(get_current_user),
+):
     if not q.strip():
         return {"results": []}
     try:
@@ -38,7 +44,7 @@ def search(q: str = "", page: int = 1, cfg: Config = Depends(get_config)):
 
 
 @router.get("/workshop/{mod_id}")
-def workshop_detail(mod_id: str):
+def workshop_detail(mod_id: str, _user: str = Depends(get_current_user)):
     try:
         details = fetch_item_details([mod_id])
     except Exception:
@@ -49,7 +55,11 @@ def workshop_detail(mod_id: str):
 
 
 @router.get("/collection/preview/{collection_id}")
-def collection_preview(collection_id: str, cfg: Config = Depends(get_config)):
+def collection_preview(
+    collection_id: str,
+    cfg: Config = Depends(get_config),
+    _user: str = Depends(get_current_user),
+):
     cid = extract_mod_id(collection_id) or collection_id
     try:
         mod_ids = fetch_collection_children(cid)
@@ -93,7 +103,11 @@ def collection_preview(collection_id: str, cfg: Config = Depends(get_config)):
 
 
 @router.post("/mods/dependencies")
-def mod_dependencies(payload: dict, cfg: Config = Depends(get_config)):
+def mod_dependencies(
+    payload: dict,
+    cfg: Config = Depends(get_config),
+    _user: str = Depends(get_current_user),
+):
     from rwmod.workshop import fetch_item_dependencies
 
     ids: list[str] = payload.get("ids", [])

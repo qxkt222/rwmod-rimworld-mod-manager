@@ -7,6 +7,7 @@ Dependencies (config, DB, queue) are injected via src/rwmod/deps.py.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import uuid
@@ -30,6 +31,7 @@ from rwmod.queue import get_queue
 from rwmod.routers.auth import router as auth_router
 from rwmod.routers.auto_update import router as autoupdate_router
 from rwmod.routers.backups import router as backups_router
+from rwmod.routers.compat import router as compat_router
 from rwmod.routers.config import router as config_router
 from rwmod.routers.dashboard import router as dashboard_router
 from rwmod.routers.download import router as download_router
@@ -43,6 +45,8 @@ from rwmod.routers.queue import router as queue_router
 from rwmod.routers.rimsort import router as rimsort_router
 from rwmod.routers.saves import router as saves_router
 from rwmod.routers.tags import router as tags_router
+from rwmod.routers.transfer import router as transfer_router
+from rwmod.routers.undo import router as undo_router
 from rwmod.routers.workshop import router as workshop_router
 from rwmod.utils import bundle_root
 
@@ -71,6 +75,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Push real-time queue snapshots to all connected WebSocket clients.
     get_queue().on_update(broadcast_queue_update)
+
+    # Push a notification to the UI when background update checks find updates.
+    au.on_update(broadcast_update_notification)
 
     yield
     await au.stop_background()
@@ -156,13 +163,17 @@ app.include_router(download_router)
 app.include_router(workshop_router)
 app.include_router(queue_router)
 app.include_router(backups_router)
+app.include_router(compat_router)
 app.include_router(profiles_router)
+
 app.include_router(rimsort_router)
 app.include_router(history_router)
 app.include_router(autoupdate_router)
 app.include_router(metrics_router)
 app.include_router(tags_router)
 app.include_router(saves_router)
+app.include_router(transfer_router)
+app.include_router(undo_router)
 
 
 # ── static files ───────────────────────────────────────────────────
@@ -202,20 +213,39 @@ async def ws_endpoint(ws: WebSocket) -> None:
 
 
 async def _broadcast_ws(payload: dict) -> None:
-    """Send a JSON message to every connected WebSocket client."""
-    dead: list[WebSocket] = []
-    for ws in list(_ws_clients):
+    """Send a JSON message to every connected WebSocket client.
+
+    Sends to all clients concurrently so a slow/stalled socket can never
+    block the broadcast to the others (a sequential await would let one
+    slow client stall the whole event loop's queue notifications).
+    """
+    clients = list(_ws_clients)
+    if not clients:
+        return
+
+    async def _send(ws: WebSocket) -> None:
         try:
             await ws.send_json(payload)
         except Exception:  # noqa: BLE001 — a dead socket must not break the loop
-            dead.append(ws)
-    for ws in dead:
-        _ws_clients.discard(ws)
+            _ws_clients.discard(ws)
+
+    await asyncio.gather(*(_send(ws) for ws in clients))
 
 
 async def broadcast_queue_update(snapshot: list[dict]) -> None:
     """Registered as the queue's on_update callback — pushes snapshots to UI."""
     await _broadcast_ws({"type": "queue_update", "items": snapshot})
+
+
+def broadcast_update_notification(updates: list[dict]) -> None:
+    """Sync callback from AutoUpdateManager — schedules a WS notification.
+
+    AutoUpdateManager._notify runs in the event loop thread, so we can safely
+    schedule the async broadcast without awaiting it here.
+    """
+    asyncio.create_task(
+        _broadcast_ws({"type": "update_notification", "count": len(updates), "updates": updates})
+    )
 
 
 def _queue_pending_count() -> int:

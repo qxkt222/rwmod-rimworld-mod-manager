@@ -85,7 +85,9 @@ def check(name, code):
 check("errors",
     "from rwmod.errors import ConfigError; e=ConfigError('test'); assert e.detail=='test'")
 check("version",
-    "from rwmod import __version__; assert __version__=='0.4.1', __version__")
+    "from rwmod import __version__; assert __version__=='0.4.3', __version__")
+
+
 check("backup",
     "from rwmod.backup import _backup_metadata\n"
     "from pathlib import Path\n"

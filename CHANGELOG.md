@@ -1,6 +1,54 @@
 # Changelog
 
+## [0.4.3] - 2026-08-02
+
+### 新功能
+- **一键迁移** (`transfer.py`) — 将配置档案、备份、标签与设置打包为 `.rwmod` 文件，
+  可跨机器一键导出/导入（`routers/transfer.py`，前端配置面板「一键迁移」）
+- **操作撤销** (`undo.py`) — 破坏性操作（排序/恢复）前自动快照 `ModsConfig.xml`，
+  可一键回滚（`routers/undo.py`，前端配置档案面板「操作撤销」）
+
+### 安全 (P1)
+- **认证默认失效修复** — `get_current_user` 在未配置密钥时直接放行，导致默认配置下
+  所有 API 完全无鉴权。现改为强制启用认证（`auth.py`），测试 `client` fixture 自动携带 token
+
+### 稳定性 / 功能 (P2)
+- **SSE 实时推送卡死修复** — `/api/events` 原为无限循环且无心跳，连接永久挂起；
+  改为带心跳的 `asyncio` 事件循环（`server.py`）
+- **WebSocket 队列推送链路打通** — 队列状态变化通过 `/ws` 实时广播到前端
+- **Profile 重命名崩溃修复** — 用 `Path.stem` 解析文件名导致带 `.xml` 后缀的路径
+  解析错误（`profile.py`）
+- **磁盘统计低估修复** — dashboard 只统计 Mods 目录本身，未递归计算子目录大小；
+  改为递归统计（`routers/dashboard.py`）
+- **SQLite 写并发锁** — 多线程写库可能触发 `database is locked`，加写锁保护（`database.py`）
+- **备份恢复原子性** — 恢复时先写临时目录再原子替换，中途失败不再丢失数据（`backup.py`）
+- **依赖 BFS 与健康检查误判** — 依赖遍历改用 BFS 保证顺序；健康检查不再把 Core 误判为缺失
+- **Core 位置校验 / offline 探测 / CORS / 合集路由** — 多处边界问题修复
+- **Docker 只读挂载修复** — Mods 目录挂载为只读导致无法写入（`Dockerfile`）
+- **ModsConfig 对比误报** — `compare_modsconfig` 把内置 Core 误算为 extra，已排除（`rimsort.py`）
+
+### 稳定性 / 功能 (P2) — 代码复查补充
+- **下载队列并发竞态修复** — 原 `start()` 在 `_running` 为 True 时直接返回，
+  队列运行期间新加入的待下载项会被静默丢弃；改为单一持久 worker 任务 +
+  `asyncio.Event` 唤醒，运行中新增项也能被拾取（`queue.py`）
+- **WebSocket 广播解阻塞** — 广播改为 `asyncio.gather` 并发发送，慢/卡死的
+  客户端不再阻塞整个事件循环的队列通知（`server.py`）
+- **备份恢复目录匹配修复** — `restore_mod` 原按备份文件名解析的（可能被
+  `safe_filename` 改写过的）目录名定位解压目录，遇到含 `:`/`?` 等非法字符的
+  mod 目录会恢复失败；改为从 zip 内容检测实际顶层目录（`backup.py`）
+- **Skymods 重定向递归限制** — `_download_and_extract` 对 HTML 重定向页无限
+  递归，遇到 A→B→A 循环会栈溢出；加 `_MAX_REDIRECTS=5` 深度上限（`skymods.py`）
+
+### 清理 (P3)
+- **测试断言过时** — `run_tests.py` 版本断言更新至 0.4.3
+- **mypy 清理** — `transfer.py`/`autoupdate.py` 类型注解补全，0 错误
+- **ruff format** — 全量格式化 23 个文件
+- **dead code 清理** — 删除 `backup.py` 中未使用的 `_safe_filename` 包装函数
+  与 `list_backups` 冗余分支
+- **测试扩充** — 新增 `restore_mod` 目录名被改写场景测试，全套 223 项测试通过
+
 ## [0.4.2] - 2026-08-01
+
 
 ### Fixed
 - **合集下载彻底修复** — `is_collection`/`fetch_collection_children`/

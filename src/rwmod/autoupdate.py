@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections.abc import Callable
 
 from rwmod.config import Config
 
@@ -21,6 +22,18 @@ class AutoUpdateManager:
         self._check_result: list[dict] = []
         self._running: bool = False
         self._bg_task: asyncio.Task[None] | None = None
+        self._on_update: list[Callable[[list[dict]], None]] = []
+
+    def on_update(self, callback: Callable[[list[dict]], None]) -> None:
+        """Register a callback invoked when new updates are discovered."""
+        self._on_update.append(callback)
+
+    def _notify(self, updates: list[dict]) -> None:
+        for cb in list(self._on_update):
+            try:
+                cb(updates)
+            except Exception:  # noqa: BLE001 — a bad callback must not break the loop
+                _log.warning("更新通知回调失败: %s", cb)
 
     # ── public API ─────────────────────────────────────────────────
 
@@ -68,12 +81,14 @@ class AutoUpdateManager:
                 queue.add(outdated_ids)
                 # force=True: 更新场景必须覆盖现有 Mod，否则 _download_one 会跳过
                 await queue.start(cfg, force=True)
+                self._notify(updates)
 
             return {
                 "checked": len(updates),
                 "outdated": len(outdated_ids),
                 "queued": len(outdated_ids),
             }
+
         finally:
             self._running = False
 
@@ -92,7 +107,9 @@ class AutoUpdateManager:
                     _log.info("发现 %s 个可用更新", len(updates))
                     self._check_result.clear()
                     self._check_result.extend(updates)
+                    self._notify(updates)
                 else:
                     _log.info("所有 Mod 均为最新")
+
             except Exception as e:
                 _log.error("后台更新检查失败: %s", e)

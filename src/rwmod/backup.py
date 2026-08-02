@@ -96,16 +96,42 @@ def restore_mod(
     meta = _backup_metadata(target)
     folder_name = meta.get("folder_name", f"mod_{workshop_id}")
     current = mods_dir / folder_name
-    if current.exists():
-        shutil.rmtree(current)
 
-    # Extract (with path-traversal protection on zip members)
+    # Extract to a temp dir first, then atomically swap — so a failed
+    # extraction never leaves the mod half-deleted / half-restored.
     _log.info("回滚: %s → %s", target.name, folder_name)
+    tmp_dir = mods_dir / f".rwmod_restore_{workshop_id}_{datetime.now(UTC).strftime('%H%M%S')}"
     try:
+        tmp_dir.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(target, "r") as zf:
-            safe_extract_zip(zf, mods_dir)
+            safe_extract_zip(zf, tmp_dir)
     except (zipfile.BadZipFile, OSError) as e:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
         return {"ok": False, "msg": f"备份解压失败: {e}"}
+
+    # The zip stores paths relative to mods_dir, so the restored folder
+    # lives at tmp_dir / <top-level folder>. Detect the actual top-level
+    # directory from the archive contents rather than trusting the (possibly
+    # sanitized) folder_name parsed from the backup filename — a mod folder
+    # containing characters like ':' or '?' gets sanitized in the filename
+    # but keeps its original name inside the zip, so matching by name alone
+    # would fail to locate the extracted directory.
+    restored_src = _find_top_level_dir(tmp_dir)
+    if restored_src is None:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return {"ok": False, "msg": f"备份内容不完整: 缺少 {folder_name}"}
+    folder_name = restored_src.name
+    current = mods_dir / folder_name
+
+    try:
+        if current.exists():
+            shutil.rmtree(current)
+        restored_src.rename(current)
+    except OSError as e:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return {"ok": False, "msg": f"恢复失败: {e}"}
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
     return {"ok": True, "msg": f"已恢复 {folder_name}", "restored_folder": folder_name}
 
@@ -139,8 +165,6 @@ def list_backups(backup_dir: Path, workshop_id: str | None = None) -> list[dict]
             }
         )
 
-    if workshop_id:
-        return results
     return results
 
 
@@ -203,13 +227,6 @@ def _resolve_backup_path(backup_dir: Path, filename: str) -> Path | None:
     return path
 
 
-def _safe_filename(name: str) -> str:
-    """Replace filesystem-unfriendly characters."""
-    from rwmod.utils import safe_filename
-
-    return safe_filename(name, allow_empty=False)
-
-
 def _find_backups(backup_dir: Path, workshop_id: str) -> list[dict]:
     """Find all backups for a workshop_id, sorted by timestamp."""
     results: list[dict] = []
@@ -231,6 +248,19 @@ def _backup_metadata(zip_path: Path) -> dict[str, str]:
     if len(parts) < 3:
         return {}
     return {"workshop_id": parts[0], "folder_name": parts[1], "timestamp": parts[2]}
+
+
+def _find_top_level_dir(tmp_dir: Path) -> Path | None:
+    """Return the single top-level directory inside an extracted backup.
+
+    Backups store paths relative to mods_dir, so the archive's top level is
+    exactly one mod folder. Returns None if the extraction is empty or has no
+    clear single top-level directory.
+    """
+    dirs = [p for p in tmp_dir.iterdir() if p.is_dir()]
+    if len(dirs) == 1:
+        return dirs[0]
+    return None
 
 
 def _parse_timestamp(ts_str: str) -> str:

@@ -213,16 +213,31 @@ def _skymods_fallback(config: Config, mod_id: str) -> bool:
 
 
 def _auto_download_deps(config: Config, mod_id: str, force: bool) -> None:
-    """Auto-download dependencies for a freshly installed mod."""
+    """Auto-download dependencies for a freshly installed mod.
+
+    Uses a breadth-first traversal so transitive dependencies (a dependency's
+    own dependencies) are also fetched, not just the direct ones. A visited
+    set prevents infinite loops on cyclic dependency graphs.
+    """
     try:
         from rwmod.workshop import fetch_item_dependencies
 
-        deps = fetch_item_dependencies([mod_id])
-        if mod_id in deps and deps[mod_id]:
-            _log.info("检测到 %s 个依赖: %s", len(deps[mod_id]), deps[mod_id])
-            for dep_id in deps[mod_id]:
-                if not _find_existing(config.mods_dir, dep_id):
-                    _log.info("下载依赖: %s", dep_id)
-                    download_one(config, dep_id, force=force)
+        queue: list[str] = [mod_id]
+        visited: set[str] = set()
+        while queue:
+            current = queue.pop(0)
+            if current in visited:
+                continue
+            visited.add(current)
+            deps = fetch_item_dependencies([current])
+            for dep_id in deps.get(current, []):
+                if dep_id in visited:
+                    continue
+                if _find_existing(config.mods_dir, dep_id):
+                    visited.add(dep_id)
+                    continue
+                _log.info("下载依赖: %s", dep_id)
+                download_one(config, dep_id, force=force)
+                queue.append(dep_id)
     except Exception as e:
         _log.warning("依赖检测失败: %s", e)
