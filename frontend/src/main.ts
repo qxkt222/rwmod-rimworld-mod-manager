@@ -11,6 +11,8 @@ import { initRouter } from "./router";
 import { connectWS, type WSMessage } from "./ws";
 import { initDashboardPanel } from "./panels/dashboard";
 import { toast } from "./toast";
+import { ensureAuth, getToken } from "./auth";
+
 
 // ── state ──────────────────────────────────────────────────────
 let mods: ModEntry[] = [];
@@ -405,7 +407,24 @@ document.getElementById("app")!.innerHTML = /* html */ `
     <div id="cmd-results" class="cmd-results"></div>
   </div>
 </div>
+
+<div id="login-overlay" class="login-overlay">
+  <div class="login-box">
+    <div style="font-size:40px;margin-bottom:8px">🔐</div>
+    <h2 style="margin:0 0 4px;font-size:18px">rwmod 需要认证</h2>
+    <p style="color:var(--gray-text);font-size:12px;margin:0 0 16px">
+      请输入访问密码（默认 <code>rwmod-dev-secret</code>，可在启动时通过 RWMOD_SECRET 修改）
+    </p>
+    <input type="password" id="login-password" class="cmd-input" placeholder="访问密码" autocomplete="off" style="width:100%;box-sizing:border-box;margin-bottom:12px" />
+    <div id="login-error" style="color:var(--red,#e5484d);font-size:12px;margin-bottom:8px;min-height:16px"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn btn-ghost" id="login-cancel">取消</button>
+      <button class="btn btn-primary" id="login-submit">登录</button>
+    </div>
+  </div>
+</div>
 `;
+
 
 // ── panel navigation ──────────────────────────────────────────
 // Tab/sidebar clicks and browser back/forward are handled by the hash router
@@ -515,8 +534,41 @@ document.getElementById("btn-export")?.addEventListener("click", async () => {
   }
 });
 
+// ── auth: inject Bearer token into every /api fetch ─────────────
+// The backend enforces JWT auth on all /api routes. We patch window.fetch
+// once so every panel's bare fetch() automatically carries the token.
+function patchFetchWithAuth(): void {
+  const origFetch = window.fetch.bind(window);
+  window.fetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    // Only attach the token to same-origin /api requests.
+    if (url.startsWith("/api/") || url.startsWith("/api")) {
+      const token = getToken();
+      if (token) {
+        init = init || {};
+        init.headers = new Headers(init.headers);
+        (init.headers as Headers).set("Authorization", `Bearer ${token}`);
+      }
+    }
+    return origFetch(input, init);
+  };
+}
+
 // ── startup ────────────────────────────────────────────────────
 (async () => {
+  // Authenticate first (auto-login with default secret, or show login overlay).
+  const authed = await ensureAuth();
+  if (!authed) {
+    // User cancelled login — still patch fetch (no token) so the UI renders,
+    // but most panels will show errors until they reload after logging in.
+    patchFetchWithAuth();
+    initRouter(switchPanel);
+    return;
+  }
+
+  // Inject the token into all subsequent /api fetches.
+  patchFetchWithAuth();
+
   // Hash-based routing (back/forward + deep links), including #saves / #tags
   initRouter(switchPanel);
 
@@ -541,6 +593,7 @@ document.getElementById("btn-export")?.addEventListener("click", async () => {
   pollOnlineStatus();
   setInterval(pollOnlineStatus, 30000);
 })();
+
 
 function pollOnlineStatus() {
   fetch("/api/status")
