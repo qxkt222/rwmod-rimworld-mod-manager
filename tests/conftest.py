@@ -44,9 +44,13 @@ def client(tmp_path: Path) -> TestClient:
     cfg.rimworld_dir.mkdir()
     cfg.save()
 
+    from rwmod.auth import create_token
     from rwmod.server import app
 
-    with TestClient(app) as tc:
+    # Auth is always enforced (see rwmod.auth.get_current_user), so every
+    # request needs a valid bearer token. Use the default dev secret.
+    token = create_token("admin")
+    with TestClient(app, headers={"Authorization": f"Bearer {token}"}) as tc:
         yield tc
 
     # Cleanup

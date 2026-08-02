@@ -126,8 +126,9 @@ def record_download(
         " (workshop_id, mod_name, package_id, status, msg)"
         " VALUES (?,?,?,?,?)"
     )
-    cur = db.execute(sql, (workshop_id, mod_name, package_id, status, msg))
-    db.commit()
+    with _lock:
+        cur = db.execute(sql, (workshop_id, mod_name, package_id, status, msg))
+        db.commit()
     return cur.lastrowid or -1
 
 
@@ -152,12 +153,13 @@ def cache_mod(
     time_updated: int = 0,
 ) -> None:
     db = _get_conn()
-    db.execute(
-        """INSERT OR REPLACE INTO mod_cache (workshop_id, title, author, description, time_updated, cached_at)
-           VALUES (?,?,?,?,?,datetime('now'))""",
-        (workshop_id, title, author, description, time_updated),
-    )
-    db.commit()
+    with _lock:
+        db.execute(
+            """INSERT OR REPLACE INTO mod_cache (workshop_id, title, author, description, time_updated, cached_at)
+               VALUES (?,?,?,?,?,datetime('now'))""",
+            (workshop_id, title, author, description, time_updated),
+        )
+        db.commit()
 
 
 def get_cached_mod(workshop_id: str) -> dict | None:
@@ -180,8 +182,9 @@ def get_download_stats() -> dict:
 
 def clear_history() -> None:
     db = _get_conn()
-    db.execute("DELETE FROM download_history")
-    db.commit()
+    with _lock:
+        db.execute("DELETE FROM download_history")
+        db.commit()
 
 
 # ── queue persistence ──────────────────────────────────────────────
@@ -207,19 +210,21 @@ def queue_upsert(workshop_id: str, **kwargs: object) -> None:
     params.extend(safe[k] for k in safe)
 
     sets.append("updated_at = datetime('now')")
-    db.execute(
-        f"INSERT INTO download_queue (workshop_id, name, status, progress, msg)"  # nosec B608 — keys whitelisted by _QUEUE_UPDATE_COLUMNS
-        f" VALUES (?,?,?,?,?)"
-        f" ON CONFLICT(workshop_id) DO UPDATE SET {', '.join(sets)}",
-        params,
-    )
-    db.commit()
+    with _lock:
+        db.execute(
+            f"INSERT INTO download_queue (workshop_id, name, status, progress, msg)"  # nosec B608 — keys whitelisted by _QUEUE_UPDATE_COLUMNS
+            f" VALUES (?,?,?,?,?)"
+            f" ON CONFLICT(workshop_id) DO UPDATE SET {', '.join(sets)}",
+            params,
+        )
+        db.commit()
 
 
 def queue_delete(workshop_id: str) -> None:
     db = _get_conn()
-    db.execute("DELETE FROM download_queue WHERE workshop_id = ?", (workshop_id,))
-    db.commit()
+    with _lock:
+        db.execute("DELETE FROM download_queue WHERE workshop_id = ?", (workshop_id,))
+        db.commit()
 
 
 def queue_load_pending() -> list[dict]:
@@ -242,5 +247,6 @@ def queue_load_all() -> list[dict]:
 def queue_clear_done() -> None:
     """Remove completed/cancelled items from queue table."""
     db = _get_conn()
-    db.execute("DELETE FROM download_queue WHERE status IN ('done','cancelled')")
-    db.commit()
+    with _lock:
+        db.execute("DELETE FROM download_queue WHERE status IN ('done','cancelled')")
+        db.commit()

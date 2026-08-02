@@ -318,6 +318,13 @@ document.getElementById("app")!.innerHTML = /* html */ `
         <div id="profile-modsconfig-path" style="font-size:11px;color:var(--gray-text);padding:4px 16px"></div>
         <div id="profile-list" style="font-size:12px;color:var(--gray-text)">加载中...</div>
       </div>
+      <div class="card">
+        <div class="card-header" style="display:flex;justify-content:space-between">
+          <span>↩️ 操作撤销</span>
+          <button class="btn btn-ghost btn-sm" id="btn-undo">↩️ 撤销上次操作</button>
+        </div>
+        <div id="undo-status" style="font-size:12px;color:var(--gray-text);padding:4px 16px">加载中...</div>
+      </div>
     </div>
 
     <div class="panel" id="panel-history">
@@ -369,6 +376,23 @@ document.getElementById("app")!.innerHTML = /* html */ `
           <button class="btn btn-ghost" id="btn-check-steamcmd">检测 SteamCMD</button>
         </div>
         <div id="steamcmd-status" style="margin-top:8px;font-size:12px"></div>
+      </div>
+      <div class="card">
+        <div class="card-header">📦 一键迁移</div>
+        <div style="font-size:12px;color:var(--gray-text);margin-bottom:8px">
+          将配置档案、备份、标签与设置打包为 <code>.rwmod</code> 文件，可跨机器迁移。
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-primary" id="btn-export-bundle">📤 导出 .rwmod</button>
+          <label class="btn btn-ghost" style="cursor:pointer;margin:0">
+            📥 导入 .rwmod
+            <input type="file" id="import-bundle" accept=".rwmod" style="display:none" />
+          </label>
+        </div>
+        <label class="check-label" style="margin-top:8px">
+          <input type="checkbox" id="export-include-backups" checked /> 导出时包含备份文件
+        </label>
+        <div id="transfer-status" style="margin-top:8px;font-size:12px"></div>
       </div>
     </div>
   </div>

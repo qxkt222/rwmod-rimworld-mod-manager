@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends
 
+from rwmod.auth import get_current_user
 from rwmod.config import Config
 from rwmod.deps import get_config
 
@@ -11,7 +12,10 @@ router = APIRouter(prefix="/api", tags=["config"])
 
 
 @router.get("/config")
-def get_config_route(cfg: Config = Depends(get_config)):
+def get_config_route(
+    cfg: Config = Depends(get_config),
+    _user: str = Depends(get_current_user),
+):
     return {
         "steamcmd_path": str(cfg.steamcmd_path),
         "mods_dir": str(cfg.mods_dir),
@@ -25,7 +29,11 @@ def get_config_route(cfg: Config = Depends(get_config)):
 
 
 @router.post("/config")
-def update_config(payload: dict, cfg: Config = Depends(get_config)):
+def update_config(
+    payload: dict,
+    cfg: Config = Depends(get_config),
+    _user: str = Depends(get_current_user),
+):
     if "steamcmd_path" in payload:
         cfg.steamcmd_path = Path(payload["steamcmd_path"])
     if "mods_dir" in payload:

@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 
+from rwmod.auth import get_current_user
 from rwmod.config import Config
 from rwmod.database import record_download
 from rwmod.deps import get_config
@@ -25,7 +26,11 @@ _log = get_log("rwmod.server")
 
 
 @router.post("/download")
-async def download_mods(payload: dict, cfg: Config = Depends(get_config)):
+async def download_mods(
+    payload: dict,
+    cfg: Config = Depends(get_config),
+    _user: str = Depends(get_current_user),
+):
     ids: list[str] = payload.get("ids", [])
     force: bool = payload.get("force", False)
     parsed = [mid for raw in ids if (mid := extract_mod_id(raw))]
@@ -44,11 +49,25 @@ async def download_mods(payload: dict, cfg: Config = Depends(get_config)):
 
 
 @router.get("/download/stream")
-async def download_stream(id: str, force: bool = False, cfg: Config = Depends(get_config)):
+async def download_stream(
+    id: str,
+    force: bool = False,
+    cfg: Config = Depends(get_config),
+    _user: str = Depends(get_current_user),
+):
     mid = extract_mod_id(id)
     if not mid:
         raise HTTPException(400, "无效的 Mod ID")
     cfg.validate()
+
+    async def _safe_download(cid: str) -> bool:
+        """Run download_one in a thread, catching exceptions so the SSE stream
+        always terminates with a fail event instead of hanging the client."""
+        try:
+            return await asyncio.to_thread(download_one, cfg, cid, force=force)
+        except Exception as e:  # noqa: BLE001 — must not break the stream
+            _log.error("下载 %s 异常: %s", cid, e, exc_info=True)
+            return False
 
     async def event_stream():
         yield f"data: {_sse_event('start', id=mid)}\n\n"
@@ -75,7 +94,7 @@ async def download_stream(id: str, force: bool = False, cfg: Config = Depends(ge
             fail = 0
             for i, cid in enumerate(to_download, 1):
                 yield f"data: {_sse_event('info', msg=f'[{i}/{len(to_download)}] 下载 {cid}...')}\n\n"
-                if await asyncio.to_thread(download_one, cfg, cid, force=force):
+                if await _safe_download(cid):
                     ok += 1
                     yield f"data: {_sse_event('info', msg=f'  ✓ {cid}')}\n\n"
                 else:
@@ -93,7 +112,7 @@ async def download_stream(id: str, force: bool = False, cfg: Config = Depends(ge
             return
         if existing and force:
             yield f"data: {_sse_event('info', msg=f'覆盖已有 mod: {existing.name}')}\n\n"
-        ok = await asyncio.to_thread(download_one, cfg, mid, force=force)
+        ok = await _safe_download(mid)
         if ok:
             final = _find_existing(cfg.mods_dir, mid)
             name = final.name if final else mid
@@ -109,7 +128,10 @@ async def download_stream(id: str, force: bool = False, cfg: Config = Depends(ge
 
 @router.post("/import/file")
 async def import_file(
-    file: UploadFile = File(...), force: bool = False, cfg: Config = Depends(get_config)
+    file: UploadFile = File(...),
+    force: bool = False,
+    cfg: Config = Depends(get_config),
+    _user: str = Depends(get_current_user),
 ):
     cfg.validate()
     content = (await file.read()).decode("utf-8")
@@ -128,7 +150,11 @@ async def import_file(
 
 
 @router.post("/import/collection")
-async def import_collection_api(payload: dict, cfg: Config = Depends(get_config)):
+async def import_collection_api(
+    payload: dict,
+    cfg: Config = Depends(get_config),
+    _user: str = Depends(get_current_user),
+):
     raw_id = payload.get("collection_id", "")
     collection_id = extract_mod_id(raw_id)
     force: bool = payload.get("force", False)
@@ -148,7 +174,10 @@ async def import_collection_api(payload: dict, cfg: Config = Depends(get_config)
 
 @router.post("/import/sort")
 async def import_sort_api(
-    file: UploadFile = File(...), force: bool = False, cfg: Config = Depends(get_config)
+    file: UploadFile = File(...),
+    force: bool = False,
+    cfg: Config = Depends(get_config),
+    _user: str = Depends(get_current_user),
 ):
     cfg.validate()
     content = await file.read()

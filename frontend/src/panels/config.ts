@@ -7,8 +7,42 @@ import { toast } from "../toast";
 export function initConfigPanel() {
   document.getElementById("btn-save-config")?.addEventListener("click", saveConfig);
   document.getElementById("btn-check-steamcmd")?.addEventListener("click", checkSteamCMD);
+  document.getElementById("btn-export-bundle")?.addEventListener("click", exportBundle);
+  document.getElementById("import-bundle")?.addEventListener("change", importBundle);
   loadConfig();
   checkSteamCMD();
+}
+
+async function exportBundle() {
+  const status = document.getElementById("transfer-status");
+  const includeBackups = (document.getElementById("export-include-backups") as HTMLInputElement)?.checked ?? true;
+  if (status) status.innerHTML = '<span style="color:var(--gray-text)">⏳ 正在导出...</span>';
+  try {
+    await api.exportBundle(includeBackups);
+    if (status) status.innerHTML = '<span style="color:var(--green)">✅ 导出完成</span>';
+    toast("导出完成", "success");
+  } catch (e: any) {
+    if (status) status.innerHTML = `<span style="color:var(--red)">❌ 导出失败: ${esc(e.message)}</span>`;
+    toast(`导出失败: ${e.message}`, "error");
+  }
+}
+
+async function importBundle(evt: Event) {
+  const input = evt.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+  const status = document.getElementById("transfer-status");
+  if (status) status.innerHTML = '<span style="color:var(--gray-text)">⏳ 正在导入...</span>';
+  try {
+    const result = await api.importBundle(file);
+    if (status) status.innerHTML = `<span style="color:var(--green)">✅ ${esc(result.msg)}</span>`;
+    toast(result.msg, "success");
+  } catch (e: any) {
+    if (status) status.innerHTML = `<span style="color:var(--red)">❌ 导入失败: ${esc(e.message)}</span>`;
+    toast(`导入失败: ${e.message}`, "error");
+  } finally {
+    input.value = "";
+  }
 }
 
 async function loadConfig() {

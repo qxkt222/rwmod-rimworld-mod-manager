@@ -4,8 +4,9 @@ import os
 import time
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
+from rwmod.auth import get_current_user
 from rwmod.config import Config
 from rwmod.deps import get_config
 from rwmod.metadata import read_mod_metadata
@@ -65,12 +66,18 @@ def _get_dir_size_mb(dir_path) -> float:
 
 
 @router.get("")
-def list_mods(cfg: Config = Depends(get_config)):
+def list_mods(
+    cfg: Config = Depends(get_config),
+    _user: str = Depends(get_current_user),
+):
     return _cached_mod_list(cfg)
 
 
 @router.get("/check-updates")
-def check_updates(cfg: Config = Depends(get_config)):
+def check_updates(
+    cfg: Config = Depends(get_config),
+    _user: str = Depends(get_current_user),
+):
     return {"updates": check_mod_updates(str(cfg.mods_dir))}
 
 
@@ -80,7 +87,10 @@ _HEALTH_CACHE_TTL = 60  # 1 minute — Steam API data changes slowly
 
 
 @router.get("/health")
-def mod_health(cfg: Config = Depends(get_config)):
+def mod_health(
+    cfg: Config = Depends(get_config),
+    _user: str = Depends(get_current_user),
+):
     now = time.time()
     if _health_cache and now - _health_cache.get("_ts", 0) < _HEALTH_CACHE_TTL:
         return _health_cache["data"]
@@ -119,7 +129,10 @@ def mod_health(cfg: Config = Depends(get_config)):
 
 
 @router.get("/export")
-def export_mods(cfg: Config = Depends(get_config)):
+def export_mods(
+    cfg: Config = Depends(get_config),
+    _user: str = Depends(get_current_user),
+):
     from datetime import datetime
 
     if not cfg.mods_dir.exists():
@@ -140,7 +153,10 @@ def export_mods(cfg: Config = Depends(get_config)):
 
 
 @router.get("/export-collection")
-def export_collection(cfg: Config = Depends(get_config)):
+def export_collection(
+    cfg: Config = Depends(get_config),
+    _user: str = Depends(get_current_user),
+):
     metas = get_cached_mods(cfg.mods_dir)
     mods = []
     ids_only: list[str] = []
@@ -155,7 +171,10 @@ def export_collection(cfg: Config = Depends(get_config)):
 
 
 @router.get("/compatibility")
-def mod_compatibility(cfg: Config = Depends(get_config)):
+def mod_compatibility(
+    cfg: Config = Depends(get_config),
+    _user: str = Depends(get_current_user),
+):
     from rwmod.compatibility import check_compatibility, detect_rimworld_version
 
     rw_ver = detect_rimworld_version(cfg.rimworld_dir)
@@ -164,3 +183,193 @@ def mod_compatibility(cfg: Config = Depends(get_config)):
     metas = get_cached_mods(cfg.mods_dir)
     groups = check_compatibility(metas, rw_ver)
     return {"rimworld_version": rw_ver, "groups": groups}
+
+
+@router.post("/import-local")
+async def import_local_mod(
+    file: UploadFile = File(...),
+    cfg: Config = Depends(get_config),
+    _user: str = Depends(get_current_user),
+):
+    """Import a local mod from a zip file.
+
+    The zip may contain either a single mod folder (with About/About.xml) or
+    multiple mod folders. Each folder is validated for a readable About.xml
+    before being extracted into mods_dir.
+    """
+    import shutil
+    import tempfile
+    import zipfile
+    from pathlib import Path
+
+    from rwmod.utils import safe_extract_zip
+
+    if not file.filename or not file.filename.lower().endswith(".zip"):
+        raise HTTPException(400, "请上传 .zip 文件")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(400, "文件为空")
+
+    cfg.mods_dir.mkdir(parents=True, exist_ok=True)
+    tmp_dir = Path(tempfile.mkdtemp(prefix="rwmod_import_"))
+    try:
+        # Extract to a temp dir first so we can validate before moving.
+        with zipfile.ZipFile(__import__("io").BytesIO(content), "r") as zf:
+            safe_extract_zip(zf, tmp_dir)
+
+        # Determine candidate mod folders: top-level dirs that contain About.xml.
+        candidates: list[Path] = []
+        for entry in sorted(tmp_dir.iterdir()):
+            if entry.is_dir():
+                if (entry / "About" / "About.xml").exists():
+                    candidates.append(entry)
+                else:
+                    # Maybe the zip wraps everything in a single root folder.
+                    for sub in sorted(entry.iterdir()):
+                        if sub.is_dir() and (sub / "About" / "About.xml").exists():
+                            candidates.append(sub)
+            elif entry.name == "About.xml":
+                # A bare About.xml at the root — treat the whole tmp as one mod.
+                candidates.append(tmp_dir)
+                break
+
+        if not candidates:
+            raise HTTPException(400, "压缩包内未找到有效的 Mod（缺少 About/About.xml）")
+
+        imported = []
+        for cand in candidates:
+            meta = read_mod_metadata(cand)
+            if meta is None:
+                continue
+            dest = cfg.mods_dir / meta.folder
+            if dest.exists():
+                shutil.rmtree(dest)
+            shutil.copytree(cand, dest)
+            imported.append(
+                {
+                    "folder": meta.folder,
+                    "name": meta.name,
+                    "package_id": meta.package_id,
+                    "workshop_id": meta.workshop_id,
+                }
+            )
+
+        if not imported:
+            raise HTTPException(400, "未能识别压缩包内的 Mod 元数据")
+
+        return {"ok": True, "imported": imported, "count": len(imported)}
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+@router.post("/batch/delete")
+def batch_delete_mods(
+    payload: dict,
+    cfg: Config = Depends(get_config),
+    _user: str = Depends(get_current_user),
+):
+    """Delete multiple mod folders. Each is backed up to backup_dir first."""
+    import shutil
+
+    from rwmod.backup import backup_mod
+
+    folders: list[str] = payload.get("folders", [])
+    if not folders:
+        raise HTTPException(400, "需要提供要删除的 Mod 文件夹列表")
+
+    cfg.mods_dir.mkdir(parents=True, exist_ok=True)
+    cfg.backup_dir.mkdir(parents=True, exist_ok=True)
+
+    deleted = []
+    failed = []
+    for folder in folders:
+        # Path-traversal guard: only allow plain folder names.
+        if not folder or folder in (".", "..") or "/" in folder or "\\" in folder:
+            failed.append({"folder": folder, "reason": "非法文件夹名"})
+            continue
+        target = cfg.mods_dir / folder
+        if not target.is_dir():
+            failed.append({"folder": folder, "reason": "不存在"})
+            continue
+
+        meta = read_mod_metadata(target)
+        workshop_id = meta.workshop_id if meta else ""
+        backup_mod(cfg.mods_dir, workshop_id, folder, cfg.backup_dir)
+        shutil.rmtree(target)
+        deleted.append(folder)
+
+    return {"ok": True, "deleted": deleted, "failed": failed, "count": len(deleted)}
+
+
+@router.post("/batch/download")
+async def batch_download_mods(
+    payload: dict,
+    cfg: Config = Depends(get_config),
+    _user: str = Depends(get_current_user),
+):
+    """Download multiple mods by workshop ID (or collection URL)."""
+    import asyncio
+
+    from rwmod.downloader import download_one, extract_mod_id
+
+    ids: list[str] = payload.get("ids", [])
+    force: bool = payload.get("force", False)
+    parsed = [mid for raw in ids if (mid := extract_mod_id(raw))]
+    if not parsed:
+        raise HTTPException(400, "没有有效的 Mod ID")
+    cfg.validate()
+
+    results = []
+    for mid in parsed:
+        ok = await asyncio.to_thread(download_one, cfg, mid, force=force)
+        results.append({"id": mid, "ok": ok})
+
+    return {"total": len(results), "results": results}
+
+
+# ── localization (汉化) detection ─────────────────────────────────
+# RimWorld mods ship translations under Languages/<Lang>/Keyed/*.xml.
+# Chinese is usually "ChineseSimplified" or "Chinese".
+_CHINESE_LANG_DIRS = {"chinesesimplified", "chinese", "简体中文", "简体", "中文"}
+
+
+def _detect_chinese(mod_dir) -> bool:
+    """Return True if the mod ships a Chinese translation folder."""
+    lang_dir = mod_dir / "Languages"
+    if not lang_dir.is_dir():
+        return False
+    try:
+        for entry in lang_dir.iterdir():
+            if entry.is_dir() and entry.name.lower() in _CHINESE_LANG_DIRS:
+                return True
+    except OSError:
+        return False
+    return False
+
+
+@router.get("/localization")
+def localization_status(
+    cfg: Config = Depends(get_config),
+    _user: str = Depends(get_current_user),
+):
+    """Report which mods ship a Chinese translation (汉化)."""
+    if not cfg.mods_dir.exists():
+        return {"mods": []}
+    results = []
+    for d in sorted(cfg.mods_dir.iterdir()):
+        if not d.is_dir():
+            continue
+        meta = read_mod_metadata(d)
+        if meta is None:
+            continue
+        results.append(
+            {
+                "folder": meta.folder,
+                "name": meta.name,
+                "workshop_id": meta.workshop_id,
+                "has_chinese": _detect_chinese(d),
+            }
+        )
+    translated = sum(1 for r in results if r["has_chinese"])
+    return {"total": len(results), "translated": translated, "mods": results}

@@ -43,14 +43,27 @@ def is_online(force: bool = False) -> bool:
 
 
 def get_status() -> dict:
-    """Return current connectivity status for API reporting."""
+    """Return current connectivity status for API reporting.
+
+    ``last_check`` is a real epoch timestamp (seconds) so the frontend can
+    display an absolute "last checked at" time. ``last_check_ago_sec`` is the
+    seconds elapsed since the last check.
+    """
+    if not _last_check_time:
+        return {"online": _is_online, "last_check": 0, "last_check_ago_sec": 0}
     return {
         "online": _is_online,
-        "last_check": _last_check_time,
-        "last_check_ago_sec": round(time.monotonic() - _last_check_time, 1)
-        if _last_check_time
-        else 0,
+        "last_check": _epoch_last_check(),
+        "last_check_ago_sec": round(time.monotonic() - _last_check_time, 1),
     }
+
+
+def _epoch_last_check() -> float:
+    """Return the wall-clock time of the last connectivity check (0 if never)."""
+    if not _last_check_time:
+        return 0.0
+    # _last_check_time is a monotonic timestamp; convert to epoch for display.
+    return time.time() - (time.monotonic() - _last_check_time)
 
 
 def mark_offline() -> None:

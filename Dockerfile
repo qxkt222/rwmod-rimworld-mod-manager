@@ -41,8 +41,15 @@ COPY --from=frontend-builder /app/static ./static/
 # docker run -v ./steamcmd:/app/steamcmd ...
 VOLUME ["/app/steamcmd", "/app/mods"]
 
+# Ensure the volume mount points are writable by the non-root user.
+# Host bind mounts (-v) default to root ownership, which would make
+# SteamCMD downloads and mod writes fail under USER rwmod.
+RUN mkdir -p /app/steamcmd /app/mods && \
+    chown -R rwmod:rwmod /app/steamcmd /app/mods
+
 # Switch to non-root
 USER rwmod
+
 
 EXPOSE 8000
 

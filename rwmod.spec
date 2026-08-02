@@ -46,9 +46,25 @@ a = Analysis(
     optimize=0,
 )
 # Bundle the steamcmd *program* only — exclude the steamapps/ download cache
-# (downloaded mods, user data) and userdata/ to keep the EXE small (~130MB
-# instead of ~890MB).
-a.datas += Tree('steamcmd', prefix='steamcmd', excludes=['steamapps', 'userdata'])
+# (downloaded mods, user data), userdata/, and other runtime caches/logs to
+# keep the EXE small. Excluded: steamapps (downloaded mods), userdata,
+# depotcache (download manifests), appcache (Steam cache), logs, siteserverui
+# (unrelated Steam site-server UI), *.old backups and update_hosts_cached.vdf.
+a.datas += Tree(
+    'steamcmd',
+    prefix='steamcmd',
+    excludes=[
+        'steamapps',
+        'userdata',
+        'depotcache',
+        'appcache',
+        'logs',
+        'siteserverui',
+        'steamcmd_siteserverui_win64.zip*',
+        '*.old',
+        'update_hosts_cached.vdf',
+    ],
+)
 
 pyz = PYZ(a.pure)
 

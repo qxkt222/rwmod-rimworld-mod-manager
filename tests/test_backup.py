@@ -143,3 +143,27 @@ class TestBackupPathTraversal:
         result = restore_mod(mods_dir, "123", backup_dir, backup_filename=zip_path.name)
         assert result["ok"]
         assert (mods_dir / "my_mod" / "About" / "About.xml").exists()
+
+    def test_restore_sanitized_folder_name(self, tmp_path: Path):
+        """Restore must work even when the folder name in the backup filename
+        differs from the actual top-level directory inside the zip.
+
+        The zip stores the *original* folder name, so restore must detect the
+        top-level directory from the archive contents rather than trusting the
+        (possibly sanitized) name parsed from the filename.
+        """
+        mods_dir = tmp_path / "Mods"
+        mods_dir.mkdir()
+        backup_dir = tmp_path / "backups"
+        backup_dir.mkdir()
+
+        # Filename claims the folder is "sanitized", but the zip actually
+        # contains a top-level dir named "OriginalName" — restore must use the
+        # real name from the archive, not the one in the filename.
+        zip_path = backup_dir / "123__sanitized__20240101_000000.zip"
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr("OriginalName/About/About.xml", "<ModMetaData/>")
+
+        result = restore_mod(mods_dir, "123", backup_dir)
+        assert result["ok"]
+        assert (mods_dir / "OriginalName" / "About" / "About.xml").exists()

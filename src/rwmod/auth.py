@@ -107,12 +107,10 @@ async def get_current_user(
 ) -> str:
     """FastAPI dependency: extract and verify JWT from Authorization header.
 
-    Skips auth entirely if the secret is the default (dev mode).
+    Authentication is always enforced — even with the default dev secret.
+    The default secret still works for login (so a fresh install is usable),
+    but every protected route must pass through this dependency.
     """
-    # Dev mode: skip auth with default secret
-    if get_secret() == "rwmod-dev-secret":
-        return "admin"
-
     if credentials is None:
         raise HTTPException(401, "需要认证", headers={"WWW-Authenticate": "Bearer"})
 

@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, Depends
 
+from rwmod.auth import get_current_user
 from rwmod.config import Config
 from rwmod.deps import get_config
 
@@ -9,7 +10,11 @@ router = APIRouter(prefix="/api", tags=["backups"])
 
 
 @router.get("/backups")
-def list_backups(workshop_id: str = "", cfg: Config = Depends(get_config)):
+def list_backups(
+    workshop_id: str = "",
+    cfg: Config = Depends(get_config),
+    _user: str = Depends(get_current_user),
+):
     from rwmod.backup import list_backups as _list
 
     return {
@@ -20,7 +25,10 @@ def list_backups(workshop_id: str = "", cfg: Config = Depends(get_config)):
 
 @router.post("/backups/{workshop_id}/restore")
 def restore_backup(
-    workshop_id: str, payload: dict | None = None, cfg: Config = Depends(get_config)
+    workshop_id: str,
+    payload: dict | None = None,
+    cfg: Config = Depends(get_config),
+    _user: str = Depends(get_current_user),
 ):
     from rwmod.backup import restore_mod
 
@@ -35,14 +43,22 @@ def restore_backup(
 
 
 @router.delete("/backups/{filename}")
-def delete_backup(filename: str, cfg: Config = Depends(get_config)):
+def delete_backup(
+    filename: str,
+    cfg: Config = Depends(get_config),
+    _user: str = Depends(get_current_user),
+):
     from rwmod.backup import delete_backup
 
     return {"ok": delete_backup(cfg.backup_dir, filename)}
 
 
 @router.post("/backups/cleanup")
-def cleanup_backups(payload: dict | None = None, cfg: Config = Depends(get_config)):
+def cleanup_backups(
+    payload: dict | None = None,
+    cfg: Config = Depends(get_config),
+    _user: str = Depends(get_current_user),
+):
     from rwmod.backup import cleanup_backups
 
     body = payload or {}

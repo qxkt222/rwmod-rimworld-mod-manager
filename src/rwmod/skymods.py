@@ -75,9 +75,23 @@ def _extract_download_url(html: str, mod_id: str) -> str | None:
     return None
 
 
-def _download_and_extract(url: str, mod_id: str, config: Config) -> Path | None:
+# Max redirect hops when Skymods returns an HTML page instead of a zip.
+# Guards against redirect loops (A→B→A) that would otherwise recurse forever.
+_MAX_REDIRECTS = 5
+
+
+def _download_and_extract(
+    url: str,
+    mod_id: str,
+    config: Config,
+    _depth: int = 0,
+) -> Path | None:
     """Download from Skymods and extract to mods directory.
     Handles redirects, gzip compression, and non-zip responses gracefully."""
+    if _depth > _MAX_REDIRECTS:
+        _log.warning("Skymods 重定向次数过多，放弃 (%s)", mod_id)
+        return None
+
     opener = urllib.request.build_opener(
         urllib.request.HTTPRedirectHandler(),
         urllib.request.HTTPCookieProcessor(),
@@ -104,7 +118,7 @@ def _download_and_extract(url: str, mod_id: str, config: Config) -> Path | None:
         redirect_url = _extract_download_url(text, mod_id)
         if redirect_url and redirect_url != url:
             _log.info("Skymods 重定向: %s → %s", url[:80], redirect_url[:80])
-            return _download_and_extract(redirect_url, mod_id, config)
+            return _download_and_extract(redirect_url, mod_id, config, _depth + 1)
         _log.warning("Skymods 返回 HTML 而非 zip (%s): %s", mod_id, text[:200])
         return None
 
