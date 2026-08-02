@@ -1,6 +1,7 @@
 ﻿[Setup]
 AppName=rwmod
-AppVersion=0.4.3
+AppVersion=0.4.4
+
 AppPublisher=qxkt222
 DefaultDirName={commonpf}\rwmod
 DefaultGroupName=rwmod

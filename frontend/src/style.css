@@ -425,4 +425,26 @@ textarea { resize: vertical; min-height: 80px; }
 .search-hit-author { color: var(--gray-text); font-size: 12px; }
 .search-hit-rating { color: var(--yellow); font-size: 12px; }
 .search-hit-subs { color: var(--gray-text); font-size: 11px; }
+
+/* ── login overlay ──────────────────────────────────────────── */
+.login-overlay {
+  position: fixed; inset: 0; z-index: 2000;
+  display: none;
+  align-items: center; justify-content: center;
+  background: rgba(0,0,0,.5);
+}
+.login-overlay.active { display: flex; }
+.login-box {
+  background: var(--card);
+  border-radius: var(--radius-lg);
+  width: 360px; max-width: 90vw;
+  padding: 24px;
+  box-shadow: 0 8px 32px rgba(0,0,0,.3);
+  text-align: center;
+}
+.login-box code {
+  background: var(--gray); padding: 1px 5px; border-radius: 3px;
+  font-size: 11px;
+}
+
 .search-hit-desc { font-size: 12px; color: var(--text-dim); line-height: 1.5; }

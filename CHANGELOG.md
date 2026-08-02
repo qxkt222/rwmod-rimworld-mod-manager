@@ -1,6 +1,16 @@
 # Changelog
 
+## [0.4.4] - 2026-08-02
+
+### 修复 (P1)
+- **前端认证缺失导致所有面板 401** — 0.4.3 后端强制启用 JWT 认证，但前端从未实现
+  登录/token 机制，导致所有 `/api` 请求返回 401，首页显示 `undefined`/`NaN GB`。
+  现新增前端自动登录（默认密钥 `rwmod-dev-secret`）+ 登录界面兜底（用户修改
+  `RWMOD_SECRET` 时手动输入密码），并在启动时统一为所有 `/api` 请求注入
+  `Authorization: Bearer <token>`（`frontend/src/auth.ts`、`frontend/src/main.ts`）
+
 ## [0.4.3] - 2026-08-02
+
 
 ### 新功能
 - **一键迁移** (`transfer.py`) — 将配置档案、备份、标签与设置打包为 `.rwmod` 文件，
