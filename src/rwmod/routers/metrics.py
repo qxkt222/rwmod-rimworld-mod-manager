@@ -10,8 +10,10 @@ from __future__ import annotations
 import time
 from collections import defaultdict
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import PlainTextResponse
+
+from rwmod.auth import get_current_user
 
 router = APIRouter(tags=["metrics"])
 
@@ -58,8 +60,12 @@ def set_gauge(key: str, value: float | bool | int) -> None:
 
 
 @router.get("/metrics")
-def metrics():
-    """Prometheus-compatible metrics endpoint."""
+def metrics(_user: str = Depends(get_current_user)):
+    """Prometheus-compatible metrics endpoint.
+
+    Gated like every other route — it exposes request volume / download
+    activity to anyone on the LAN otherwise.
+    """
     uptime = time.time() - _start_time
     lines = [
         "# HELP rwmod_uptime_seconds Server uptime in seconds",

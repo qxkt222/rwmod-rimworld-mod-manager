@@ -69,19 +69,38 @@ def safe_filename(name: str, allow_empty: bool = False) -> str:
     return sanitized
 
 
-def safe_extract_zip(zf: zipfile.ZipFile, dest_dir: Path) -> None:
+# Decompression bomb guard: a malicious archive must not be able to exhaust
+# disk / memory. Mod zips are typically < 1GB; 4GB is generous headroom.
+MAX_ZIP_TOTAL_BYTES = 4 * 1024 * 1024 * 1024  # 4 GB uncompressed total
+MAX_ZIP_MEMBERS = 50_000
+
+
+def safe_extract_zip(
+    zf: zipfile.ZipFile,
+    dest_dir: Path,
+    max_total_bytes: int = MAX_ZIP_TOTAL_BYTES,
+    max_members: int = MAX_ZIP_MEMBERS,
+) -> None:
     """Extract a zip archive safely.
 
     Rejects members with absolute paths or ``..`` traversal so a malicious
-    archive can never write outside ``dest_dir``. Raises zipfile.BadZipFile
-    on unsafe content (nothing is extracted in that case).
+    archive can never write outside ``dest_dir``. Also rejects zip bombs
+    (excessive total uncompressed size / member count) BEFORE extracting
+    anything. Raises zipfile.BadZipFile on unsafe content.
 
     Args:
         zf: Open zip archive (read mode).
         dest_dir: Directory to extract into.
+        max_total_bytes: Cap on the sum of uncompressed member sizes.
+        max_members: Cap on the number of archive members.
     """
     dest_resolved = dest_dir.resolve()
-    for member in zf.infolist():
+    total = 0
+    members = zf.infolist()
+    if len(members) > max_members:
+        raise zipfile.BadZipFile(f"zip 成员过多（{len(members)} > {max_members}）")
+    seen: set[str] = set()
+    for member in members:
         name = member.filename.replace("\\", "/")
         unsafe = name.startswith("/") or name.startswith("../") or "/../" in name
         if unsafe or name in ("", ".", ".."):
@@ -89,4 +108,10 @@ def safe_extract_zip(zf: zipfile.ZipFile, dest_dir: Path) -> None:
         target = (dest_dir / member.filename).resolve()
         if not target.is_relative_to(dest_resolved):
             raise zipfile.BadZipFile(f"zip 包含越界路径: {member.filename!r}")
+        if name in seen:
+            raise zipfile.BadZipFile(f"zip 包含重复路径: {member.filename!r}")
+        seen.add(name)
+        total += member.file_size
+        if total > max_total_bytes:
+            raise zipfile.BadZipFile("zip 解压总量超限（疑似压缩炸弹）")
     zf.extractall(dest_dir)

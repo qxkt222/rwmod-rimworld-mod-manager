@@ -1,7 +1,7 @@
 /**
  * Search panel — query Steam Workshop, add results to queue.
  */
-import { api, type ModEntry } from "../api";
+import { fetchJSON } from "../api";
 import { toast } from "../toast";
 
 interface SearchHit {
@@ -34,8 +34,7 @@ async function doSearch() {
   container.innerHTML = '<span style="color:var(--gray-text)">搜索中...</span>';
 
   try {
-    const resp = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
-    const data = await resp.json();
+    const data = await fetchJSON<{ results?: SearchHit[] }>(`/api/search?q=${encodeURIComponent(q)}`);
     const results: SearchHit[] = data.results || [];
 
     if (!results.length) {
@@ -66,7 +65,7 @@ async function doSearch() {
       btn.addEventListener("click", async () => {
         const id = (btn as HTMLElement).dataset.id!;
         try {
-          await fetch("/api/queue/add", {
+          await fetchJSON("/api/queue/add", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ ids: [id] }),

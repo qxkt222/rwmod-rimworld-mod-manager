@@ -34,7 +34,7 @@ def set_locale_api(payload: dict, _user: str = Depends(get_current_user)):
 
 
 @router.get("/onboarding/check")
-def onboarding_check():
+def onboarding_check(_user: str = Depends(get_current_user)):
     """Check what still needs configuration for first-time setup.
 
     Returns a list of onboarding steps with their status.

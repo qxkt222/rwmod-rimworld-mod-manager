@@ -62,3 +62,12 @@ commit_msg.txt
 # Type-check / lint caches
 .mypy_cache/
 .ruff_cache/
+
+# Build logs (local)
+iscc_err.txt
+iscc_out.txt
+pyinstaller_err.txt
+pyinstaller_out.txt
+
+# One-off verification script (local)
+verify_fixes.py

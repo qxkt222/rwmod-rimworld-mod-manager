@@ -1,7 +1,7 @@
 /**
  * Collection panel — download entire Steam Workshop collections.
  */
-import { api } from "../api";
+import { api, fetchJSON } from "../api";
 import { setStatus, refreshMods } from "../main";
 
 export function initCollectionPanel() {
@@ -23,16 +23,16 @@ async function startCollection() {
   if (!cid) return;
 
   const log = document.getElementById("log-collection")!;
-  log.innerHTML = `<span style="color:#7aa2f7">正在获取合集 ${cid}...</span>\n`;
+  log.innerHTML = `<span style="color:#7aa2f7">正在获取合集 ${esc(cid)}...</span>\n`;
   setStatus("blue", "正在获取合集...");
 
   try {
     const data = await api.importCollection(cid, forceChk.checked);
     const ok = data.results.filter((r) => r.ok).length;
-    log.innerHTML += `<span style="color:#9ece6a">合集 ${cid}: ${ok}/${data.total} 成功</span>\n`;
+    log.innerHTML += `<span style="color:#9ece6a">合集 ${esc(cid)}: ${ok}/${data.total} 成功</span>\n`;
     data.results.forEach((r) => {
       const color = r.ok ? "#9ece6a" : "#f7768e";
-      log.innerHTML += `<span style="color:${color}">  ${r.id}: ${r.ok ? "✓" : "✗"}</span>\n`;
+      log.innerHTML += `<span style="color:${color}">  ${esc(r.id)}: ${r.ok ? "✓" : "✗"}</span>\n`;
     });
     log.scrollTop = log.scrollHeight;
     setStatus("green", `合集下载完成: ${ok}/${data.total}`);
@@ -51,21 +51,27 @@ async function previewCollection() {
   log.innerHTML = '<span style="color:#7aa2f7">正在获取合集预览...</span>\n';
 
   try {
-    const resp = await fetch(`/api/collection/preview/${encodeURIComponent(cid)}`);
-    const d = await resp.json().catch(() => ({}));
-    if (!resp.ok) {
-      // FastAPI returns {"detail": ...} on 4xx/5xx — show it instead of undefined.
-      const detail = (d as any).detail || `HTTP ${resp.status}`;
-      log.innerHTML = `<span style="color:#f7768e">预览失败: ${detail}</span>`;
-      return;
-    }
-    if (d.error) { log.innerHTML = `<span style="color:#f7768e">${d.error}</span>`; return; }
+    const d = await fetchJSON<{
+      error?: string;
+      collection_id?: string;
+      total?: number;
+      installed_count?: number;
+      new_count?: number;
+      failed_count?: number;
+    }>(`/api/collection/preview/${encodeURIComponent(cid)}`);
+    if (d.error) { log.innerHTML = `<span style="color:#f7768e">${esc(d.error)}</span>`; return; }
     log.innerHTML =
-      `<span style="color:#9ece6a">合集 ${d.collection_id}: ${d.total} 个 Mod</span>\n` +
+      `<span style="color:#9ece6a">合集 ${esc(String(d.collection_id ?? cid))}: ${d.total} 个 Mod</span>\n` +
       `<span style="color:#9ece6a">  🟢 已安装 ${d.installed_count}</span>\n` +
       `<span style="color:#7aa2f7">  🔵 新发现 ${d.new_count}</span>\n` +
       (d.failed_count ? `<span style="color:#e0af68">  🟡 之前失败 ${d.failed_count}</span>\n` : "") +
       `<span style="color:var(--gray-text)">点击"下载合集"开始下载</span>\n`;
     log.scrollTop = log.scrollHeight;
   } catch (e: any) { log.innerHTML = `<span style="color:#f7768e">预览失败: ${e.message}</span>`; }
+}
+
+function esc(s: string): string {
+  const d = document.createElement("div");
+  d.textContent = s;
+  return d.innerHTML;
 }

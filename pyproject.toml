@@ -1,6 +1,6 @@
 [project]
 name = "rwmod"
-version = "0.4.2"
+version = "0.4.5"
 description = "Fully offline RimWorld Mod Manager — anonymous SteamCMD downloads, auto-updates, backups, dependency & load-order management"
 readme = "README.md"
 license = {text = "MIT"}
@@ -27,6 +27,8 @@ dependencies = [
     "pydantic>=2.0",
     "python-multipart>=0.0.9",
     "websockets>=14",
+    "pyjwt>=2.8",
+    "defusedxml>=0.7",
 ]
 
 [project.scripts]

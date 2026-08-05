@@ -12,7 +12,7 @@ import json
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
@@ -21,6 +21,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from rwmod.auth import is_env_secret, verify_token
 from rwmod.database import close_db, init_db
 from rwmod.deps import get_autoupdate
 from rwmod.errors import RwmodError
@@ -56,6 +57,15 @@ STATIC_DIR = bundle_root() / "static"
 
 # Connected WebSocket clients (for queue status broadcasts to the UI).
 _ws_clients: set[WebSocket] = set()
+# Per-client outbound message backlog — used as backpressure: a client that
+# stops reading (half-open TCP connection) keeps the backlog growing, and we
+# drop it once the backlog exceeds the cap instead of buffering forever.
+_ws_pending: dict[WebSocket, int] = {}
+_WS_PENDING_MAX = 200
+
+# Track fire-and-forget broadcast tasks so the GC never destroys them before
+# they finish ("Task was destroyed but it is pending!").
+_background_tasks: set[asyncio.Task] = set()
 
 init_logging()
 _log = get_log("rwmod.server")
@@ -81,12 +91,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     yield
     await au.stop_background()
+    # Cancel the queue worker so it stops draining; the in-flight SteamCMD
+    # thread may still finish in the background, but the event loop no longer
+    # owns tasks that write to the DB after close_db() below.
+    queue = get_queue()
+    queue.stop()
+    worker = queue._worker
+    if worker is not None:
+        with suppress(asyncio.CancelledError, Exception):
+            await asyncio.wait_for(worker, timeout=3)
     close_db()
 
 
 app = FastAPI(
     title="rwmod Web",
-    version="0.4.2",
+    version="0.4.5",
     lifespan=lifespan,
     docs_url="/api/docs",
     openapi_url="/api/openapi.json",
@@ -101,6 +120,27 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def security_headers(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    """Apply baseline hardening headers to every HTTP response.
+
+    No CSP here — the frontend serves inline scripts/styles and we don't want
+    to break the app. The headers below are non-breaking basics: no MIME
+    sniffing, no framing, referrer trimming, and explicit no-sniff for APIs.
+    """
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    # Static assets may be cached; API responses get explicit no-store so a
+    # logged-out stale page never leaks through a browser back/forward cache.
+    if request.url.path.startswith("/api"):
+        response.headers.setdefault("Cache-Control", "no-store")
+    return response
 
 
 @app.middleware("http")
@@ -185,7 +225,20 @@ def index() -> FileResponse:
 # ── WebSocket ─────────────────────────────────────────────────────
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket) -> None:
-    """WebSocket for real-time status updates to frontend."""
+    """WebSocket for real-time status updates to frontend.
+
+    Auth: the client must present a valid JWT via ``?token=`` — the endpoint
+    leaks queue/update activity (mod IDs being downloaded) to LAN peers, so
+    it is gated like every other /api route.
+    """
+    token = ws.query_params.get("token", "")
+    # Localhost is trusted without a token (same policy as HTTP routes) unless
+    # the operator set a strong RWMOD_SECRET.
+    host = ws.client[0] if ws.client else ""
+    local = host in ("127.0.0.1", "::1", "localhost")
+    if not verify_token(token) and not (local and not is_env_secret()):
+        await ws.close(code=1008, reason="unauthorized")
+        return
     await ws.accept()
     _ws_clients.add(ws)
     try:
@@ -210,6 +263,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
         pass
     finally:
         _ws_clients.discard(ws)
+        _ws_pending.pop(ws, None)
 
 
 async def _broadcast_ws(payload: dict) -> None:
@@ -217,17 +271,34 @@ async def _broadcast_ws(payload: dict) -> None:
 
     Sends to all clients concurrently so a slow/stalled socket can never
     block the broadcast to the others (a sequential await would let one
-    slow client stall the whole event loop's queue notifications).
+    slow client stall the whole event loop's queue notifications). Clients
+    whose outbound backlog exceeds _WS_PENDING_MAX (stuck/half-open sockets)
+    are dropped instead of buffering unboundedly.
     """
     clients = list(_ws_clients)
     if not clients:
         return
 
     async def _send(ws: WebSocket) -> None:
+        if _ws_pending.get(ws, 0) >= _WS_PENDING_MAX:
+            _log.warning("WS 客户端积压过多，断开: %s", ws.client)
+            _ws_clients.discard(ws)
+            _ws_pending.pop(ws, None)
+            with suppress(Exception):
+                await ws.close(code=1008)
+            return
+        _ws_pending[ws] = _ws_pending.get(ws, 0) + 1
         try:
             await ws.send_json(payload)
         except Exception:  # noqa: BLE001 — a dead socket must not break the loop
             _ws_clients.discard(ws)
+            _ws_pending.pop(ws, None)
+        else:
+            remaining = _ws_pending.get(ws, 1) - 1
+            if remaining <= 0:
+                _ws_pending.pop(ws, None)
+            else:
+                _ws_pending[ws] = remaining
 
     await asyncio.gather(*(_send(ws) for ws in clients))
 
@@ -243,9 +314,12 @@ def broadcast_update_notification(updates: list[dict]) -> None:
     AutoUpdateManager._notify runs in the event loop thread, so we can safely
     schedule the async broadcast without awaiting it here.
     """
-    asyncio.create_task(
+    task = asyncio.create_task(
         _broadcast_ws({"type": "update_notification", "count": len(updates), "updates": updates})
     )
+    # Keep a reference so the task is never GC'd mid-flight.
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 
 def _queue_pending_count() -> int:

@@ -1,3 +1,4 @@
+import { fetchJSON } from '../api';
 import { toast } from '../toast';
 
 export function initTagsPanel() {
@@ -8,8 +9,7 @@ async function loadTags() {
   const el = document.getElementById('tags-list');
   if (!el) return;
   try {
-    const resp = await fetch('/api/tags');
-    const data = await resp.json();
+    const data = await fetchJSON<{ tags?: { tag: string; count: number }[] }>('/api/tags');
     if (!data.tags?.length) {
       el.innerHTML = '<div>No tags yet</div>';
       return;
@@ -25,8 +25,7 @@ async function loadTags() {
         const tag = (row as HTMLElement).dataset.tag!;
         const detail = document.getElementById('tags-detail');
         if (!detail) return;
-        const r = await fetch('/api/tags/by-tag/' + encodeURIComponent(tag));
-        const d = await r.json();
+        const d = await fetchJSON<{ folders?: string[] }>('/api/tags/by-tag/' + encodeURIComponent(tag));
         detail.innerHTML = '<h4>#' + esc(tag) + '</h4>' +
           (d.folders?.map((f: string) => '<div>' + esc(f) + '</div>').join('') || '<div>None</div>');
       });

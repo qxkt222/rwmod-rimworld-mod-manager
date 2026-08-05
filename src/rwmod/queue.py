@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -15,6 +17,8 @@ from rwmod.config import Config
 from rwmod.downloader import _find_existing, download_one
 
 __all__ = ["DownloadQueue", "get_queue", "MAX_CONCURRENT"]
+
+_log = logging.getLogger(__name__)
 
 MAX_CONCURRENT = 3
 
@@ -42,20 +46,43 @@ class DownloadQueue:
     _force: bool = False
     _wake: asyncio.Event = field(default_factory=asyncio.Event)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # Event loop captured in start(); used to wake the worker from sync
+    # (FastAPI thread-pool) contexts via call_soon_threadsafe.
+    _loop: asyncio.AbstractEventLoop | None = None
+    # Guards items/_cancelled across the thread pool (sync /queue/* endpoints)
+    # and the event-loop worker. Field-level mutations of QueueItem are safe
+    # under the GIL; only list/set structure is protected.
+    _items_lock: threading.Lock = field(default_factory=threading.Lock)
 
     def add(self, mod_ids: list[str]) -> list[QueueItem]:
         new_items: list[QueueItem] = []
-        for mid in mod_ids:
-            already = next(
-                (i for i in self.items if i.id == mid and i.status in ("pending", "downloading")),
-                None,
-            )
-            if not already:
-                item = QueueItem(id=mid)
-                self.items.append(item)
-                new_items.append(item)
-                self._persist(item)
+        with self._items_lock:
+            for mid in mod_ids:
+                already = next(
+                    (
+                        i
+                        for i in self.items
+                        if i.id == mid and i.status in ("pending", "downloading")
+                    ),
+                    None,
+                )
+                if not already:
+                    item = QueueItem(id=mid)
+                    self.items.append(item)
+                    new_items.append(item)
+        for item in new_items:
+            self._persist(item)
+        # Wake the idle worker immediately instead of waiting out its 30s
+        # sleep timeout — add() may run on a thread-pool thread.
+        self._wake_worker()
         return new_items
+
+    def _wake_worker(self) -> None:
+        """Wake the persistent worker from any thread (sync endpoint or loop)."""
+        loop, worker = self._loop, self._worker
+        if loop is not None and worker is not None and not worker.done():
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(self._wake.set)
 
     def remove(self, mod_id: str) -> bool:
         """Remove a queue item (or cancel an in-flight download).
@@ -66,22 +93,32 @@ class DownloadQueue:
         task is marked cancelled so its status is never flipped back to
         done/failed afterwards.
         """
-        for i, item in enumerate(self.items):
-            if item.id == mod_id:
-                self._cancelled.add(mod_id)
-                if item.status == "downloading":
-                    item.status = "cancelled"
-                    item.msg = "已取消（后台任务可能继续完成）"
-                    self._persist(item)
-                else:
-                    self.items.pop(i)
-                    self._db_delete(mod_id)
-                return True
-        return False
+        cancelled_item: QueueItem | None = None
+        removed_id: str | None = None
+        with self._items_lock:
+            for i, item in enumerate(self.items):
+                if item.id == mod_id:
+                    self._cancelled.add(mod_id)
+                    if item.status == "downloading":
+                        item.status = "cancelled"
+                        item.msg = "已取消（后台任务可能继续完成）"
+                        cancelled_item = item
+                    else:
+                        self.items.pop(i)
+                        removed_id = mod_id
+                    break
+            else:
+                return False
+        if cancelled_item is not None:
+            self._persist(cancelled_item)
+        elif removed_id is not None:
+            self._db_delete(removed_id)
+        return True
 
     def clear_done(self) -> None:
-        done_ids = [i.id for i in self.items if i.status in ("done", "cancelled")]
-        self.items = [i for i in self.items if i.status not in ("done", "cancelled")]
+        with self._items_lock:
+            done_ids = [i.id for i in self.items if i.status in ("done", "cancelled")]
+            self.items = [i for i in self.items if i.status not in ("done", "cancelled")]
         for wid in done_ids:
             self._db_delete(wid)
         self._db_clear_done()
@@ -96,6 +133,8 @@ class DownloadQueue:
                 await cb(snapshot)
 
     def snapshot(self) -> list[dict]:
+        with self._items_lock:
+            items = list(self.items)
         return [
             {
                 "id": i.id,
@@ -104,7 +143,7 @@ class DownloadQueue:
                 "progress": i.progress,
                 "msg": i.msg,
             }
-            for i in self.items
+            for i in items
         ]
 
     async def start(self, config: Config, force: bool = False) -> None:
@@ -118,9 +157,20 @@ class DownloadQueue:
         async with self._lock:
             self._config = config
             self._force = force
+            self._loop = asyncio.get_running_loop()
             if self._worker is None or self._worker.done():
                 self._worker = asyncio.create_task(self._worker_loop())
             self._wake.set()
+
+    def stop(self) -> None:
+        """Cancel the persistent worker (called on server shutdown).
+
+        Must be awaited by the caller (or called via the running loop) so the
+        worker's finally-block can notify before the event loop closes.
+        """
+        worker = self._worker
+        if worker is not None and not worker.done():
+            worker.cancel()
 
     async def _worker_loop(self) -> None:
         """Drain pending items forever until the queue is empty and idle."""
@@ -128,7 +178,8 @@ class DownloadQueue:
         try:
             while True:
                 # Grab the next pending item (if any).
-                item = next((i for i in self.items if i.status == "pending"), None)
+                with self._items_lock:
+                    item = next((i for i in self.items if i.status == "pending"), None)
                 if item is None:
                     # Nothing to do — wait for a wake-up (new item or start()).
                     self._wake.clear()
@@ -142,7 +193,18 @@ class DownloadQueue:
                 config = self._config
                 if config is None:
                     continue
-                await self._download_one(config, item, self._force)
+                try:
+                    await self._download_one(config, item, self._force)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:  # noqa: BLE001 — a crash must never kill the worker
+                    _log.exception("队列 worker 处理 %s 异常", item.id)
+                    with self._items_lock:
+                        item.status = "failed"
+                        item.progress = 0
+                        item.msg = f"下载异常: {e}"
+                    self._persist(item)
+                    await self._notify()
         finally:
             self._running = False
             await self._notify()
@@ -150,8 +212,11 @@ class DownloadQueue:
     async def _download_one(self, config: Config, item: QueueItem, force: bool) -> None:
         async with self._semaphore:
             # Item was removed (cancelled) while this task waited for a slot
-            if item.id in self._cancelled:
-                self._cancelled.discard(item.id)
+            with self._items_lock:
+                cancelled = item.id in self._cancelled
+            if cancelled:
+                with self._items_lock:
+                    self._cancelled.discard(item.id)
                 return
 
             item.status = "downloading"
@@ -185,8 +250,11 @@ class DownloadQueue:
             ok = await asyncio.to_thread(download_one, config, item.id, force=force)
 
             # Cancelled while the download was in flight — keep cancelled state
-            if item.id in self._cancelled:
-                self._cancelled.discard(item.id)
+            with self._items_lock:
+                cancelled = item.id in self._cancelled
+                if cancelled:
+                    self._cancelled.discard(item.id)
+            if cancelled:
                 item.status = "cancelled"
                 item.msg = "已取消（后台任务可能继续完成）"
                 self._persist(item)
@@ -246,15 +314,16 @@ class DownloadQueue:
             from rwmod.database import queue_load_pending
 
             rows = queue_load_pending()
-            for row in rows:
-                item = QueueItem(
-                    id=row["workshop_id"],
-                    name=row.get("name", ""),
-                    status=row["status"],
-                    progress=row.get("progress", 0.0),
-                    msg=row.get("msg", ""),
-                )
-                self.items.append(item)
+            with self._items_lock:
+                for row in rows:
+                    item = QueueItem(
+                        id=row["workshop_id"],
+                        name=row.get("name", ""),
+                        status=row["status"],
+                        progress=row.get("progress", 0.0),
+                        msg=row.get("msg", ""),
+                    )
+                    self.items.append(item)
         except Exception:
             pass  # DB unavailable, start empty
 

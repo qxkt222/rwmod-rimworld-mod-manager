@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 
 from rwmod.metadata import ModMeta
+from rwmod.xmlutil import parse_xml_root
 
 _log = logging.getLogger(__name__)
 
@@ -34,9 +35,7 @@ def detect_rimworld_version(rimworld_dir: Path) -> str | None:
     core_about = rimworld_dir / "Data" / "Core" / "About" / "About.xml"
     if core_about.exists():
         try:
-            import xml.etree.ElementTree as ET
-
-            root = ET.parse(core_about).getroot()
+            root = parse_xml_root(core_about)
             target = root.findtext("targetVersion", "")
             if target:
                 return target

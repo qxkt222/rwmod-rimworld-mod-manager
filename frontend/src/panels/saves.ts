@@ -1,3 +1,4 @@
+import { fetchJSON } from "../api";
 import { toast } from "../toast";
 
 export function initSavesPanel() {
@@ -11,8 +12,7 @@ async function scanSaves() {
   if (!el) return;
   el.innerHTML = '<div style="padding:16px;color:var(--gray-text)">Scanning...</div>';
   try {
-    const resp = await fetch("/api/saves");
-    const data = await resp.json();
+    const data = await fetchJSON<{ saves?: any[] }>("/api/saves");
     if (!data.saves?.length) {
       el.innerHTML = '<div style="padding:16px;text-align:center;color:var(--gray-text)">No save files found</div>';
       return;
@@ -38,8 +38,7 @@ async function uploadSave() {
   const fd = new FormData();
   fd.append("file", file);
   try {
-    const resp = await fetch("/api/saves/analyze", { method: "POST", body: fd });
-    const data = await resp.json();
+    const data = await fetchJSON<{ filename?: string; mod_count?: number }>("/api/saves/analyze", { method: "POST", body: fd });
     toast('Found ' + data.mod_count + ' mods in ' + data.filename, 'success');
     scanSaves();
   } catch (e: any) {

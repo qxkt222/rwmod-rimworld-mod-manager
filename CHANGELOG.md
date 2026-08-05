@@ -1,12 +1,51 @@
 # Changelog
 
+## [0.4.5] - 2026-08-05
+
+### 安全 (P1) — 代码审查专项修复
+- **全新鉴权模型** — 取消公开默认密钥（`rwmod-dev-secret` 列入禁用名单）。本机
+  （localhost）访问免密钥直接可用；仅局域网客户端需密钥（密钥持久化于
+  `~/.rwmod.secret`，启动日志打印）。设置强 `RWMOD_SECRET` 可启用严格模式。
+  登录采用恒定时间比较 + 失败限速（`auth.py`, `routers/auth.py`）
+- **认证失效根因** — `get_current_user` 缺 `return user`，`/api/auth/verify` 返回
+  `user: null`；已修复（`auth.py`）
+- **workshop_id 校验链** — `PublishedFileId.txt`/URL 参数的 workshop_id 全部强制
+  `^\d+$`，堵住备份 zip 任意写盘（`backup.py`）、restore 目录穿越
+  （`routers/backups.py`）、SteamCMD 命令注入（`steamcmd.py`/`parser.py`）三条路径
+- **Skymods SSRF** — 下载 URL 白名单域名 + 拒绝私网/回环 IP + 响应大小上限（`skymods.py`）
+- **zip 炸弹防护** — `safe_extract_zip` 成员数/解压总量/重复路径上限（`utils.py`）；
+  5 个上传端点统一大小限制（`mods.py`/`transfer.py`/`rimsort.py`/`saves.py`）
+- **鉴权收紧** — `/ws`（需 `?token=`）、`/api/onboarding/check`、`/api/metrics` 需认证
+
+### 稳定性 / 并发 (P2)
+- **下载锁死锁** — per-mod 锁的依赖/合集子项改为锁外收集后下载，环形依赖不再互等
+  （`downloader.py`）
+- **worker 崩溃修复** — `_worker_loop` 异常兜底，一次 OSError 不再杀死队列
+  （`queue.py`）
+- **SQLite 死锁** — `init_db` 重入 `_init_lock` 导致启动卡死；`close_db` 后线程
+  拿已关闭连接报错；均修复（`database.py`）
+- **SSE 心跳 + 断线语义** — 30s 心跳防反代掐断；合集 500+ 子项改一次性目录映射
+  （`routers/download.py`）
+- **WebSocket 背压 + 任务引用** — 慢客户端超积压断开；广播任务不再被 GC
+  （`server.py`）
+- **事件循环阻塞** — dashboard/import-local/`_find_existing` 移入 `to_thread`；
+  mods 缓存 TTL 3s→30s（`routers/mods.py`, `routers/dashboard.py`）
+- **原子性** — 备份恢复 rename 交换+回滚（`backup.py`）；profile/rimsort 原子写
+  （`profile.py`, `routers/rimsort.py`）；force 失败自动回滚（`downloader.py`）
+- **transfer 导出** — 唯一临时文件名 + 响应后清理（`routers/transfer.py`）
+- **`_find_existing` 快路径** — 返回值类型不匹配导致每次回退全目录扫描，已修复
+
+### 前端
+- **认证流程重写** — 删除硬编码默认密钥；本机免登录直进；401 统一重登
+- **SSE 超时兜底 / 面板补齐**（Saves/Tags/RimSort/History）/ **WS 轮询兜底** /
+  **interval 清理** / **undefined 修复** / **XSS 转义**
+
 ## [0.4.4] - 2026-08-02
 
 ### 修复 (P1)
 - **前端认证缺失导致所有面板 401** — 0.4.3 后端强制启用 JWT 认证，但前端从未实现
   登录/token 机制，导致所有 `/api` 请求返回 401，首页显示 `undefined`/`NaN GB`。
-  现新增前端自动登录（默认密钥 `rwmod-dev-secret`）+ 登录界面兜底（用户修改
-  `RWMOD_SECRET` 时手动输入密码），并在启动时统一为所有 `/api` 请求注入
+  现新增前端自动登录 + 登录界面兜底，并在启动时统一为所有 `/api` 请求注入
   `Authorization: Bearer <token>`（`frontend/src/auth.ts`、`frontend/src/main.ts`）
 
 ## [0.4.3] - 2026-08-02

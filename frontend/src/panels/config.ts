@@ -1,7 +1,7 @@
 /**
  * Config panel — view and edit rwmod settings.
  */
-import { api } from "../api";
+import { api, fetchJSON } from "../api";
 import { toast } from "../toast";
 
 export function initConfigPanel() {
@@ -85,12 +85,11 @@ async function checkSteamCMD() {
   if (!el) return;
   el.innerHTML = '<span style="color:var(--gray-text)">⏳ 检测中...</span>';
   try {
-    const resp = await fetch("/api/steamcmd/check");
-    const data = await resp.json();
+    const data = await fetchJSON<{ ok?: boolean; msg?: string }>("/api/steamcmd/check");
     if (data.ok) {
       el.innerHTML = '<span style="color:var(--green)">✅ ' + data.msg + '</span>';
     } else {
-      el.innerHTML = '<span style="color:var(--red)">❌ ' + data.msg + '</span>';
+      el.innerHTML = '<span style="color:var(--red)">❌ ' + (data.msg || "检测失败") + '</span>';
     }
   } catch (e: any) {
     el.innerHTML = '<span style="color:var(--red)">❌ 检测失败: ' + e.message + '</span>';

@@ -9,9 +9,9 @@ import "./style.css";
 import { api, type ModEntry, type ConfigData } from "./api";
 import { initRouter } from "./router";
 import { connectWS, type WSMessage } from "./ws";
-import { initDashboardPanel } from "./panels/dashboard";
+import { initDashboardPanel, stopQueuePolling } from "./panels/dashboard";
 import { toast } from "./toast";
-import { ensureAuth, getToken } from "./auth";
+import { clearToken, ensureAuth, getToken, showLoginOverlay } from "./auth";
 
 
 // ── state ──────────────────────────────────────────────────────
@@ -31,7 +31,7 @@ async function _lazyInit(panel: string): Promise<void> {
       initDashboardPanel();
       break;
     case "download": {
-      const { initDownloadPanel, renderLog } = await import("./panels/download");
+      const { initDownloadPanel } = await import("./panels/download");
       initDownloadPanel();
       break;
     }
@@ -60,9 +60,7 @@ async function _lazyInit(panel: string): Promise<void> {
     case "queue": {
       const { initQueuePanel } = await import("./panels/queue");
       initQueuePanel();
-      break;
-    }
-    case "updates": {
+      // 队列面板上的「检查更新/全部更新」按钮由 updates 模块绑定
       const { initUpdatePanel } = await import("./panels/updates");
       initUpdatePanel();
       break;
@@ -299,8 +297,20 @@ document.getElementById("app")!.innerHTML = /* html */ `
 
     <div class="panel" id="panel-rimsort">
       <div class="card">
-        <div class="card-header">📐 RimSort 集成</div>
+        <div class="card-header" style="display:flex;justify-content:space-between">
+          <span>📐 RimSort 集成</span>
+          <button class="btn btn-primary btn-sm" id="btn-rimsort-generate">📄 生成 ModsConfig.xml</button>
+        </div>
         <div id="rimsort-content" style="font-size:12px;color:var(--gray-text)">加载中...</div>
+        <pre id="rimsort-output" style="display:none;max-height:240px;overflow-y:auto;font-size:11px;background:var(--surface);border-radius:4px;padding:8px;margin-top:8px"></pre>
+      </div>
+      <div class="card">
+        <div class="card-header">📋 对比 ModsConfig.xml</div>
+        <label class="file-drop" id="drop-zone-rimsort">
+          <div>拖拽 ModsConfig.xml 到此处，或点击选择</div>
+          <input type="file" id="rimsort-file" accept=".xml" />
+        </label>
+        <div id="rimsort-compare-result" style="font-size:12px;color:var(--gray-text);margin-top:8px"></div>
       </div>
       <div class="card">
         <div class="card-header" style="display:flex;justify-content:space-between">
@@ -333,9 +343,23 @@ document.getElementById("app")!.innerHTML = /* html */ `
       <div class="card" style="flex:1;overflow-y:auto">
         <div class="card-header" style="display:flex;justify-content:space-between">
           <span>📜 下载历史</span>
-          <button class="btn btn-ghost btn-sm" id="btn-clear-history">清空历史</button>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-ghost btn-sm" id="btn-history-refresh">🔄 刷新</button>
+            <button class="btn btn-ghost btn-sm" id="btn-clear-history">清空历史</button>
+          </div>
         </div>
         <div id="history-list" style="font-size:12px;color:var(--gray-text)">加载中...</div>
+      </div>
+      <div class="card">
+        <div class="card-header">📊 统计</div>
+        <div id="history-stats" style="font-size:12px;color:var(--gray-text);padding:4px 16px"></div>
+      </div>
+      <div class="card">
+        <div class="card-header" style="display:flex;justify-content:space-between">
+          <span>🔄 自动更新</span>
+          <button class="btn btn-primary btn-sm" id="btn-auto-update">⬇ 检查并更新</button>
+        </div>
+        <div id="auto-update-status" style="font-size:12px;color:var(--gray-text);padding:4px 16px"></div>
       </div>
     </div>
 
@@ -350,6 +374,34 @@ document.getElementById("app")!.innerHTML = /* html */ `
         </div>
         <div id="backup-group-label" style="font-size:11px;color:var(--gray-text);padding:4px 16px"></div>
         <div id="backup-list" style="font-size:12px;color:var(--gray-text)">加载中...</div>
+      </div>
+    </div>
+
+    <div class="panel" id="panel-saves">
+      <div class="card">
+        <div class="card-header" style="display:flex;justify-content:space-between">
+          <span>Saves 存档分析</span>
+          <button class="btn btn-primary btn-sm" id="btn-scan-saves">🔄 扫描</button>
+        </div>
+        <div style="font-size:12px;color:var(--gray-text);margin-bottom:8px">
+          检测存档所需的 Mod 是否已安装；可上传 .rws 存档文件进行分析。
+        </div>
+        <label class="file-drop" id="drop-zone-saves">
+          <div>上传 .rws 存档文件</div>
+          <input type="file" id="saves-file-upload" accept=".rws" />
+        </label>
+        <div id="saves-results" style="font-size:12px;color:var(--gray-text);margin-top:8px">加载中...</div>
+      </div>
+    </div>
+
+    <div class="panel" id="panel-tags">
+      <div class="card" style="flex:1;overflow-y:auto">
+        <div class="card-header">🏷 Mod 标签</div>
+        <div id="tags-list" style="font-size:12px;color:var(--gray-text)">加载中...</div>
+      </div>
+      <div class="card">
+        <div class="card-header">标签详情</div>
+        <div id="tags-detail" style="font-size:12px;color:var(--gray-text)"></div>
       </div>
     </div>
 
@@ -413,9 +465,9 @@ document.getElementById("app")!.innerHTML = /* html */ `
     <div style="font-size:40px;margin-bottom:8px">🔐</div>
     <h2 style="margin:0 0 4px;font-size:18px">rwmod 需要认证</h2>
     <p style="color:var(--gray-text);font-size:12px;margin:0 0 16px">
-      请输入访问密码（默认 <code>rwmod-dev-secret</code>，可在启动时通过 RWMOD_SECRET 修改）
+      请输入访问密钥。未设置 RWMOD_SECRET 环境变量时，密钥见服务启动日志或配置文件目录下的 <code>rwmod.secret</code> 文件。
     </p>
-    <input type="password" id="login-password" class="cmd-input" placeholder="访问密码" autocomplete="off" style="width:100%;box-sizing:border-box;margin-bottom:12px" />
+    <input type="password" id="login-password" class="cmd-input" placeholder="访问密钥" autocomplete="off" style="width:100%;box-sizing:border-box;margin-bottom:12px" />
     <div id="login-error" style="color:var(--red,#e5484d);font-size:12px;margin-bottom:8px;min-height:16px"></div>
     <div style="display:flex;gap:8px;justify-content:flex-end">
       <button class="btn btn-ghost" id="login-cancel">取消</button>
@@ -430,6 +482,10 @@ document.getElementById("app")!.innerHTML = /* html */ `
 // Tab/sidebar clicks and browser back/forward are handled by the hash router
 // (router.ts → initRouter(switchPanel) at startup).
 export function switchPanel(name: string) {
+  // 离开 dashboard 时清理其轮询 interval，避免 setInterval 泄漏
+  if (currentPanel === "dashboard" && name !== "dashboard") {
+    stopQueuePolling();
+  }
   currentPanel = name;
   document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
   document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
@@ -542,12 +598,23 @@ function patchFetchWithAuth(): void {
   window.fetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     // Only attach the token to same-origin /api requests.
-    if (url.startsWith("/api/") || url.startsWith("/api")) {
+    if (url.startsWith("/api")) {
       const token = getToken();
       if (token) {
         init = init || {};
         init.headers = new Headers(init.headers);
         (init.headers as Headers).set("Authorization", `Bearer ${token}`);
+      }
+      // Global 401 handling: drop the stale token and re-show the login overlay.
+      // (login/verify 属于认证流程本身，由 auth.ts 显式处理)
+      if (url !== "/api/auth/login" && url !== "/api/auth/verify") {
+        return origFetch(input, init).then((resp) => {
+          if (resp.status === 401) {
+            clearToken();
+            showLoginOverlay();
+          }
+          return resp;
+        });
       }
     }
     return origFetch(input, init);
@@ -556,7 +623,7 @@ function patchFetchWithAuth(): void {
 
 // ── startup ────────────────────────────────────────────────────
 (async () => {
-  // Authenticate first (auto-login with default secret, or show login overlay).
+  // Authenticate first (verify stored token, or show the login overlay).
   const authed = await ensureAuth();
   if (!authed) {
     // User cancelled login — still patch fetch (no token) so the UI renders,

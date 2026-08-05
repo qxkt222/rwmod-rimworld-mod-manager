@@ -26,7 +26,7 @@ repos:
     hooks:
       - id: mypy
         args: [--config-file=pyproject.toml, src/rwmod]
-        additional_dependencies: [pydantic, fastapi, typer, uvicorn, websockets, python-multipart]
+        additional_dependencies: [pydantic, fastapi, typer, uvicorn, websockets, python-multipart, types-defusedxml, types-PyJWT]
         pass_filenames: false
 
   - repo: https://github.com/pre-commit/pre-commit-hooks

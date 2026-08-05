@@ -1,6 +1,6 @@
 ﻿[Setup]
 AppName=rwmod
-AppVersion=0.4.4
+AppVersion=0.4.5
 
 AppPublisher=qxkt222
 DefaultDirName={commonpf}\rwmod
@@ -17,7 +17,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
 Source: "dist\rwmod.exe"; DestDir: "{app}"
-Source: "steamcmd\*.*"; DestDir: "{app}\steamcmd"; Flags: recursesubdirs createallsubdirs; Excludes: "steamapps,userdata,depotcache,appcache,logs,siteserverui,steamcmd_siteserverui_win64.zip*,*.old,update_hosts_cached.vdf"
+Source: "steamcmd\*.*"; DestDir: "{app}\steamcmd"; Flags: recursesubdirs createallsubdirs; Excludes: "steamapps\*,userdata,depotcache,appcache,logs,siteserverui,steamcmd_siteserverui_win64.zip*,*.old,update_hosts_cached.vdf"
 
 [Icons]
 Name: "{commondesktop}\rwmod"; Filename: "{app}\rwmod.exe"; Parameters: "web"; WorkingDir: "{app}"

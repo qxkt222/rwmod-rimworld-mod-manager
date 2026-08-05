@@ -11,8 +11,11 @@ a per-mod dependency/conflict graph based on the mods' own metadata.
 from __future__ import annotations
 
 import logging
-import xml.etree.ElementTree as ET
 from pathlib import Path
+
+from rwmod.xmlutil import parse_xml_root
+
+# Safe XML parser: rejects entity-expansion / external-entity (XXE) attacks.
 
 _log = logging.getLogger(__name__)
 
@@ -33,7 +36,7 @@ def scan_mod_metadata(mods_dir: Path) -> dict[str, dict]:
         if not about.exists():
             continue
         try:
-            root = ET.parse(about).getroot()
+            root = parse_xml_root(about)
         except Exception:
             continue
         pid = (root.findtext("packageId", "") or "").strip()

@@ -1,7 +1,7 @@
 /**
  * Download panel — mod ID input, force toggle, SSE log, dependency preview.
  */
-import { api, type SSEEvent } from "../api";
+import { api, fetchJSON, type SSEEvent } from "../api";
 import { setStatus, refreshMods } from "../main";
 
 let activeController: AbortController | null = null;
@@ -40,12 +40,11 @@ async function previewDeps(raw: string) {
   container.innerHTML = '<span style="font-size:11px;color:var(--gray-text)">查询依赖中...</span>';
 
   try {
-    const resp = await fetch("/api/mods/dependencies", {
+    const data = await fetchJSON<{ deps?: Record<string, any[]> }>("/api/mods/dependencies", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids }),
     });
-    const data = await resp.json();
     const deps = data.deps || {};
 
     let totalInstalled = 0;
@@ -120,9 +119,23 @@ async function startDownload() {
   for (const id of ids) {
     renderLog(`── Mod ${id} ──`);
     await new Promise<void>((resolve) => {
+      // 超时兜底：2 分钟没有任何事件则中止，避免 Promise 永久挂起
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const armTimeout = () => {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => {
+          activeController?.abort();
+          renderLog("  ✗ 超时：2 分钟无响应，已中止", "line-error");
+          resolve();
+        }, 2 * 60 * 1000);
+      };
+      armTimeout();
       activeController = api.downloadStream(id, force, (evt: SSEEvent) => {
         if (evt.event === "done" || evt.event === "fail") {
+          if (timer) clearTimeout(timer);
           resolve();
+        } else {
+          armTimeout(); // 收到事件则重置超时计时
         }
         renderSSE(evt);
       });

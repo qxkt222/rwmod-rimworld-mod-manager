@@ -2,7 +2,7 @@
  * Profile panel — save/restore ModsConfig.xml snapshots.
  * RimWorld players can switch between mod sets with one click.
  */
-import { api } from "../api";
+import { api, fetchJSON } from "../api";
 import { toast } from "../toast";
 
 interface ProfileEntry {
@@ -59,8 +59,7 @@ async function refreshProfiles() {
   container.innerHTML = '<span style="color:var(--gray-text)">加载中...</span>';
 
   try {
-    const resp = await fetch("/api/profiles");
-    const data = await resp.json();
+    const data = await fetchJSON<{ profiles?: ProfileEntry[]; modsconfig_path?: string | null }>("/api/profiles");
 
     const pathEl = document.getElementById("profile-modsconfig-path");
     if (pathEl) {
@@ -108,12 +107,14 @@ function renderProfileList(profiles: ProfileEntry[], container: HTMLElement) {
       const name = (btn as HTMLElement).dataset.restore!;
       if (!confirm(`切换到 profile "${name}"？当前 ModsConfig.xml 将被覆盖（会自动备份）。`)) return;
       try {
-        const resp = await fetch(`/api/profiles/${encodeURIComponent(name)}/restore`, { method: "POST" });
-        const data = await resp.json();
+        const data = await fetchJSON<{ ok?: boolean; msg?: string; mod_count?: number }>(
+          `/api/profiles/${encodeURIComponent(name)}/restore`,
+          { method: "POST" },
+        );
         if (data.ok) {
           toast(`已启用: ${name}（${data.mod_count} 个 Mod）`, "success");
         } else {
-          toast(data.msg, "error");
+          toast(data.msg || "恢复失败", "error");
         }
       } catch (e: any) {
         toast(`切换失败: ${e.message}`, "error");
@@ -127,7 +128,7 @@ function renderProfileList(profiles: ProfileEntry[], container: HTMLElement) {
       const name = (btn as HTMLElement).dataset.delete!;
       if (!confirm(`删除 profile "${name}"？`)) return;
       try {
-        await fetch(`/api/profiles/${encodeURIComponent(name)}`, { method: "DELETE" });
+        await fetchJSON(`/api/profiles/${encodeURIComponent(name)}`, { method: "DELETE" });
         toast("已删除", "success");
         refreshProfiles();
       } catch (e: any) {
@@ -142,17 +143,16 @@ async function saveProfile() {
   if (!name?.trim()) return;
 
   try {
-    const resp = await fetch("/api/profiles/save", {
+    const data = await fetchJSON<{ ok?: boolean; msg?: string }>("/api/profiles/save", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: name.trim() }),
     });
-    const data = await resp.json();
     if (data.ok) {
-      toast(data.msg, "success");
+      toast(data.msg || "已保存", "success");
       refreshProfiles();
     } else {
-      toast(data.msg, "error");
+      toast(data.msg || "保存失败", "error");
     }
   } catch (e: any) {
     toast(`保存失败: ${e.message}`, "error");

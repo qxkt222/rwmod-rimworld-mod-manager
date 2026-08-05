@@ -1,6 +1,7 @@
 /**
  * Queue panel — manage download queue, view progress bars.
  */
+import { fetchJSON } from "../api";
 import { connectWS } from "../ws";
 import { refreshMods, setStatus } from "../main";
 
@@ -34,8 +35,7 @@ export function initQueuePanel() {
 
 async function refreshState() {
   try {
-    const resp = await fetch("/api/queue");
-    const data = await resp.json();
+    const data = await fetchJSON<{ items: QueueItem[] }>("/api/queue");
     items = data.items || [];
     render();
   } catch {}
@@ -46,7 +46,7 @@ async function startQueue() {
   btn.disabled = true;
   setStatus("blue", "正在处理队列...");
   try {
-    await fetch("/api/queue/start", { method: "POST" });
+    await fetchJSON("/api/queue/start", { method: "POST" });
     await refreshMods();
     setStatus("green", "队列完成");
   } catch {
@@ -57,7 +57,7 @@ async function startQueue() {
 }
 
 async function clearQueue() {
-  await fetch("/api/queue/clear", { method: "POST" });
+  await fetchJSON("/api/queue/clear", { method: "POST" });
   refreshState();
 }
 
@@ -81,10 +81,10 @@ function render() {
       (i) => /* html */ `
     <div class="queue-item">
       <span class="q-status">${statusIcons[i.status] || "❓"}</span>
-      <span class="q-id">${i.id}</span>
-      <span class="q-name">${i.name || ""}</span>
-      <span class="q-progress">${i.msg || i.status}</span>
-      ${i.status === "pending" ? `<button class="btn btn-ghost btn-sm" data-remove="${i.id}">✕</button>` : ""}
+      <span class="q-id">${esc(i.id)}</span>
+      <span class="q-name">${esc(i.name || "")}</span>
+      <span class="q-progress">${esc(i.msg || i.status)}</span>
+      ${i.status === "pending" ? `<button class="btn btn-ghost btn-sm" data-remove="${esc(i.id)}">✕</button>` : ""}
     </div>
     ${i.status === "downloading" ? `<div class="queue-bar"><div class="queue-bar-inner" style="width:${Math.round(i.progress * 100)}%"></div></div>` : ""}`,
     )
@@ -93,8 +93,14 @@ function render() {
   container.querySelectorAll("[data-remove]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const id = (btn as HTMLElement).dataset.remove!;
-      await fetch(`/api/queue/${id}`, { method: "DELETE" });
+      await fetchJSON(`/api/queue/${id}`, { method: "DELETE" });
       refreshState();
     });
   });
+}
+
+function esc(s: string): string {
+  const d = document.createElement("div");
+  d.textContent = s;
+  return d.innerHTML;
 }

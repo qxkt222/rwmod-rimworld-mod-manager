@@ -1,5 +1,6 @@
 """Mods router — listing, health, compatibility, export, collection-export, disk usage."""
 
+import asyncio
 import os
 import time
 from typing import Any
@@ -11,15 +12,28 @@ from rwmod.config import Config
 from rwmod.deps import get_config
 from rwmod.metadata import read_mod_metadata
 from rwmod.mod_cache import get_cached_mods
-from rwmod.tags import get_tags
+from rwmod.routers.download import _bounded_download
 from rwmod.workshop import check_mod_updates, fetch_item_details
 
 router = APIRouter(prefix="/api/mods", tags=["mods"])
 
+# Local mod zips are far larger than text uploads — a 2GB cap still stops
+# unbounded uploads without rejecting legitimate mods.
+_MAX_MOD_ZIP_BYTES = 2 * 1024 * 1024 * 1024
+
+
+def _reject_oversized_mod(file: UploadFile) -> None:
+    """Reject mod-zip uploads larger than the cap without buffering the body."""
+    if file.size is not None and file.size > _MAX_MOD_ZIP_BYTES:
+        raise HTTPException(413, f"文件过大（上限 {_MAX_MOD_ZIP_BYTES // (1024 * 1024)} MB）")
+
+
 # ── lightweight in-memory cache ───────────────────────────────────
 # Keyed by mods_dir so switching config directories doesn't reuse stale data.
+# Each miss walks EVERY mod folder recursively for disk usage — the UI polls
+# faster than a short TTL, so 30s amortizes the scan across requests.
 _mods_cache: dict[str, dict[str, Any]] = {}
-_CACHE_TTL = 3  # seconds
+_CACHE_TTL = 30  # seconds
 
 
 def _cached_mod_list(cfg: Config) -> list[dict]:
@@ -33,11 +47,22 @@ def _cached_mod_list(cfg: Config) -> list[dict]:
     if not cfg.mods_dir.exists():
         return []
     metas = get_cached_mods(cfg.mods_dir)
+
+    # Batch-load all folder→tags mappings in ONE query (avoids N+1
+    # per-mod get_tags() calls — a massive speedup for hundreds of mods).
+    from rwmod.database import _get_conn
+
+    db = _get_conn()
+    rows = db.execute("SELECT folder, tag FROM mod_tags ORDER BY folder, tag").fetchall()
+    tags_by_folder: dict[str, list[str]] = {}
+    for r in rows:
+        tags_by_folder.setdefault(r["folder"], []).append(r["tag"])
+
     data = []
     for m in metas:
         mod_dir = cfg.mods_dir / m.folder
         size_mb = _get_dir_size_mb(mod_dir)
-        tags = get_tags(m.folder)
+        tags = tags_by_folder.get(m.folder, [])
         data.append(
             {
                 "folder": m.folder,
@@ -53,13 +78,20 @@ def _cached_mod_list(cfg: Config) -> list[dict]:
 
 
 def _get_dir_size_mb(dir_path) -> float:
-    """Get the total file size of a directory in MB."""
+    """Get the total file size of a directory in MB.
+
+    Uses os.walk for a *recursive* scan — mods contain nested folders
+    (About/, Defs/, Assemblies/, Patches/, ...) so a top-level os.scandir
+    alone would badly under-report disk usage.
+    """
     total = 0
     try:
-        with os.scandir(dir_path) as entries:
-            for entry in entries:
-                if entry.is_file():
-                    total += entry.stat().st_size
+        for root, _dirs, files in os.walk(dir_path):
+            for fname in files:
+                try:
+                    total += os.path.getsize(os.path.join(root, fname))
+                except OSError:
+                    continue
     except OSError:
         pass
     return round(total / 1024 / 1024, 2)
@@ -82,7 +114,8 @@ def check_updates(
 
 
 # ── health cache (expensive — hits Steam API for 600+ mods) ───────
-_health_cache: dict[str, Any] = {}
+# Keyed by mods_dir so switching config directories returns correct data.
+_health_cache: dict[str, dict[str, Any]] = {}
 _HEALTH_CACHE_TTL = 60  # 1 minute — Steam API data changes slowly
 
 
@@ -92,8 +125,10 @@ def mod_health(
     _user: str = Depends(get_current_user),
 ):
     now = time.time()
-    if _health_cache and now - _health_cache.get("_ts", 0) < _HEALTH_CACHE_TTL:
-        return _health_cache["data"]
+    key = str(cfg.mods_dir)
+    entry = _health_cache.get(key)
+    if entry and now - entry.get("_ts", 0) < _HEALTH_CACHE_TTL:
+        return entry["data"]
 
     if not cfg.mods_dir.exists():
         return {"mods": []}
@@ -123,8 +158,7 @@ def mod_health(
             }
         )
     data = {"mods": results}
-    _health_cache["data"] = data
-    _health_cache["_ts"] = now
+    _health_cache[key] = {"data": data, "_ts": now}
     return data
 
 
@@ -197,19 +231,28 @@ async def import_local_mod(
     multiple mod folders. Each folder is validated for a readable About.xml
     before being extracted into mods_dir.
     """
+
+    if not file.filename or not file.filename.lower().endswith(".zip"):
+        raise HTTPException(400, "请上传 .zip 文件")
+    _reject_oversized_mod(file)
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(400, "文件为空")
+
+    # Decompression + copy is CPU/disk heavy — run it off the event loop so a
+    # multi-GB import can never freeze the server.
+    return await asyncio.to_thread(_import_local_sync, content, cfg)
+
+
+def _import_local_sync(content: bytes, cfg: Config) -> dict:
+    """Validate + extract an uploaded mod zip (blocking; run in a thread)."""
     import shutil
     import tempfile
     import zipfile
     from pathlib import Path
 
     from rwmod.utils import safe_extract_zip
-
-    if not file.filename or not file.filename.lower().endswith(".zip"):
-        raise HTTPException(400, "请上传 .zip 文件")
-
-    content = await file.read()
-    if not content:
-        raise HTTPException(400, "文件为空")
 
     cfg.mods_dir.mkdir(parents=True, exist_ok=True)
     tmp_dir = Path(tempfile.mkdtemp(prefix="rwmod_import_"))
@@ -309,9 +352,7 @@ async def batch_download_mods(
     _user: str = Depends(get_current_user),
 ):
     """Download multiple mods by workshop ID (or collection URL)."""
-    import asyncio
-
-    from rwmod.downloader import download_one, extract_mod_id
+    from rwmod.downloader import extract_mod_id
 
     ids: list[str] = payload.get("ids", [])
     force: bool = payload.get("force", False)
@@ -320,9 +361,12 @@ async def batch_download_mods(
         raise HTTPException(400, "没有有效的 Mod ID")
     cfg.validate()
 
+    # Route through the shared global semaphore so batch + queue + SSE streams
+    # together never exceed the SteamCMD concurrency budget (Steam rate-limits
+    # parallel anonymous logins).
     results = []
     for mid in parsed:
-        ok = await asyncio.to_thread(download_one, cfg, mid, force=force)
+        ok = await _bounded_download(cfg, mid, force)
         results.append({"id": mid, "ok": ok})
 
     return {"total": len(results), "results": results}
