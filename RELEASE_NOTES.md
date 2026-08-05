@@ -131,9 +131,9 @@ docker run -p 8000:8000 -v /path/to/mods:/mods rwmod
 - 首次启动会自动创建数据库与默认配置
 
 ### 系统要求
-- Windows 10/11（或 Linux/macOS 源码运行）
+- Windows 10/11（安装包方式）
 - Python 3.13+（源码方式）
-- 需安装 [SteamCMD](https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip) 用于匿名下载（可选，Skymods 备用源无需）
+- **无需安装 SteamCMD** — 安装包已内置 SteamCMD，开箱即用；源码方式在设置中指定路径即可（或留空走 Skymods 备用源）
 
 ---
 
