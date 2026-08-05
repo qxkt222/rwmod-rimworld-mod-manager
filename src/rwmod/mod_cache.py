@@ -71,13 +71,21 @@ def get_cached_mods(mods_dir: Path) -> list[ModMeta]:
     # completely broken/unavailable). Normal operation never reaches this path
     # because get_or_refresh_metas does a full scan when DB is empty.
     new_cache: dict[str, ModMeta] = {}
-    with os.scandir(mods_dir) as entries:
-        for entry in sorted(entries, key=lambda e: e.name):
+    try:
+        entries_iter = sorted(os.scandir(mods_dir), key=lambda e: e.name)
+    except OSError:
+        return []
+    for entry in entries_iter:
+        # A mod folder may vanish mid-scan (concurrent download/delete) —
+        # one bad entry must not 500 every listing endpoint.
+        try:
             if not entry.is_dir():
                 continue
             meta = read_mod_metadata(Path(entry.path))
             if meta:
                 new_cache[meta.folder] = meta
+        except OSError:
+            continue
 
     metas_full = list(new_cache.values())
     with _lock:
@@ -117,9 +125,25 @@ def _mods_dir_mtime(mods_dir: Path) -> float:
     """Get the latest mtime of the mods directory or any mod subdirectory.
 
     Uses directory modification time as a coarse invalidation signal.
-    A new mod folder or deletion changes the parent dir's mtime.
+    A new mod folder or deletion changes the parent dir's mtime, but editing a
+    mod's About.xml only touches the *child* dir — so we must also consider
+    child mtimes, otherwise the in-memory cache can serve stale metadata after
+    a mod update (e.g. a changed display name or packageId) within the TTL.
     """
     try:
-        return mods_dir.stat().st_mtime
+        latest = mods_dir.stat().st_mtime
     except OSError:
         return 0
+    try:
+        with os.scandir(mods_dir) as entries:
+            for entry in entries:
+                if entry.is_dir(follow_symlinks=False):
+                    try:
+                        mtime = entry.stat().st_mtime
+                    except OSError:
+                        continue
+                    if mtime > latest:
+                        latest = mtime
+    except OSError:
+        pass
+    return latest

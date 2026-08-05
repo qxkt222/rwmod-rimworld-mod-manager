@@ -1,6 +1,7 @@
 /**
  * RimSort panel — generate ModsConfig.xml, compare with installed mods.
  */
+import { fetchJSON } from "../api";
 import { toast } from "../toast";
 import { refreshMods } from "../main";
 
@@ -15,9 +16,14 @@ async function generateConfig() {
   const btn = document.getElementById("btn-rimsort-generate") as HTMLButtonElement;
   btn.disabled = true;
   try {
-    const resp = await fetch("/api/rimsort/generate", { method: "POST" });
-    const data = await resp.json();
+    const data = await fetchJSON<{ modsconfig_xml?: string }>("/api/rimsort/generate", { method: "POST" });
     const xml = data.modsconfig_xml;
+    if (!xml) {
+      // 失败时不下载假 XML
+      toast("生成失败：未返回 ModsConfig 内容", "error");
+      btn.disabled = false;
+      return;
+    }
 
     const pre = document.getElementById("rimsort-output")!;
     pre.textContent = xml;
@@ -52,8 +58,7 @@ async function compareFile() {
   try {
     const fd = new FormData();
     fd.append("file", file);
-    const resp = await fetch("/api/rimsort/compare-file", { method: "POST", body: fd });
-    const data = await resp.json();
+    const data = await fetchJSON<any>("/api/rimsort/compare-file", { method: "POST", body: fd });
 
     if (data.error) {
       container.innerHTML = `<span style="color:var(--red)">解析失败: ${data.error}</span>`;
@@ -109,7 +114,7 @@ function renderMissing(ids: string[], details: any[]): string {
       b.addEventListener("click", async () => {
         const wid = (b as HTMLElement).dataset.wid!;
         try {
-          await fetch("/api/queue/add", {
+          await fetchJSON("/api/queue/add", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ ids: [wid] }),
@@ -171,8 +176,7 @@ function bindOrderCheck() {
     container.innerHTML = '<span style="color:var(--gray-text)">正在分析加载顺序...</span>';
 
     try {
-      const resp = await fetch("/api/rimsort/check-order");
-      const data = await resp.json();
+      const data = await fetchJSON<any>("/api/rimsort/check-order");
 
       if (data.error) {
         container.innerHTML = `<span style="color:var(--red)">${esc(data.error)}</span>`;

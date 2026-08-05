@@ -1,6 +1,8 @@
 /**
  * REST API client for rwmod backend.
  */
+import { clearToken, showLoginOverlay } from "./auth";
+
 const BASE = "/api";
 
 export interface ModEntry {
@@ -26,13 +28,25 @@ export interface DownloadResult {
   ok: boolean;
 }
 
-async function req<T>(url: string, init?: RequestInit): Promise<T> {
-  const resp = await fetch(BASE + url, init);
+/**
+ * fetch + JSON 的统一封装：非 2xx 抛 Error（优先用后端 detail），
+ * 401 统一清除 token 并重新显示登录 overlay。
+ */
+export async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
+  const resp = await fetch(url, init);
   if (!resp.ok) {
+    if (resp.status === 401) {
+      clearToken();
+      showLoginOverlay();
+    }
     const body = await resp.json().catch(() => ({}));
     throw new Error((body as any).detail || `${resp.status} ${resp.statusText}`);
   }
   return resp.json();
+}
+
+async function req<T>(url: string, init?: RequestInit): Promise<T> {
+  return fetchJSON<T>(BASE + url, init);
 }
 
 export const api = {
@@ -132,6 +146,16 @@ export const api = {
 
     fetch(url, { signal: ctrl.signal })
       .then(async (resp) => {
+        // 非 2xx（401 未认证 / 400 无效 ID）时按事件上报，避免下载永久挂起
+        if (!resp.ok) {
+          if (resp.status === 401) {
+            clearToken();
+            showLoginOverlay();
+          }
+          const body = await resp.json().catch(() => ({}));
+          onEvent({ event: "fail", msg: (body as any).detail || `HTTP ${resp.status}` });
+          return;
+        }
         const reader = resp.body?.getReader();
         if (!reader) return;
         const dec = new TextDecoder();
@@ -151,7 +175,12 @@ export const api = {
           }
         }
       })
-      .catch(() => { /* aborted or network error */ });
+      .catch(() => {
+        // 主动 abort（超时兜底）时不重复上报；网络错误则上报 fail
+        if (!ctrl.signal.aborted) {
+          onEvent({ event: "fail", msg: "连接中断，下载中止" });
+        }
+      });
 
     return ctrl;
   },

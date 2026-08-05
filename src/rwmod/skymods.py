@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import gzip
+import ipaddress
 import logging
 import re
 import shutil
+import socket
 import tempfile
 import urllib.parse
 import urllib.request
@@ -27,6 +29,46 @@ _USER_AGENT = (
     " (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 
+# Download URLs are scraped from third-party page content, so we restrict the
+# scheme + hostname before opening them (SSRF guard: no file://, no private/
+# loopback/link-local targets, no non-whitelisted domains).
+_ALLOWED_DOWNLOAD_DOMAINS = ("smods.ru", "modsbase.com")
+MAX_PAGE_BYTES = 2 * 1024 * 1024  # search/redirect page HTML cap
+MAX_RESPONSE_BYTES = 1024 * 1024 * 1024  # 1 GB cap on fallback mod downloads
+
+
+def _host_allowed(host: str) -> bool:
+    return any(host == d or host.endswith("." + d) for d in _ALLOWED_DOWNLOAD_DOMAINS)
+
+
+def _is_safe_download_url(url: str) -> bool:
+    """Reject SSRF vectors (file://, intranet, metadata hosts) before opening."""
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    host = (parsed.hostname or "").lower()
+    if not _host_allowed(host):
+        return False
+    # Refuse hosts that resolve to private / loopback / link-local addresses
+    # (cloud metadata like 169.254.169.254, LAN scanners, localhost).
+    try:
+        addr = ipaddress.ip_address(socket.gethostbyname(host))
+    except OSError:
+        return False
+    return not (addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved)
+
+
+# Shared opener with redirect + cookie handling — reused across all Skymods
+# downloads. Building a new opener per download wastes resources and loses
+# TCP keep-alive / connection pooling.
+_shared_opener = urllib.request.build_opener(
+    urllib.request.HTTPRedirectHandler(),
+    urllib.request.HTTPCookieProcessor(),
+)
+
 
 def try_skymods(mod_id: str, config: Config) -> Path | None:
     """Try to download a mod from Skymods as fallback.
@@ -38,7 +80,11 @@ def try_skymods(mod_id: str, config: Config) -> Path | None:
     try:
         req = urllib.request.Request(search_url, headers={"User-Agent": _USER_AGENT})
         with urllib.request.urlopen(req, timeout=20) as resp:  # nosec B310 — HTTPS-only Skymods URL
-            html = resp.read().decode("utf-8", errors="replace")
+            page = resp.read(MAX_PAGE_BYTES + 1)
+            if len(page) > MAX_PAGE_BYTES:
+                _log.warning("Skymods 搜索页过大，放弃 (%s)", mod_id)
+                return None
+            html = page.decode("utf-8", errors="replace")
     except OSError as e:
         _log.warning("Skymods 搜索失败 (%s): %s", mod_id, e)
         return None
@@ -92,16 +138,19 @@ def _download_and_extract(
         _log.warning("Skymods 重定向次数过多，放弃 (%s)", mod_id)
         return None
 
-    opener = urllib.request.build_opener(
-        urllib.request.HTTPRedirectHandler(),
-        urllib.request.HTTPCookieProcessor(),
-    )
+    # SSRF guard: the URL comes from third-party page content.
+    if not _is_safe_download_url(url):
+        _log.warning("Skymods 下载 URL 不合法，拒绝 (%s): %s", mod_id, url[:120])
+        return None
 
     try:
         req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-        with opener.open(req, timeout=60) as resp:
+        with _shared_opener.open(req, timeout=60) as resp:
             content_type = resp.headers.get("Content-Type", "")
-            data = resp.read()
+            data = resp.read(MAX_RESPONSE_BYTES + 1)
+            if len(data) > MAX_RESPONSE_BYTES:
+                _log.warning("Skymods 下载内容过大，放弃 (%s)", mod_id)
+                return None
     except OSError as e:
         _log.warning("Skymods 下载失败 (%s): %s", mod_id, e)
         return None

@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-import contextlib
+import logging
 import re
 import subprocess  # nosec B404 — subprocess is required to run SteamCMD
 from dataclasses import dataclass, field
 from pathlib import Path
 
 __all__ = ["SteamCMD", "DownloadResult", "ErrorKind"]
+
+_log = logging.getLogger(__name__)
 
 # ── error taxonomy ──────────────────────────────────────────────────
 # SteamCMD workshop_log.txt records the real reason for every failure.
@@ -75,8 +77,34 @@ class SteamCMD:
         """Directory where SteamCMD stores downloaded workshop content."""
         return self.steam_dir / "steamapps" / "workshop" / "content" / self.STEAM_APP_ID
 
+    def _log_offset(self) -> int:
+        """Snapshot of workshop_log.txt size *before* this run.
+
+        SteamCMD appends every run to the shared workshop_log.txt. With
+        concurrent runs (we allow up to MAX_CONCURRENT_DOWNLOADS processes)
+        another process's lines could be mis-attributed to this mod. By
+        recording the size before launch we can parse only the bytes this
+        process appended, keeping error classification race-free.
+        """
+        if not self.workshop_log.exists():
+            return 0
+        try:
+            return self.workshop_log.stat().st_size
+        except OSError:
+            return 0
+
     def workshop_download(self, mod_id: str) -> DownloadResult:
         """Download a workshop item, return structured result with error classification."""
+        # Last-line defense: workshop IDs must be purely numeric so a crafted
+        # value can never inject SteamCMD command tokens (e.g.
+        # "+force_install_dir <path>" or "+download_depot ...").
+        if not mod_id.isdigit():
+            return DownloadResult(
+                success=False,
+                mod_id=mod_id,
+                error_kind=ErrorKind.UNKNOWN,
+                error_detail=f"非法的 Mod ID: {mod_id!r}",
+            )
         cmd = [
             self.exe,
             "+login",
@@ -86,6 +114,7 @@ class SteamCMD:
             mod_id,
             "+quit",
         ]
+        log_offset = self._log_offset()
 
         try:
             proc = subprocess.Popen(  # nosec B603 — command list is fixed, no shell, no user input
@@ -113,8 +142,13 @@ class SteamCMD:
             out, _err = proc.communicate(timeout=self._TIMEOUT_MINUTES * 60)
         except subprocess.TimeoutExpired:
             proc.kill()
-            with contextlib.suppress(subprocess.TimeoutExpired):
+            try:
                 proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                # TerminateProcess is asynchronous on Windows / AV can delay
+                # it — the process may still be alive; log it so it can't
+                # silently linger and hold workshop locks.
+                _log.warning("SteamCMD %s 超时且 kill 后 30s 仍未退出（进程可能残留）", mod_id)
             return DownloadResult(
                 success=False,
                 mod_id=mod_id,
@@ -124,8 +158,8 @@ class SteamCMD:
 
         lines: list[str] = [line for line in (out or "").splitlines() if line.strip()]
 
-        # ── parse workshop_log.txt for the real error reason ──────
-        error_kind, error_detail = self._parse_workshop_error(mod_id)
+        # ── parse workshop_log.txt (only this run's appended section) ──
+        error_kind, error_detail = self._parse_workshop_error(mod_id, log_offset)
 
         if error_kind == ErrorKind.OK:
             # Double-check the content actually exists
@@ -149,20 +183,32 @@ class SteamCMD:
             output_lines=lines,
         )
 
-    def _parse_workshop_error(self, mod_id: str) -> tuple[str, str]:
+    def _parse_workshop_error(self, mod_id: str, offset: int = 0) -> tuple[str, str]:
         """Parse workshop_log.txt to extract the real error reason.
 
         Workshop log records look like:
           [AppID 294100] Download item 3565275325 result : Failure
           [AppID 294100] Get details for item 3565275325 failed : File Not Found
           [AppID 294100] Download item 3565275325 result : OK
+
+        Args:
+            mod_id: The workshop item ID to look for.
+            offset: Bytes offset into the log; only the appended section
+                    (this process's run) is searched. 0 means the whole file.
         """
         log_path = self.workshop_log
         if not log_path.exists():
             return ErrorKind.UNKNOWN, "workshop_log.txt 不存在"
 
         try:
-            text = log_path.read_text(encoding="utf-8", errors="replace")
+            if offset:
+                # Read only the bytes appended since this run started.
+                with log_path.open("rb") as fh:
+                    fh.seek(offset)
+                    raw = fh.read()
+                text = raw.decode("utf-8", errors="replace")
+            else:
+                text = log_path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             return ErrorKind.UNKNOWN, "无法读取 workshop_log.txt"
 

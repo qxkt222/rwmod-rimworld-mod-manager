@@ -58,6 +58,30 @@ class Config:
 
     @classmethod
     def load(cls) -> Config:
+        # ── in-process cache: avoid re-reading ~/.rwmod.toml on every request ──
+        # Config.load() is called on every API request via FastAPI dependency.
+        # The file rarely changes mid-process (only via the settings API which
+        # calls save()), so a TTL cache eliminates disk I/O per request.
+        #
+        # CONFIG_PATH is part of the cache key so tests that patch CONFIG_PATH
+        # (e.g. to a tmp_path) always load from the *patched* path, never a
+        # stale cached instance created under a different CONFIG_PATH.
+        now = __import__("time").monotonic()
+        if (
+            cls._cache is not None
+            and cls._cache_path_key == cls.CONFIG_PATH
+            and (now - cls._cache_ts) < cls._CACHE_TTL
+        ):
+            return cls._cache
+
+        cfg = cls._load_no_cache()
+        cls._cache = cfg
+        cls._cache_ts = now
+        cls._cache_path_key = cls.CONFIG_PATH
+        return cfg
+
+    @classmethod
+    def _load_no_cache(cls) -> Config:
         builtin = cls._default_steamcmd_path()
         if cls.CONFIG_PATH.exists():
             data = tomllib.loads(cls.CONFIG_PATH.read_text(encoding="utf-8"))
@@ -85,6 +109,11 @@ class Config:
         if self.steam_api_key:
             lines.append(f'steam_api_key = "{_esc(self.steam_api_key)}"')
         self.CONFIG_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        # ── invalidate the in-process cache so the next load() sees new values ──
+        cls = type(self)
+        cls._cache = None
+        cls._cache_ts = 0.0
+        cls._cache_path_key = None
 
     def validate(self) -> None:
         """Validate minimal requirements for core operations.
@@ -97,6 +126,14 @@ class Config:
         if not self.steamcmd_path.exists():
             raise ConfigError(f"SteamCMD not found: {self.steamcmd_path}")
         self.mods_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── in-process cache state ──────────────────────────────────────
+    _cache: Config | None = None
+    _cache_ts: float = 0.0
+    _cache_path_key: Path | None = None
+    # Seconds — long enough to dedupe request bursts, short enough that a
+    # manual edit to ~/.rwmod.toml is picked up quickly.
+    _CACHE_TTL: float = 2.0
 
 
 def _esc(s: str) -> str:

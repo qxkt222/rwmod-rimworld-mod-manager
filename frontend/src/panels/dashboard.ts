@@ -1,6 +1,7 @@
 /**
  * Dashboard panel — stats, recent activity, quick actions including 一键更新.
  */
+import { fetchJSON } from "../api";
 import { toast } from "../toast";
 
 interface DashboardData {
@@ -12,6 +13,8 @@ interface DashboardData {
 
 interface QueueSnapshot { id: string; name: string; status: string; progress: number; msg: string }
 
+let queuePollTimer: ReturnType<typeof setInterval> | null = null;
+
 export function initDashboardPanel(): void {
   loadDashboard();
   bindAutoUpdate();
@@ -19,8 +22,7 @@ export function initDashboardPanel(): void {
 
 async function loadDashboard(): Promise<void> {
   try {
-    const resp = await fetch("/api/dashboard");
-    const d: DashboardData = await resp.json();
+    const d = await fetchJSON<DashboardData>("/api/dashboard");
 
     setText("db-mods-count", String(d.mods_count));
     setText("db-updates-count", String(d.updates_pending));
@@ -54,8 +56,16 @@ function bindAutoUpdate(): void {
     btn.textContent = "⏳ 检查更新中...";
 
     try {
-      const resp = await fetch("/api/auto-update/run", { method: "POST" });
-      const data = await resp.json();
+      const data = await fetchJSON<any>("/api/auto-update/run", { method: "POST" });
+
+      if (data.ok === false) {
+        // 已在运行：显示后端给出的提示，避免 undefined
+        const msg = data.msg || "更新检查已在运行中";
+        btn.textContent = `⏳ ${msg}`;
+        toast(msg, "info");
+        setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 3000);
+        return;
+      }
 
       if (data.outdated === 0) {
         btn.textContent = "✅ 全部最新";
@@ -79,32 +89,45 @@ function bindAutoUpdate(): void {
 
 /** Poll /api/queue every 2s until all items are done/failed, then restore button. */
 function pollQueueProgress(btn: HTMLButtonElement, original: string | null): void {
-  const interval = setInterval(async () => {
+  stopQueuePolling();
+  queuePollTimer = setInterval(async () => {
     try {
-      const resp = await fetch("/api/queue");
-      const data: { items: QueueSnapshot[] } = await resp.json();
+      const data = await fetchJSON<{ items: QueueSnapshot[] }>("/api/queue");
       const items = data.items || [];
 
       const active = items.filter(i => i.status === "pending" || i.status === "downloading");
       const done = items.filter(i => i.status === "done").length;
       const failed = items.filter(i => i.status === "failed").length;
 
-      if (active.length === 0 && items.length > 0) {
-        clearInterval(interval);
-        const total = done + failed;
-        btn.textContent = failed > 0
-          ? `⚠ ${done}/${total} 完成 (${failed} 失败)`
-          : `✅ ${total} 个已完成`;
+      if (active.length === 0) {
+        // 队列完成或为空都结束轮询，避免 interval 泄漏
+        stopQueuePolling();
         btn.disabled = false;
+        if (items.length === 0) {
+          btn.textContent = original ?? "⬇ 一键更新";
+        } else {
+          const total = done + failed;
+          btn.textContent = failed > 0
+            ? `⚠ ${done}/${total} 完成 (${failed} 失败)`
+            : `✅ ${total} 个已完成`;
+        }
         setTimeout(() => { btn.textContent = original; }, 5000);
         loadDashboard(); // refresh stats
-      } else if (active.length > 0) {
+      } else {
         btn.textContent = `⏳ ${done}/${items.length} 完成...`;
       }
     } catch {
       // keep polling
     }
   }, 2000);
+}
+
+/** 停止队列进度轮询（面板切换时调用，避免 setInterval 泄漏）。 */
+export function stopQueuePolling(): void {
+  if (queuePollTimer) {
+    clearInterval(queuePollTimer);
+    queuePollTimer = null;
+  }
 }
 
 // ── helpers ───────────────────────────────────────────────────────

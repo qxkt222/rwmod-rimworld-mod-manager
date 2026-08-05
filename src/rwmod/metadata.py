@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-import xml.etree.ElementTree as ET
 from pathlib import Path
+
+from rwmod.xmlutil import parse_xml_root
+
+# Safe XML parser: rejects entity-expansion / external-entity (XXE) attacks.
 
 __all__ = ["read_mod_metadata", "ModMeta"]
 
@@ -43,7 +46,7 @@ def read_mod_metadata(mod_dir: Path) -> ModMeta | None:
     pkg = ""
     versions: list[str] = []
     try:
-        root = ET.parse(about).getroot()
+        root = parse_xml_root(about)
         name = root.findtext("name", "?") or "?"
         pkg = root.findtext("packageId", "") or ""
         sv = root.find("supportedVersions")
@@ -53,7 +56,17 @@ def read_mod_metadata(mod_dir: Path) -> ModMeta | None:
         pass
 
     pf = mod_dir / "About" / "PublishedFileId.txt"
-    wid = pf.read_text(encoding="utf-8").strip() if pf.exists() else ""
+    wid = ""
+    if pf.exists():
+        try:
+            wid = pf.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            wid = ""
+    # Only numeric workshop IDs are trusted — a malicious or corrupted
+    # PublishedFileId.txt (e.g. containing "../x" or SteamCMD command tokens)
+    # must never flow into backup filenames or SteamCMD arguments.
+    if wid and not wid.isdigit():
+        wid = ""
 
     return ModMeta(
         folder=mod_dir.name, name=name, package_id=pkg, workshop_id=wid, supported_versions=versions

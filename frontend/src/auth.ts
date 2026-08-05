@@ -1,16 +1,18 @@
 /**
- * Auth helpers — automatic login + token management.
+ * Auth helpers — token management + login overlay.
  *
- * The backend enforces JWT auth on every /api route. This module:
- *   1. Tries to auto-login with the default dev secret (so a fresh install
- *      "just works" for normal players who never set RWMOD_SECRET).
- *   2. If that fails (user changed RWMOD_SECRET), shows a login overlay so
- *      they can enter the password manually.
- *   3. Stores the token in localStorage and injects it into every /api fetch.
+ * The backend enforces JWT auth on every /api route. The signing key comes
+ * from the RWMOD_SECRET env var, or — when unset — from a random key that is
+ * generated on first start and persisted to rwmod.secret in the config dir
+ * (stable across restarts). This module:
+ *   1. Verifies the stored token against GET /api/auth/verify.
+ *   2. If invalid/missing, shows a login overlay so the user can enter the
+ *      access secret (printed in the server startup log / rwmod.secret).
+ *   3. Stores the token in localStorage and injects it into every /api fetch
+ *      (see patchFetchWithAuth in main.ts).
  */
 
 const TOKEN_KEY = "rwmod_token";
-const DEFAULT_SECRET = "rwmod-dev-secret";
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
@@ -38,17 +40,6 @@ export async function login(password: string): Promise<boolean> {
   return true;
 }
 
-/** Try to auto-login with the default dev secret. */
-export async function autoLogin(): Promise<boolean> {
-  // If we already have a valid token, skip.
-  if (getToken()) {
-    const ok = await verifyToken();
-    if (ok) return true;
-    clearToken();
-  }
-  return login(DEFAULT_SECRET);
-}
-
 /** Check whether the stored token is still valid. */
 export async function verifyToken(): Promise<boolean> {
   const token = getToken();
@@ -61,51 +52,72 @@ export async function verifyToken(): Promise<boolean> {
 
 /**
  * Ensure we are authenticated before the UI loads.
- * Returns true if authenticated, false if the user must log in manually.
+ * Returns true if authenticated, false if the user cancelled the login overlay.
  */
 export async function ensureAuth(): Promise<boolean> {
-  if (await autoLogin()) return true;
+  if (await verifyToken()) return true;
+  clearToken();
   return showLoginOverlay();
 }
 
-/** Show a login overlay and wait for the user to enter the password. */
-function showLoginOverlay(): Promise<boolean> {
-  return new Promise((resolve) => {
-    const overlay = document.getElementById("login-overlay");
-    if (!overlay) {
-      resolve(false);
-      return;
-    }
-    overlay.classList.add("active");
+// ── login overlay ──────────────────────────────────────────────────
 
+let overlayPromise: Promise<boolean> | null = null;
+/** 用户点「取消」后不再自动弹窗（避免 401 触发的弹窗循环），刷新页面可重新登录。 */
+let overlayDismissed = false;
+
+/**
+ * Show the login overlay and wait for the user to enter the access secret.
+ * Re-entrant: concurrent calls share the same pending promise.
+ */
+export function showLoginOverlay(): Promise<boolean> {
+  if (overlayDismissed) return Promise.resolve(false);
+  if (overlayPromise) return overlayPromise;
+
+  overlayPromise = new Promise((resolve) => {
+    const overlay = document.getElementById("login-overlay");
     const input = document.getElementById("login-password") as HTMLInputElement | null;
     const btn = document.getElementById("login-submit") as HTMLButtonElement | null;
     const err = document.getElementById("login-error");
     const cancel = document.getElementById("login-cancel") as HTMLButtonElement | null;
 
+    if (!overlay || !input || !btn) {
+      overlayPromise = null;
+      resolve(false);
+      return;
+    }
+    overlay.classList.add("active");
+    input.focus();
+
+    const finish = (ok: boolean) => {
+      overlay.classList.remove("active");
+      overlayPromise = null;
+      resolve(ok);
+    };
+
     const doLogin = async () => {
-      if (!input || !btn) return;
       btn.disabled = true;
+      if (err) err.textContent = "";
       const ok = await login(input.value);
       if (ok) {
-        overlay.classList.remove("active");
-        resolve(true);
+        overlayDismissed = false;
+        finish(true);
       } else {
-        if (err) err.textContent = "密码错误，请重试";
+        if (err) err.textContent = "密钥错误，请重试（见启动日志或 rwmod.secret 文件）";
         btn.disabled = false;
+        input.focus();
       }
     };
 
-    btn?.addEventListener("click", doLogin);
-    input?.addEventListener("keydown", (e) => {
+    btn.addEventListener("click", doLogin);
+    input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") doLogin();
     });
-    input?.focus();
-
-    // Cancel = give up (UI stays mostly empty, but avoids a dead overlay).
     cancel?.addEventListener("click", () => {
-      overlay.classList.remove("active");
-      resolve(false);
+      overlayDismissed = true;
+      finish(false);
     });
   });
+
+  return overlayPromise;
 }

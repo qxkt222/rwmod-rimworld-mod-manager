@@ -3,7 +3,7 @@
  * Shows health status badges: 🟢 maintained / 🟡 stale / 🔴 abandoned / ⚫ removed
  * Shows compatibility badges: ✅ compatible / ❌ incompatible / ❓ unknown
  */
-import type { ModEntry } from "../api";
+import { fetchJSON, type ModEntry } from "../api";
 import { refreshMods } from "../main";
 import { toast } from "../toast";
 
@@ -46,8 +46,7 @@ export function refreshBadges() {
 
 async function loadHealth() {
   try {
-    const resp = await fetch("/api/mods/health");
-    const data = await resp.json();
+    const data = await fetchJSON<{ mods?: { folder: string; status: string }[] }>("/api/mods/health");
     const healthMap: Record<string, string> = {};
     for (const m of data.mods || []) {
       healthMap[m.folder] = m.status;
@@ -72,15 +71,21 @@ async function loadHealth() {
 
 async function loadCompatibility() {
   try {
-    const resp = await fetch("/api/mods/compatibility");
-    const data = await resp.json();
+    const data = await fetchJSON<{
+      error?: string;
+      rimworld_version?: string;
+      groups?: {
+        incompatible?: { folder: string }[];
+        unknown?: { folder: string }[];
+      };
+    }>("/api/mods/compatibility");
     if (data.error) return;
 
     const incompat: Set<string> = new Set(
-      (data.groups?.incompatible || []).map((m: any) => m.folder),
+      (data.groups?.incompatible || []).map((m) => m.folder),
     );
     const unknownSet: Set<string> = new Set(
-      (data.groups?.unknown || []).map((m: any) => m.folder),
+      (data.groups?.unknown || []).map((m) => m.folder),
     );
 
     // Update header with summary
@@ -94,7 +99,7 @@ async function loadCompatibility() {
         header.appendChild(span);
       }
       const span = header.querySelector(".compat-summary")!;
-      span.textContent = `RW ${data.rimworld_version} · ${data.incompatible_count} 不兼容`;
+      span.textContent = `RW ${data.rimworld_version} · ${(data.groups?.incompatible || []).length} 不兼容`;
     }
 
     // Apply badges to mod rows
@@ -130,8 +135,7 @@ function bindExportCollection() {
     btn.textContent = "⏳ 生成中...";
     (btn as HTMLButtonElement).disabled = true;
     try {
-      const resp = await fetch("/api/mods/export-collection");
-      const data = await resp.json();
+      const data = await fetchJSON<{ ids?: string[]; total?: number; mods?: any[]; markdown?: string }>("/api/mods/export-collection");
       showCollectionExport(data);
     } catch (e: any) {
       toast(`导出失败: ${e.message}`, "error");

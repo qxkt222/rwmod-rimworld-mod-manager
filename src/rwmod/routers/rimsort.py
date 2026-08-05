@@ -55,6 +55,9 @@ async def rimsort_compare_file(
     cfg: Config = Depends(get_config),
     _user: str = Depends(get_current_user),
 ):
+    from rwmod.routers.download import _reject_oversized
+
+    _reject_oversized(file)
     content = await file.read()
     with tempfile.NamedTemporaryFile("wb", suffix=".xml", delete=False) as f:
         f.write(content)
@@ -138,13 +141,19 @@ def rimsort_apply(
 
     snapshot_modsconfig(path, label="sort")
 
-    # Rewrite activeMods in the new order
+    # Rewrite activeMods in the new order — atomically: write a temp file
+    # first, then os.replace, so a crash mid-write can't leave a truncated
+    # ModsConfig.xml.
     for li in active.findall("li"):
         active.remove(li)
     for pid in final_order:
         ET.SubElement(active, "li").text = pid
     ET.indent(tree, space="  ")
-    tree.write(path, encoding="utf-8", xml_declaration=True)
+    tmp = path.with_suffix(path.suffix + ".rwmod.tmp")
+    tree.write(tmp, encoding="utf-8", xml_declaration=True)
+    import os
+
+    os.replace(tmp, path)
 
     return {
         "ok": True,

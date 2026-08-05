@@ -1,13 +1,15 @@
 """SQLite persistence layer — download history, mod metadata cache.
 
-Uses a module-level persistent connection to avoid per-query open/close overhead.
-Connection is lazily initialized and thread-safe via check_same_thread=False.
+Uses a per-thread connection pool to avoid per-query open/close overhead
+while still being safe across FastAPI's threadpool workers. Reads and writes
+go through WAL mode so concurrent access is efficient without a global lock.
 """
 
 from __future__ import annotations
 
 import sqlite3
 import threading
+import time
 from pathlib import Path
 
 __all__ = [
@@ -19,98 +21,144 @@ __all__ = [
     "clear_history",
     "cache_mod",
     "get_cached_mod",
+    "find_local_mods_by_workshop_id",
+    "upsert_local_mod_workshop_id",
+    "remove_local_mod_workshop_id",
 ]
 
 DB_PATH = Path.home() / ".rwmod.db"
 
-_conn: sqlite3.Connection | None = None
-_lock = threading.Lock()
+# Per-thread connections: each thread gets its own sqlite3.Connection so
+# concurrent FastAPI workers never contend on a single connection.
+_local: threading.local = threading.local()
+# Guard for the lazily-created initial connection during init_db / close.
+_init_lock = threading.Lock()
+_initialized = False
+# Registry of every connection ever created, so close_db() can close the
+# connections owned by *other* threads (e.g. FastAPI's threadpool workers or
+# TestClient's portal threads). Without this, those threads' connections leak
+# until process exit (observed as "ResourceWarning: unclosed database").
+_all_conns: set[sqlite3.Connection] = set()
+# Connections closed by close_db() — sqlite3.Connection has no __dict__, so
+# we can't tag the object; track by id() so threads that still hold a
+# reference rebuild on their next _get_conn() instead of hitting
+# "Cannot operate on a closed database".
+_closed_conn_ids: set[int] = set()
 
 
 def _get_conn() -> sqlite3.Connection:
-    """Return the module-level persistent connection, creating it lazily."""
-    global _conn
-    if _conn is not None:
-        return _conn
-    with _lock:
-        if _conn is not None:
-            return _conn
-        _conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
-        _conn.row_factory = sqlite3.Row
-        _conn.execute("PRAGMA journal_mode=WAL")
-        _conn.execute("PRAGMA foreign_keys=ON")
-        _conn.execute("PRAGMA cache_size=-8000")  # 8MB page cache
-        _conn.execute("PRAGMA synchronous=NORMAL")  # safe with WAL
-        # The single connection is shared across FastAPI threadpool workers;
-        # wait up to 5s for a busy lock instead of failing immediately.
-        _conn.execute("PRAGMA busy_timeout=5000")
-        return _conn
+    """Return a per-thread persistent connection, creating it lazily."""
+    conn: sqlite3.Connection | None = getattr(_local, "conn", None)
+    # close_db() closes every registered connection from the shutting-down
+    # thread; other threads still hold a reference to the now-closed object.
+    # Track closed conns by id() so those threads rebuild on next use instead
+    # of hitting "Cannot operate on a closed database".
+    if conn is not None and id(conn) in _closed_conn_ids:
+        _local.conn = None
+        conn = None
+    if conn is not None:
+        return conn
+    # NOTE: do NOT call _get_conn() while holding _init_lock — the PRAGMA
+    # below can block on other connections and _init_lock is non-reentrant,
+    # which deadlocks init_db() (it calls _get_conn inside the same lock).
+    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA cache_size=-8000")  # 8MB page cache
+    conn.execute("PRAGMA synchronous=NORMAL")  # safe with WAL
+    # Writes can still contend on the write lock; wait up to 5s instead of failing.
+    conn.execute("PRAGMA busy_timeout=5000")
+    with _init_lock:
+        _all_conns.add(conn)
+    _local.conn = conn
+    return conn
 
 
 def close_db() -> None:
-    """Close the persistent connection. Called on shutdown."""
-    global _conn
-    with _lock:
-        if _conn is not None:
-            _conn.close()
-            _conn = None
+    """Close every per-thread connection. Called on shutdown."""
+    global _initialized
+    with _init_lock:
+        _initialized = False
+        conns = list(_all_conns)
+        _all_conns.clear()
+    if getattr(_local, "conn", None) is not None:
+        _local.conn = None
+    for conn in conns:
+        try:
+            conn.close()
+        except sqlite3.Error:
+            pass
+        finally:
+            _closed_conn_ids.add(id(conn))
 
 
 def init_db() -> None:
+    global _initialized
+    # Get the connection OUTSIDE the lock: _get_conn() itself takes _init_lock
+    # (to register in _all_conns) — calling it here inside the lock would
+    # deadlock (non-reentrant). PRAGMAs in _get_conn can also block on other
+    # threads' connections.
     db = _get_conn()
-    db.executescript("""
-        CREATE TABLE IF NOT EXISTS download_history (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            workshop_id TEXT    NOT NULL,
-            mod_name    TEXT    DEFAULT '',
-            package_id  TEXT    DEFAULT '',
-            status      TEXT    NOT NULL DEFAULT 'pending',  -- pending|success|failed|skipped
-            msg         TEXT    DEFAULT '',
-            created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
-        );
+    if _initialized:
+        return
+    db.executescript(
+        """
+            CREATE TABLE IF NOT EXISTS download_history (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                workshop_id TEXT    NOT NULL,
+                mod_name    TEXT    DEFAULT '',
+                package_id  TEXT    DEFAULT '',
+                status      TEXT    NOT NULL DEFAULT 'pending',  -- pending|success|failed|skipped
+                msg         TEXT    DEFAULT '',
+                created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+            );
 
-        CREATE TABLE IF NOT EXISTS mod_cache (
-            workshop_id  TEXT PRIMARY KEY,
-            title        TEXT    DEFAULT '',
-            author       TEXT    DEFAULT '',
-            description  TEXT    DEFAULT '',
-            time_updated INTEGER DEFAULT 0,
-            cached_at    TEXT    NOT NULL DEFAULT (datetime('now'))
-        );
+            CREATE TABLE IF NOT EXISTS mod_cache (
+                workshop_id  TEXT PRIMARY KEY,
+                title        TEXT    DEFAULT '',
+                author       TEXT    DEFAULT '',
+                description  TEXT    DEFAULT '',
+                time_updated INTEGER DEFAULT 0,
+                cached_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+            );
 
-        CREATE TABLE IF NOT EXISTS local_mod_metadata (
-            folder       TEXT PRIMARY KEY,
-            name         TEXT    NOT NULL,
-            package_id   TEXT    DEFAULT '',
-            workshop_id  TEXT    DEFAULT '',
-            dir_mtime    REAL    DEFAULT 0,
-            cached_at    REAL    DEFAULT 0
-        );
+            CREATE TABLE IF NOT EXISTS local_mod_metadata (
+                folder       TEXT PRIMARY KEY,
+                name         TEXT    NOT NULL,
+                package_id   TEXT    DEFAULT '',
+                workshop_id  TEXT    DEFAULT '',
+                dir_mtime    REAL    DEFAULT 0,
+                cached_at    REAL    DEFAULT 0
+            );
 
-        CREATE INDEX IF NOT EXISTS idx_dl_workshop ON download_history(workshop_id);
-        CREATE INDEX IF NOT EXISTS idx_dl_created   ON download_history(created_at);
-        CREATE INDEX IF NOT EXISTS idx_lmm_workshop ON local_mod_metadata(workshop_id);
+            CREATE INDEX IF NOT EXISTS idx_dl_workshop ON download_history(workshop_id);
+            CREATE INDEX IF NOT EXISTS idx_dl_created   ON download_history(created_at);
+            CREATE INDEX IF NOT EXISTS idx_lmm_workshop ON local_mod_metadata(workshop_id);
 
-        CREATE TABLE IF NOT EXISTS mod_tags (
-            folder TEXT NOT NULL,
-            tag    TEXT NOT NULL,
-            PRIMARY KEY (folder, tag)
-        );
+            CREATE TABLE IF NOT EXISTS mod_tags (
+                folder TEXT NOT NULL,
+                tag    TEXT NOT NULL,
+                PRIMARY KEY (folder, tag)
+            );
 
-        CREATE TABLE IF NOT EXISTS download_queue (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            workshop_id TEXT    NOT NULL UNIQUE,
-            name        TEXT    DEFAULT '',
-            status      TEXT    NOT NULL DEFAULT 'pending',
-            progress    REAL    DEFAULT 0.0,
-            msg         TEXT    DEFAULT '',
-            created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
-            updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
-        );
+            CREATE TABLE IF NOT EXISTS download_queue (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                workshop_id TEXT    NOT NULL UNIQUE,
+                name        TEXT    DEFAULT '',
+                status      TEXT    NOT NULL DEFAULT 'pending',
+                progress    REAL    DEFAULT 0.0,
+                msg         TEXT    DEFAULT '',
+                created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+                updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+            );
 
-        CREATE INDEX IF NOT EXISTS idx_dq_status ON download_queue(status);
-    """)
+            CREATE INDEX IF NOT EXISTS idx_dq_status ON download_queue(status);
+        """
+    )
     db.commit()
+    with _init_lock:
+        _initialized = True
 
 
 def record_download(
@@ -126,9 +174,8 @@ def record_download(
         " (workshop_id, mod_name, package_id, status, msg)"
         " VALUES (?,?,?,?,?)"
     )
-    with _lock:
-        cur = db.execute(sql, (workshop_id, mod_name, package_id, status, msg))
-        db.commit()
+    cur = db.execute(sql, (workshop_id, mod_name, package_id, status, msg))
+    db.commit()
     return cur.lastrowid or -1
 
 
@@ -153,13 +200,12 @@ def cache_mod(
     time_updated: int = 0,
 ) -> None:
     db = _get_conn()
-    with _lock:
-        db.execute(
-            """INSERT OR REPLACE INTO mod_cache (workshop_id, title, author, description, time_updated, cached_at)
-               VALUES (?,?,?,?,?,datetime('now'))""",
-            (workshop_id, title, author, description, time_updated),
-        )
-        db.commit()
+    db.execute(
+        """INSERT OR REPLACE INTO mod_cache (workshop_id, title, author, description, time_updated, cached_at)
+           VALUES (?,?,?,?,?,datetime('now'))""",
+        (workshop_id, title, author, description, time_updated),
+    )
+    db.commit()
 
 
 def get_cached_mod(workshop_id: str) -> dict | None:
@@ -182,9 +228,44 @@ def get_download_stats() -> dict:
 
 def clear_history() -> None:
     db = _get_conn()
-    with _lock:
-        db.execute("DELETE FROM download_history")
-        db.commit()
+    db.execute("DELETE FROM download_history")
+    db.commit()
+
+
+# ── local mod workshop_id index (folder → workshop_id) ──────────────
+# Used by downloader._find_existing to avoid a full directory scan on every
+# download. The index lives in local_mod_metadata.workshop_id; folder names
+# are the primary key. After a download we upsert the workshop_id so subsequent
+# lookups are O(1) SQLite queries instead of O(n) directory scans.
+
+
+def find_local_mods_by_workshop_id(workshop_id: str) -> list[str]:
+    """Return folder names whose PublishedFileId matches workshop_id."""
+    db = _get_conn()
+    rows = db.execute(
+        "SELECT folder FROM local_mod_metadata WHERE workshop_id = ?",
+        (workshop_id,),
+    ).fetchall()
+    return [r["folder"] for r in rows]
+
+
+def upsert_local_mod_workshop_id(folder: str, workshop_id: str) -> None:
+    """Record (folder → workshop_id) mapping in the metadata cache index."""
+    db = _get_conn()
+    db.execute(
+        """INSERT INTO local_mod_metadata (folder, name, workshop_id, dir_mtime, cached_at)
+           VALUES (?, '', ?, 0, ?)
+           ON CONFLICT(folder) DO UPDATE SET workshop_id = excluded.workshop_id""",
+        (folder, workshop_id, time.time()),
+    )
+    db.commit()
+
+
+def remove_local_mod_workshop_id(folder: str) -> None:
+    """Remove a folder mapping (e.g. after force-reinstall deletes a folder)."""
+    db = _get_conn()
+    db.execute("DELETE FROM local_mod_metadata WHERE folder = ?", (folder,))
+    db.commit()
 
 
 # ── queue persistence ──────────────────────────────────────────────
@@ -205,26 +286,23 @@ def queue_upsert(workshop_id: str, **kwargs: object) -> None:
     msg = safe.get("msg", "")
 
     sets = [f"{k} = ?" for k in safe]
-    # Parameter list: INSERT values first, then SET values
     params: list = [workshop_id, name, status, progress, msg]
     params.extend(safe[k] for k in safe)
 
     sets.append("updated_at = datetime('now')")
-    with _lock:
-        db.execute(
-            f"INSERT INTO download_queue (workshop_id, name, status, progress, msg)"  # nosec B608 — keys whitelisted by _QUEUE_UPDATE_COLUMNS
-            f" VALUES (?,?,?,?,?)"
-            f" ON CONFLICT(workshop_id) DO UPDATE SET {', '.join(sets)}",
-            params,
-        )
-        db.commit()
+    db.execute(
+        f"INSERT INTO download_queue (workshop_id, name, status, progress, msg)"  # nosec B608 — keys whitelisted by _QUEUE_UPDATE_COLUMNS
+        f" VALUES (?,?,?,?,?)"
+        f" ON CONFLICT(workshop_id) DO UPDATE SET {', '.join(sets)}",
+        params,
+    )
+    db.commit()
 
 
 def queue_delete(workshop_id: str) -> None:
     db = _get_conn()
-    with _lock:
-        db.execute("DELETE FROM download_queue WHERE workshop_id = ?", (workshop_id,))
-        db.commit()
+    db.execute("DELETE FROM download_queue WHERE workshop_id = ?", (workshop_id,))
+    db.commit()
 
 
 def queue_load_pending() -> list[dict]:
@@ -247,6 +325,5 @@ def queue_load_all() -> list[dict]:
 def queue_clear_done() -> None:
     """Remove completed/cancelled items from queue table."""
     db = _get_conn()
-    with _lock:
-        db.execute("DELETE FROM download_queue WHERE status IN ('done','cancelled')")
-        db.commit()
+    db.execute("DELETE FROM download_queue WHERE status IN ('done','cancelled')")
+    db.commit()

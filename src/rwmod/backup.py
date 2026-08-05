@@ -39,6 +39,13 @@ def backup_mod(
     Returns:
         Path to the created zip, or None if backup was skipped.
     """
+    # Defense in depth: only numeric workshop IDs may appear in backup
+    # filenames — a non-numeric value would let a crafted PublishedFileId.txt
+    # write the zip outside backup_dir.
+    if not workshop_id.isdigit():
+        _log.warning("拒绝备份非数字 workshop_id: %r", workshop_id)
+        return None
+
     source = mods_dir / folder_name
     if not source.is_dir():
         return None
@@ -77,6 +84,11 @@ def restore_mod(
     Returns:
         {"ok": bool, "msg": str, "restored_folder": str|None}
     """
+    # workshop_id comes from a URL path parameter — enforce numeric to stop
+    # directory-traversal in the temp dir name below.
+    if not workshop_id.isdigit():
+        return {"ok": False, "msg": f"无效的 Mod ID: {workshop_id}"}
+
     backups = _find_backups(backup_dir, workshop_id)
     if not backups:
         return {"ok": False, "msg": f"未找到 {workshop_id} 的备份"}
@@ -123,14 +135,29 @@ def restore_mod(
     folder_name = restored_src.name
     current = mods_dir / folder_name
 
+    # Swap atomically: rename the current folder aside, rename the restored
+    # copy into place, and roll the old one back on failure. rmtree-then-
+    # rename is NOT atomic — if RimWorld locks a DLL mid-delete, the mod is
+    # left half-deleted with nothing to restore.
+    swapped_old: Path | None = None
     try:
         if current.exists():
-            shutil.rmtree(current)
-        restored_src.rename(current)
+            swapped_old = mods_dir / (
+                f".rwmod_old_{folder_name}_{datetime.now(UTC).strftime('%H%M%S')}"
+            )
+            current.rename(swapped_old)
+        try:
+            restored_src.rename(current)
+        except OSError:
+            if swapped_old is not None and swapped_old.exists():
+                swapped_old.rename(current)  # roll back to pre-restore state
+            raise
     except OSError as e:
         shutil.rmtree(tmp_dir, ignore_errors=True)
         return {"ok": False, "msg": f"恢复失败: {e}"}
     finally:
+        if swapped_old is not None:
+            shutil.rmtree(swapped_old, ignore_errors=True)
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
     return {"ok": True, "msg": f"已恢复 {folder_name}", "restored_folder": folder_name}

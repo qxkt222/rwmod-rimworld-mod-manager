@@ -6,8 +6,12 @@ import json
 import logging
 import re
 import struct
-import xml.etree.ElementTree as ET
 from pathlib import Path
+
+from rwmod.xmlutil import parse_xml_root
+
+# Safe XML parser: rejects entity expansion / external entity (XXE) attacks.
+# Used for anything that can touch attacker-controlled XML (uploaded modlists).
 
 _log = logging.getLogger(__name__)
 
@@ -126,8 +130,8 @@ def _extract_from_dict(d: dict[str, object], ids: list[str]) -> None:
 def parse_mods_config(config_xml: Path) -> list[str]:
     """Extract mod packageIds from a RimSort ModsConfig.xml."""
     try:
-        root = ET.parse(config_xml).getroot()
-    except ET.ParseError as e:
+        root = parse_xml_root(config_xml)
+    except Exception as e:  # noqa: BLE001 — malformed or entity-laden XML
         _log.error("无法解析 ModsConfig.xml: %s", e)
         return []
     ids: list[str] = []
@@ -146,10 +150,10 @@ def get_installed_package_ids(mods_dir: Path) -> set[str]:
         about = d / "About" / "About.xml"
         if about.exists():
             try:
-                pkg = ET.parse(about).getroot().findtext("packageId", "")
+                pkg = parse_xml_root(about).findtext("packageId", "")
                 if pkg:
                     result.add(pkg)
-            except ET.ParseError as e:
+            except Exception as e:  # noqa: BLE001 — malformed or entity-laden XML
                 _log.debug("跳过损坏 About.xml %s: %s", d.name, e)
     return result
 
@@ -164,11 +168,13 @@ def resolve_workshop_ids(package_ids: list[str], mods_dir: Path) -> tuple[list[s
         about = d / "About" / "About.xml"
         if pf.exists() and about.exists():
             try:
-                pkg = ET.parse(about).getroot().findtext("packageId", "")
+                pkg = parse_xml_root(about).findtext("packageId", "")
                 wid = pf.read_text(encoding="utf-8").strip()
-                if pkg and wid:
+                # Only numeric IDs ever reach SteamCMD — a crafted
+                # PublishedFileId.txt must not inject command tokens.
+                if pkg and wid.isdigit():
                     pkg_to_wid[pkg] = wid
-            except (ET.ParseError, OSError) as e:
+            except Exception as e:  # noqa: BLE001 — malformed or entity-laden XML
                 _log.debug("跳过 %s: %s", d.name, e)
 
     known: list[str] = []

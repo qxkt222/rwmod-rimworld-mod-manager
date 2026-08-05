@@ -2,6 +2,7 @@
  * Backup panel — manage mod backups, restore previous versions.
  * Backups are created automatically when updating mods with force=true.
  */
+import { fetchJSON } from "../api";
 import { toast } from "../toast";
 
 interface BackupEntry {
@@ -23,8 +24,7 @@ async function refreshBackups() {
   container.innerHTML = '<span style="color:var(--gray-text)">加载中...</span>';
 
   try {
-    const resp = await fetch("/api/backups");
-    const data = await resp.json();
+    const data = await fetchJSON<{ backups: BackupEntry[]; backup_dir: string }>("/api/backups");
 
     if (!data.backups.length) {
       container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--gray-text)">暂无备份。更新 Mod 时会自动创建备份。</div>';
@@ -107,7 +107,7 @@ function renderBackupList(backups: BackupEntry[], container: HTMLElement) {
       const filename = (btn as HTMLElement).dataset.delete!;
       if (!confirm(`删除备份: ${filename}？`)) return;
       try {
-        await fetch(`/api/backups/${encodeURIComponent(filename)}`, { method: "DELETE" });
+        await fetchJSON(`/api/backups/${encodeURIComponent(filename)}`, { method: "DELETE" });
         toast("已删除", "success");
         refreshBackups();
       } catch (e: any) {
@@ -135,16 +135,18 @@ async function doRestore(workshopId: string, filename?: string) {
 
   try {
     const body = filename ? { filename } : {};
-    const resp = await fetch(`/api/backups/${workshopId}/restore`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = await resp.json();
+    const data = await fetchJSON<{ ok?: boolean; msg?: string; restored_folder?: string }>(
+      `/api/backups/${workshopId}/restore`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
     if (data.ok) {
       toast(`已恢复: ${data.restored_folder}`, "success");
     } else {
-      toast(data.msg, "error");
+      toast(data.msg || "回滚失败", "error");
     }
   } catch (e: any) {
     toast(`回滚失败: ${e.message}`, "error");
@@ -155,12 +157,11 @@ async function cleanupBackups() {
   const keep = prompt("每个 Mod 保留几个备份？", "5");
   if (!keep) return;
   try {
-    const resp = await fetch("/api/backups/cleanup", {
+    const data = await fetchJSON<{ deleted: number }>("/api/backups/cleanup", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ keep: parseInt(keep) }),
     });
-    const data = await resp.json();
     toast(`已清理 ${data.deleted} 个旧备份`, "success");
     refreshBackups();
   } catch (e: any) {

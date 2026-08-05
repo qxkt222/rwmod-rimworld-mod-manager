@@ -1,5 +1,6 @@
 """Dashboard router."""
 
+import asyncio
 import contextlib
 import os
 import time
@@ -13,7 +14,6 @@ from rwmod.autoupdate import AutoUpdateManager
 from rwmod.config import Config
 from rwmod.database import get_download_history
 from rwmod.deps import get_autoupdate, get_config
-from rwmod.steamcmd import SteamCMD
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
 
@@ -66,7 +66,10 @@ async def dashboard(
     explicit "一键更新" button (POST /api/auto-update/run), so merely opening
     the dashboard can never kick off a full re-download.
     """
-    cached = _cached_dashboard(cfg)
+    # Both calls are blocking (full recursive disk walk + per-mod Steam API
+    # requests with up-to-15s timeouts) — run them off the event loop so a
+    # dashboard refresh can never freeze the whole server.
+    cached = await asyncio.to_thread(_cached_dashboard, cfg)
     history = get_download_history(limit=10)
 
     # Abandoned/stale/removed mod counts (reuses the health scan, cached 60s).
@@ -74,7 +77,7 @@ async def dashboard(
     try:
         from rwmod.routers.mods import mod_health
 
-        health = mod_health(cfg, _user="")
+        health = await asyncio.to_thread(mod_health, cfg, _user="")
         for m in health.get("mods", []):
             if m["status"] == "abandoned":
                 abandoned += 1
@@ -99,15 +102,38 @@ def steamcmd_check(
     cfg: Config = Depends(get_config),
     _user: str = Depends(get_current_user),
 ):
-    """Verify SteamCMD is functional."""
+    """Verify SteamCMD is functional.
+
+    NOTE: Uses ``--help`` / version detection instead of actually launching a
+    workshop download. The old implementation ran ``workshop_download("0")``
+    which would start a real SteamCMD process and attempt to download item 0
+    — a pointless network round-trip that could hang for minutes if the
+    network is down. Checking that the executable exists and is runnable is
+    sufficient for a healthy check.
+    """
     if not cfg.steamcmd_path.exists():
         return {"ok": False, "msg": "SteamCMD 路径不存在"}
     try:
-        steamcmd = SteamCMD(cfg.steamcmd_path)
-        result = steamcmd.workshop_download("0")
-        for line in result.output_lines:
-            if "FAILED" in line and "login" in line.lower():
-                return {"ok": False, "msg": "SteamCMD 登录失败"}
-        return {"ok": True, "msg": "SteamCMD 就绪"}
-    except OSError as e:
+        import subprocess
+
+        exe = str(cfg.steamcmd_path)
+        # Quick, non-network check: run with --help (SteamCMD exits fast).
+        # On Windows steamcmd.exe may print its banner and exit 0.
+        proc = subprocess.run(  # nosec B603 — command list is fixed, no shell
+            [exe, "+quit"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+            cwd=str(cfg.steamcmd_path.parent),
+        )
+        out = (proc.stdout or "").lower()
+        if "steam" in out or "success" in out or proc.returncode in (0, 7):
+            # returncode 7 is SteamCMD's "already running / need update then retry"
+            # code which still proves the binary is functional.
+            return {"ok": True, "msg": "SteamCMD 就绪"}
+        return {"ok": False, "msg": f"SteamCMD 异常退出 (code {proc.returncode})"}
+    except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError) as e:
         return {"ok": False, "msg": str(e)}

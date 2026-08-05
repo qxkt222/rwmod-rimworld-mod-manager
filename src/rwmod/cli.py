@@ -240,7 +240,12 @@ def list_mods() -> None:
                 pass
 
         pf = d / "About" / "PublishedFileId.txt"
-        wid = pf.read_text(encoding="utf-8").strip() if pf.exists() else ""
+        wid = ""
+        if pf.exists():
+            try:
+                wid = pf.read_text(encoding="utf-8").strip()
+            except (OSError, UnicodeDecodeError):
+                wid = ""
         entries.append((d.name, name, pkg, wid))
 
     typer.echo(f"\n已安装 Mod ({len(entries)} 个):\n")

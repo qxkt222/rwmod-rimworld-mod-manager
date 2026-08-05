@@ -65,8 +65,11 @@ class _FakeResp:
         self._data = data
         self.headers = {"Content-Type": "application/zip"}
 
-    def read(self) -> bytes:
-        return self._data
+    def read(self, size: int = -1) -> bytes:
+        """Read up to `size` bytes (mimics urllib response.read())."""
+        if size is None or size < 0:
+            return self._data
+        return self._data[:size]
 
 
 def _make_zip_bytes(members: dict[str, str]) -> bytes:
@@ -96,7 +99,11 @@ class TestDownloadAndExtract:
         )
         cfg = Config(mods_dir=tmp_path / "Mods")
         (tmp_path / "Mods").mkdir()
-        with patch("rwmod.skymods.urllib.request.build_opener", return_value=_patch_opener(data)):
+        opener = _patch_opener(data)
+        with (
+            patch("rwmod.skymods._shared_opener", opener),
+            patch("rwmod.skymods._is_safe_download_url", return_value=True),
+        ):
             dest = _download_and_extract("https://example.com/x.zip", "123", cfg)
         assert dest is not None
         assert dest.exists()
@@ -105,9 +112,10 @@ class TestDownloadAndExtract:
     def test_html_response_returns_none(self, tmp_path: Path):
         cfg = Config(mods_dir=tmp_path / "Mods")
         (tmp_path / "Mods").mkdir()
-        with patch(
-            "rwmod.skymods.urllib.request.build_opener",
-            return_value=_patch_opener(b"<!DOCTYPE html><html></html>"),
+        opener = _patch_opener(b"<!DOCTYPE html><html></html>")
+        with (
+            patch("rwmod.skymods._shared_opener", opener),
+            patch("rwmod.skymods._is_safe_download_url", return_value=True),
         ):
             dest = _download_and_extract("https://example.com/x", "123", cfg)
         assert dest is None

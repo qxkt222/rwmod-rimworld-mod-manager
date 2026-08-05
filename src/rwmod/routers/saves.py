@@ -56,6 +56,9 @@ async def api_upload_and_analyze(
     _user: str = Depends(get_current_user),
 ):
     """Upload a .rws save file and get its mod requirements."""
+    from rwmod.routers.download import _reject_oversized
+
+    _reject_oversized(file)
     try:
         content = (await file.read()).decode("utf-8", errors="replace")
     except Exception as e:

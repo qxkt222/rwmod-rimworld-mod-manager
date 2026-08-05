@@ -3,7 +3,16 @@
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
+from collections import deque
 from pathlib import Path
+
+from rwmod.xmlutil import parse_xml_root
+
+# Safe XML parser: rejects entity-expansion / external-entity (XXE) attacks.
+# NOTE: defusedxml.ElementTree only provides *parsing* functions (parse,
+# fromstring, iterparse) — it deliberately does NOT expose Element/SubElement
+# builders. So we use defusedxml for parsing untrusted About.xml/ModsConfig.xml
+# and stdlib ET for *building* new XML documents (generate_modsconfig).
 
 __all__ = [
     "generate_modsconfig",
@@ -34,8 +43,7 @@ def generate_modsconfig(mods_dir: Path, output_path: Path | None = None) -> str:
         about = d / "About" / "About.xml"
         if about.exists():
             try:
-                tree = ET.parse(about)
-                pid = tree.getroot().findtext("packageId", "")
+                pid = parse_xml_root(about).findtext("packageId", "")
                 if pid:
                     package_ids.append(pid)
             except Exception:
@@ -60,8 +68,7 @@ def parse_modsconfig(path: Path) -> dict:
         return {"error": "file not found"}
 
     try:
-        tree = ET.parse(path)
-        root = tree.getroot()
+        root = parse_xml_root(path)
     except Exception as e:
         return {"error": str(e)}
 
@@ -96,7 +103,7 @@ def compare_modsconfig(modsconfig_path: Path, mods_dir: Path) -> dict:
         about = d / "About" / "About.xml"
         if about.exists():
             try:
-                pid = ET.parse(about).getroot().findtext("packageId", "")
+                pid = parse_xml_root(about).findtext("packageId", "")
                 if pid:
                     installed_ids.add(pid)
             except Exception:
@@ -138,7 +145,7 @@ def resolve_missing_workshop_ids(missing_package_ids: list[str], mods_dir: Path)
         about = d / "About" / "About.xml"
         if pf.exists() and about.exists():
             try:
-                pid = ET.parse(about).getroot().findtext("packageId", "")
+                pid = parse_xml_root(about).findtext("packageId", "")
                 wid = pf.read_text(encoding="utf-8").strip()
                 if pid and wid:
                     pkg_to_wid[pid] = wid
@@ -156,12 +163,16 @@ def resolve_missing_workshop_ids(missing_package_ids: list[str], mods_dir: Path)
 
 
 def _read_about(mod_dir: Path) -> ET.Element | None:
-    """Parse a mod's About.xml, returning the root element or None."""
+    """Parse a mod's About.xml, returning the root element or None.
+
+    Uses defusedxml (safe_parse) so a maliciously-crafted About.xml with
+    entity-expansion / external entities is rejected rather than exploited.
+    """
     about = mod_dir / "About" / "About.xml"
     if not about.exists():
         return None
     try:
-        return ET.parse(about).getroot()
+        return parse_xml_root(about)
     except Exception:
         return None
 
@@ -254,7 +265,11 @@ def sort_mods(mods_dir: Path, active_ids: list[str] | None = None) -> dict:
     middle_ids = [pid for pid in active_ids if pid not in top_ids and pid not in bottom_ids]
 
     def _topo(nodes: list[str]) -> tuple[list[str], list[list[str]]]:
-        """Kahn's algorithm. Returns (sorted, cycles)."""
+        """Kahn's algorithm. Returns (sorted, cycles).
+
+        Uses a deque for O(1) popleft instead of list.pop(0) which is O(n) —
+        important for load orders with thousands of mods.
+        """
         indegree = {pid: 0 for pid in nodes}
         adj: dict[str, list[str]] = {pid: [] for pid in nodes}
         for pid in nodes:
@@ -262,12 +277,13 @@ def sort_mods(mods_dir: Path, active_ids: list[str] | None = None) -> dict:
                 if dep in nodes:
                     adj[dep].append(pid)
                     indegree[pid] += 1
-        queue = [pid for pid in nodes if indegree[pid] == 0]
+        ready = [pid for pid in nodes if indegree[pid] == 0]
         # Stable order: sort by name for deterministic output
-        queue.sort(key=lambda p: rules[p]["name"].lower())
+        ready.sort(key=lambda p: rules[p]["name"].lower())
+        queue: deque[str] = deque(ready)
         result: list[str] = []
         while queue:
-            pid = queue.pop(0)
+            pid = queue.popleft()
             result.append(pid)
             for nxt in sorted(adj[pid], key=lambda p: rules[p]["name"].lower()):
                 indegree[nxt] -= 1

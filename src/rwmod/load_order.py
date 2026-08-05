@@ -12,6 +12,10 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from rwmod.xmlutil import parse_xml_root
+
+# Safe XML parser: rejects entity-expansion / external-entity (XXE) attacks.
+
 _log = logging.getLogger(__name__)
 
 # ── rule data ──────────────────────────────────────────────────────
@@ -55,9 +59,7 @@ def check_load_order(modsconfig_path: Path, mods_dir: Path) -> dict:
         return {"error": f"ModsConfig.xml 未找到: {modsconfig_path}"}
 
     try:
-        import xml.etree.ElementTree as ET
-
-        root = ET.parse(modsconfig_path).getroot()
+        root = parse_xml_root(modsconfig_path)
         active = root.find("activeMods")
         if active is None:
             return {"error": "ModsConfig.xml 中没有 activeMods"}
@@ -170,15 +172,13 @@ def _check_known_conflicts(order: list[str], mods_dir: Path, issues: list[dict])
 
         db = RimPyDB.get()
         # Collect workshop IDs from installed mods
-        import xml.etree.ElementTree as ET
-
         pkg_to_wid: dict[str, str] = {}
         for d in mods_dir.iterdir():
             pf = d / "About" / "PublishedFileId.txt"
             about = d / "About" / "About.xml"
             if pf.exists() and about.exists():
                 try:
-                    pid = ET.parse(about).getroot().findtext("packageId", "")
+                    pid = parse_xml_root(about).findtext("packageId", "")
                     wid = pf.read_text(encoding="utf-8").strip()
                     if pid and wid:
                         pkg_to_wid[pid.lower()] = wid
