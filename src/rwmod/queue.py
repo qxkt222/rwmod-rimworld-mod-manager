@@ -89,9 +89,10 @@ class DownloadQueue:
 
         For a *pending* item it is removed entirely; a *downloading* item is
         marked cancelled and kept in the list so the UI shows the cancellation.
-        The in-flight SteamCMD process can't be aborted mid-flight, but the
-        task is marked cancelled so its status is never flipped back to
-        done/failed afterwards.
+        The in-flight SteamCMD subprocess is killed (see steamcmd.cancel_download)
+        so the download actually stops instead of running to completion; the
+        task is additionally marked cancelled so its status is never flipped
+        back to done/failed afterwards.
         """
         cancelled_item: QueueItem | None = None
         removed_id: str | None = None
@@ -101,7 +102,7 @@ class DownloadQueue:
                     self._cancelled.add(mod_id)
                     if item.status == "downloading":
                         item.status = "cancelled"
-                        item.msg = "已取消（后台任务可能继续完成）"
+                        item.msg = "已取消（正在终止 SteamCMD）"
                         cancelled_item = item
                     else:
                         self.items.pop(i)
@@ -111,6 +112,13 @@ class DownloadQueue:
                 return False
         if cancelled_item is not None:
             self._persist(cancelled_item)
+            # Kill the live SteamCMD process, if any — best effort.
+            try:
+                from rwmod.steamcmd import cancel_download
+
+                cancel_download(mod_id)
+            except Exception:  # noqa: BLE001 — cancel must never fail the removal
+                pass
         elif removed_id is not None:
             self._db_delete(removed_id)
         return True
@@ -163,14 +171,25 @@ class DownloadQueue:
             self._wake.set()
 
     def stop(self) -> None:
-        """Cancel the persistent worker (called on server shutdown).
-
-        Must be awaited by the caller (or called via the running loop) so the
-        worker's finally-block can notify before the event loop closes.
-        """
+        """Cancel the persistent worker (called on server shutdown)."""
         worker = self._worker
         if worker is not None and not worker.done():
             worker.cancel()
+
+    async def wait_stopped(self, timeout: float = 3.0) -> None:
+        """Await the worker task after stop(), bounding the shutdown wait.
+
+        The in-flight SteamCMD download runs in a thread and may outlive the
+        event loop; we only need the worker task itself to finish so it stops
+        draining and writing to the DB before close_db().
+        """
+        worker = self._worker
+        if worker is None or worker.done():
+            return
+        try:
+            await asyncio.wait_for(asyncio.shield(worker), timeout=timeout)
+        except TimeoutError:
+            _log.warning("队列 worker 在 %ss 内未停止", timeout)
 
     async def _worker_loop(self) -> None:
         """Drain pending items forever until the queue is empty and idle."""
@@ -256,7 +275,7 @@ class DownloadQueue:
                     self._cancelled.discard(item.id)
             if cancelled:
                 item.status = "cancelled"
-                item.msg = "已取消（后台任务可能继续完成）"
+                item.msg = "已取消"
                 self._persist(item)
                 await self._notify()
                 return

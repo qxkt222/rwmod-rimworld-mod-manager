@@ -16,9 +16,12 @@ export function initConfigPanel() {
 async function exportBundle() {
   const status = document.getElementById("transfer-status");
   const includeBackups = (document.getElementById("export-include-backups") as HTMLInputElement)?.checked ?? true;
+  // Off by default: the bundle is meant to be shared, and the Steam API key
+  // is a credential. Opt in explicitly for own-machine migration.
+  const includeSecrets = (document.getElementById("export-include-secrets") as HTMLInputElement)?.checked ?? false;
   if (status) status.innerHTML = '<span style="color:var(--gray-text)">⏳ 正在导出...</span>';
   try {
-    await api.exportBundle(includeBackups);
+    await api.exportBundle(includeBackups, includeSecrets);
     if (status) status.innerHTML = '<span style="color:var(--green)">✅ 导出完成</span>';
     toast("导出完成", "success");
   } catch (e: any) {

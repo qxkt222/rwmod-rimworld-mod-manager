@@ -3,14 +3,66 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
+import signal
 import subprocess  # nosec B404 — subprocess is required to run SteamCMD
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
-__all__ = ["SteamCMD", "DownloadResult", "ErrorKind"]
+__all__ = [
+    "SteamCMD",
+    "DownloadResult",
+    "ErrorKind",
+    "cancel_download",
+    "active_download_count",
+]
 
 _log = logging.getLogger(__name__)
+
+# ── live-process registry ──────────────────────────────────────────
+# Queue.remove() can cancel an in-flight download, but SteamCMD keeps running
+# to completion (up to 10 min) unless we actually kill it. We track every
+# live SteamCMD subprocess here so cancel_download() can terminate it (and on
+# Windows send CTRL_BREAK so child processes — SteamCMD's own downloads — get
+# the message too, instead of orphaned steam processes lingering).
+_live_procs: dict[str, subprocess.Popen] = {}
+_live_guard = threading.Lock()
+
+
+def cancel_download(mod_id: str) -> bool:
+    """Kill the in-flight SteamCMD subprocess for ``mod_id``, if any.
+
+    Returns True if a process was found and terminated.
+    """
+    with _live_guard:
+        proc = _live_procs.get(mod_id)
+        if proc is None:
+            return False
+    _log.info("终止 SteamCMD 进程（mod %s, pid %s）", mod_id, proc.pid)
+    try:
+        if os.name == "nt":
+            # CTRL_BREAK_EVENT reaches the whole process group on Windows;
+            # proc.kill() alone would orphan SteamCMD's download children.
+            proc.send_signal(signal.CTRL_BREAK_EVENT)
+        else:
+            proc.terminate()
+        proc.kill()  # belt and braces — CTRL_BREAK is advisory on some setups
+    except (OSError, subprocess.SubprocessError):
+        with _live_guard:
+            _live_procs.pop(mod_id, None)
+        return False
+    with _live_guard:
+        _live_procs.pop(mod_id, None)
+    return True
+
+
+def active_download_count() -> int:
+    """Number of SteamCMD subprocesses currently running."""
+    with _live_guard:
+        return len(_live_procs)
+
 
 # ── error taxonomy ──────────────────────────────────────────────────
 # SteamCMD workshop_log.txt records the real reason for every failure.
@@ -135,9 +187,9 @@ class SteamCMD:
                 error_detail=f"无法启动 SteamCMD: {e}",
             )
 
-        # communicate() with a timeout provides a *real* deadline — the old
-        # line-by-line read + proc.wait() could hang forever if SteamCMD stalled
-        # without producing output.
+        # Register so queue.remove() / cancel_download() can kill this run.
+        with _live_guard:
+            _live_procs[mod_id] = proc
         try:
             out, _err = proc.communicate(timeout=self._TIMEOUT_MINUTES * 60)
         except subprocess.TimeoutExpired:
@@ -155,6 +207,10 @@ class SteamCMD:
                 error_kind=ErrorKind.TIMEOUT,
                 error_detail="SteamCMD 超时无响应",
             )
+        finally:
+            # The process has exited (or was killed) — free the registry slot.
+            with _live_guard:
+                _live_procs.pop(mod_id, None)
 
         lines: list[str] = [line for line in (out or "").splitlines() if line.strip()]
 

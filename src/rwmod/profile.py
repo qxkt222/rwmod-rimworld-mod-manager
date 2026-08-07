@@ -194,10 +194,3 @@ def _count_mods_in_xml(path: Path) -> int:
     except Exception:
         pass
     return 0
-
-
-def _safe_filename(name: str) -> str:
-    """Sanitize a profile name for use as a filename."""
-    from rwmod.utils import safe_filename
-
-    return safe_filename(name, allow_empty=False)

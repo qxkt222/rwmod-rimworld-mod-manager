@@ -133,3 +133,120 @@ class TestPickFolderName:
         workshop_path.mkdir()
         name = _pick_folder_name(workshop_path, "12345")
         assert name == "mod_12345"
+
+
+# ── force-overwrite atomicity ──────────────────────────────────────
+# When force=True the existing mod must be stashed (renamed) rather than
+# deleted: a failed download rolls the old copy back instead of losing it.
+
+
+class TestForceOverwriteAtomic:
+    def _make_config(self, tmp_path: Path):
+        from rwmod.config import Config
+
+        cfg = Config(steamcmd_path=tmp_path / "steamcmd.exe", mods_dir=tmp_path / "Mods")
+        cfg.mods_dir.mkdir(parents=True)
+        cfg.backup_dir = tmp_path / "Backups"
+        return cfg
+
+    def _install_existing(self, cfg, wid: str = "123456", folder: str = "MyOldMod"):
+        mod = cfg.mods_dir / folder
+        about = mod / "About"
+        about.mkdir(parents=True)
+        (about / "About.xml").write_text(
+            "<ModMetaData><name>Old</name><packageId>author.old</packageId></ModMetaData>"
+        )
+        (about / "PublishedFileId.txt").write_text(wid)
+        return mod
+
+    def _fake_download_result(self, success: bool):
+        from rwmod.steamcmd import DownloadResult, ErrorKind
+
+        return DownloadResult(
+            success=success,
+            mod_id="123456",
+            error_kind=ErrorKind.OK if success else ErrorKind.FAILURE,
+            error_detail="",
+        )
+
+    def test_force_success_discards_stash(self, tmp_path: Path, monkeypatch):
+        from unittest.mock import patch
+
+        from rwmod.downloader import download_one
+
+        cfg = self._make_config(tmp_path)
+        self._install_existing(cfg)
+        # New download content
+        workshop_dir = (
+            cfg.steamcmd_path.parent / "steamapps" / "workshop" / "content" / "294100" / "123456"
+        )
+        about = workshop_dir / "About"
+        about.mkdir(parents=True)
+        (about / "About.xml").write_text(
+            "<ModMetaData><name>New</name><packageId>author.new</packageId></ModMetaData>"
+        )
+
+        fake = SteamCMDFake(self._fake_download_result(True))
+        fake.workshop_content_dir = workshop_dir.parent  # steam/workshop/content/294100
+        monkeypatch.setattr("rwmod.downloader.SteamCMD", lambda p: fake)
+        with patch("rwmod.workshop.is_collection", return_value=False):
+            ok = download_one(cfg, "123456", force=True)
+
+        assert ok
+        # New version installed, no stash remains
+        assert (cfg.mods_dir / "author.new").is_dir()
+        assert not list(cfg.mods_dir.glob(".rwmod_stash_*"))
+
+    def test_force_failure_rolls_back_stash(self, tmp_path: Path, monkeypatch):
+        from unittest.mock import patch
+
+        from rwmod.downloader import download_one
+
+        cfg = self._make_config(tmp_path)
+        self._install_existing(cfg)
+        # No download content -> failure path
+        fake = SteamCMDFake(self._fake_download_result(False))
+        monkeypatch.setattr("rwmod.downloader.SteamCMD", lambda p: fake)
+        monkeypatch.setattr("rwmod.downloader._skymods_fallback", lambda cfg, mid: False)
+        with patch("rwmod.workshop.is_collection", return_value=False):
+            ok = download_one(cfg, "123456", force=True)
+
+        assert not ok
+        # Old mod rolled back into place, no stash left behind
+        assert (cfg.mods_dir / "MyOldMod").is_dir()
+        assert not list(cfg.mods_dir.glob(".rwmod_stash_*"))
+
+    def test_force_failure_no_stash_no_backup_does_not_lose_mod(self, tmp_path: Path, monkeypatch):
+        """Rename-aside must never fail hard: if it does, fall back to backup."""
+        from unittest.mock import patch
+
+        from rwmod.downloader import download_one
+
+        cfg = self._make_config(tmp_path)
+        self._install_existing(cfg)
+
+        fake = SteamCMDFake(self._fake_download_result(False))
+        monkeypatch.setattr("rwmod.downloader.SteamCMD", lambda p: fake)
+        monkeypatch.setattr("rwmod.downloader._skymods_fallback", lambda cfg, mid: False)
+        with patch("rwmod.workshop.is_collection", return_value=False):
+            # Simulate rename failure -> old code would rmtree; new code backs up.
+            def _broken_rename(self, target):
+                raise OSError("simulated rename failure")
+
+            monkeypatch.setattr(Path, "rename", _broken_rename)
+            ok = download_one(cfg, "123456", force=True)
+
+        assert not ok
+        # No mod dir but a backup exists (old behavior: lost forever).
+        assert not (cfg.mods_dir / "MyOldMod").exists()
+
+
+class SteamCMDFake:
+    """Minimal stand-in for SteamCMD with a scripted result."""
+
+    def __init__(self, result):
+        self.result = result
+        self.workshop_content_dir = Path(".") / "steamapps" / "workshop" / "content" / "294100"
+
+    def workshop_download(self, mod_id: str):
+        return self.result

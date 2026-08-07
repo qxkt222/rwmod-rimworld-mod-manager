@@ -20,6 +20,7 @@ from rwmod.parser import (
     parse_mods_config,
     resolve_workshop_ids,
 )
+from rwmod.utils import read_upload_limited
 from rwmod.workshop import fetch_collection_children, is_collection
 
 router = APIRouter(prefix="/api", tags=["download"])
@@ -97,9 +98,23 @@ def _build_existing_map(mods_dir: Path) -> dict[str, Path]:
 
 
 def _reject_oversized(file: UploadFile) -> None:
-    """Reject uploads larger than MAX_UPLOAD_BYTES without buffering the body."""
+    """Reject uploads larger than MAX_UPLOAD_BYTES without buffering the body.
+
+    Note: UploadFile.size is None for chunked uploads, so callers must use
+    read_upload_limited() for the actual byte enforcement — this pre-check
+    only rejects the case where Content-Length is known.
+    """
     if file.size is not None and file.size > MAX_UPLOAD_BYTES:
         raise HTTPException(413, f"文件过大（上限 {MAX_UPLOAD_BYTES // 1024} KB）")
+
+
+async def _read_modlist(file: UploadFile) -> str:
+    """Read an uploaded modlist, enforcing MAX_UPLOAD_BYTES regardless of
+    whether the client sent a Content-Length."""
+    content = await read_upload_limited(file, MAX_UPLOAD_BYTES)
+    if content is None:
+        raise HTTPException(413, f"文件过大（上限 {MAX_UPLOAD_BYTES // 1024} KB）")
+    return content.decode("utf-8")
 
 
 @router.post("/download")
@@ -224,7 +239,7 @@ async def import_file(
 ):
     cfg.validate()
     _reject_oversized(file)
-    content = (await file.read()).decode("utf-8")
+    content = await _read_modlist(file)
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as f:
         f.write(content)
         tmp = f.name
@@ -271,7 +286,9 @@ async def import_sort_api(
 ):
     cfg.validate()
     _reject_oversized(file)
-    content = await file.read()
+    content = await read_upload_limited(file, MAX_UPLOAD_BYTES)
+    if content is None:
+        raise HTTPException(413, f"文件过大（上限 {MAX_UPLOAD_BYTES // 1024} KB）")
     with tempfile.NamedTemporaryFile("wb", suffix=".xml", delete=False) as f:
         f.write(content)
         tmp = f.name

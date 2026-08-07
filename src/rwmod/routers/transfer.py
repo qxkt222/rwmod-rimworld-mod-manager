@@ -18,6 +18,26 @@ router = APIRouter(prefix="/api/transfer", tags=["transfer"])
 # .rwmod bundles can legitimately include large backups — 2GB still stops
 # unbounded uploads.
 _MAX_IMPORT_BYTES = 2 * 1024 * 1024 * 1024
+_CHUNK = 1024 * 1024  # 1 MB read/write chunk
+
+
+def _save_upload(file: UploadFile, path: Path, max_bytes: int) -> None:
+    """Stream an upload to disk with a hard byte cap.
+
+    UploadFile.size is None for chunked uploads, so the size check cannot
+    rely on Content-Length. Streaming to disk (instead of buffering the whole
+    body in RAM) also keeps a multi-GB .rwmod import off the heap.
+    """
+    total = 0
+    with path.open("wb") as fh:
+        while True:
+            chunk = file.file.read(_CHUNK)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                raise HTTPException(413, f"文件过大（上限 {max_bytes // (1024 * 1024)} MB）")
+            fh.write(chunk)
 
 
 @router.post("/export")
@@ -26,8 +46,15 @@ def api_export(
     cfg: Config = Depends(get_config),
     _user: str = Depends(get_current_user),
 ):
-    """Export profiles, tags, config & backups into a downloadable .rwmod file."""
-    include_backups = (payload or {}).get("include_backups", True)
+    """Export profiles, tags, config & backups into a downloadable .rwmod file.
+
+    include_secrets=False by default: the bundle is meant to be shared, and
+    the Steam API key is a credential. Opt in explicitly for machine-to-machine
+    migration.
+    """
+    body = payload or {}
+    include_backups = body.get("include_backups", True)
+    include_secrets = bool(body.get("include_secrets", False))
     ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
 
     # NamedTemporaryFile gives a unique name (two exports in the same second
@@ -35,7 +62,9 @@ def api_export(
     # once the response has been sent — no %TEMP% leak.
     with tempfile.NamedTemporaryFile("wb", suffix=".rwmod", delete=False) as f:
         out = Path(f.name)
-    result = export_bundle(cfg, out, include_backups=include_backups)
+    result = export_bundle(
+        cfg, out, include_backups=include_backups, include_secrets=include_secrets
+    )
     if not result["ok"]:
         out.unlink(missing_ok=True)
         raise HTTPException(500, "导出失败")
@@ -57,13 +86,12 @@ async def api_import(
     """Import a .rwmod bundle, restoring profiles, tags, config & backups."""
     if not file.filename or not file.filename.lower().endswith(".rwmod"):
         raise HTTPException(400, "请上传 .rwmod 文件")
-    if file.size is not None and file.size > _MAX_IMPORT_BYTES:
-        raise HTTPException(413, f"文件过大（上限 {_MAX_IMPORT_BYTES // (1024 * 1024)} MB）")
-    content = await file.read()
     with tempfile.NamedTemporaryFile("wb", suffix=".rwmod", delete=False) as f:
-        f.write(content)
         tmp = f.name
     try:
+        # Stream to disk with a hard cap — chunked uploads have size=None,
+        # and a multi-GB bundle must not be buffered in RAM.
+        _save_upload(file, Path(tmp), _MAX_IMPORT_BYTES)
         result = import_bundle(cfg, Path(tmp))
         if not result["ok"]:
             raise HTTPException(400, result.get("msg", "导入失败"))

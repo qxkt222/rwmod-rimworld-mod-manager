@@ -446,6 +446,9 @@ document.getElementById("app")!.innerHTML = /* html */ `
         <label class="check-label" style="margin-top:8px">
           <input type="checkbox" id="export-include-backups" checked /> 导出时包含备份文件
         </label>
+        <label class="check-label" style="margin-top:4px">
+          <input type="checkbox" id="export-include-secrets" /> 包含 Steam API 密钥（仅限自己迁移用，打包分享时勿勾选）
+        </label>
         <div id="transfer-status" style="margin-top:8px;font-size:12px"></div>
       </div>
     </div>
