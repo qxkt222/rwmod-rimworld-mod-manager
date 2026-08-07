@@ -200,3 +200,52 @@ class TestWorkshopDownload:
             result = steamcmd.workshop_download("123")
         assert not result.success
         assert result.error_kind == ErrorKind.UNKNOWN
+
+
+class TestCancelDownload:
+    """cancel_download() must kill a registered in-flight SteamCMD process."""
+
+    def test_cancel_registered_process(self, steamcmd: SteamCMD):
+        from unittest.mock import MagicMock
+
+        from rwmod.steamcmd import _live_procs, cancel_download
+
+        proc = MagicMock()
+        _live_procs.clear()
+        _live_procs["12345"] = proc
+        try:
+            assert cancel_download("12345") is True
+            # CTRL_BREAK (or terminate on POSIX) then kill as belt-and-braces.
+            assert proc.kill.called
+        finally:
+            _live_procs.clear()
+
+    def test_cancel_unknown_mod_returns_false(self):
+        from rwmod.steamcmd import _live_procs, cancel_download
+
+        _live_procs.clear()
+        try:
+            assert cancel_download("99999") is False
+        finally:
+            _live_procs.clear()
+
+    def test_workshop_download_unregisters_after_finish(self, steamcmd: SteamCMD):
+        """The registry must not leak: after a download finishes the slot is freed."""
+        from unittest.mock import MagicMock, patch
+
+        from rwmod.steamcmd import _live_procs
+
+        _live_procs.clear()
+        content = steamcmd.workshop_content_dir / "123"
+        content.mkdir(parents=True)
+        log = steamcmd.steam_dir / "logs" / "workshop_log.txt"
+        log.parent.mkdir(parents=True)
+        log.write_text("[AppID 294100] Download item 123 result : OK\n")
+
+        proc = MagicMock()
+        proc.communicate.return_value = ("[AppID 294100] Download item 123 result : OK\n", "")
+        proc.stdout = object()
+        with patch("rwmod.steamcmd.subprocess.Popen", return_value=proc):
+            result = steamcmd.workshop_download("123")
+        assert result.success
+        assert "123" not in _live_procs

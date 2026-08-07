@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.5.0] - 2026-08-07
+
+### 安全加固（面向公开发布 + 局域网部署）
+- **上传大小限制强制生效** — 修复 `UploadFile.size` 为 `None`（chunked 上传）时
+  大小检查被跳过、整个请求体被读入内存的问题：所有上传端点改为按字节硬上限读取
+  （`utils.read_upload_limited`）；`.rwmod` 导入改为流式写盘 + 计数截断，多 GB 包
+  不再占满内存（`routers/transfer.py`, `routers/mods.py`, `routers/download.py`）
+- **配置路径校验** — `/api/config` 拒绝相对路径、磁盘根目录、程序运行目录与
+  Windows 系统目录（`C:\Windows` 等），防止备份/删除接口触碰系统路径
+  （`routers/config.py`）
+- **`.rwmod` 导出默认脱敏** — Steam API 密钥不再随包导出（默认只记录"是否有密钥"，
+  手动勾选"包含密钥"才会写入，用于自机迁移）；前端配置面板新增该开关
+  （`transfer.py`, `frontend/`）
+- **WS token 改走子协议** — `/ws` 认证令牌从 `?token=` 查询参数迁移到
+  `Sec-WebSocket-Protocol`（`rwmod.<token>`），避免令牌进入访问日志/浏览器历史；
+  旧 `?token=` 形式仍兼容（`server.py`, `frontend/src/ws.ts`）
+
+### 行为改进
+- **force 覆盖原子化** — 覆盖安装改为"旧版 rename 暂存 → 下载成功再删旧"，下载
+  失败自动回滚，不再有"先删后下、失败即丢 mod"的窗口（`downloader.py`）
+- **取消下载真正终止 SteamCMD** — 队列取消会终止正在运行的 SteamCMD 进程
+  （Windows 发送 CTRL_BREAK 信号覆盖子进程），不再是"标记取消但后台继续跑"
+  （`steamcmd.py`, `queue.py`）
+
+### 架构 / 数据
+- **SQLite 迁移框架** — `PRAGMA user_version` 版本化迁移，老数据库原地升级不丢数据
+  （`database.py`）
+- **更新时间戳入库** — mod 的 `.rwmod_last_updated` 标记文件迁入
+  `local_mod_metadata.last_updated`，不再污染游戏目录、兼容只读挂载；老标记文件
+  自动迁移并清理（`database.py`, `workshop.py`, `downloader.py`, `cache_db.py`）
+- **DB 访问收敛** — `_get_conn` 公开为 `get_conn`，移除未使用的 `get_db` 依赖
+- **配置修正** — `steamcmd_path` 尊重用户配置的合法路径，仅当配置路径失效时回退内置
+  副本（`config.py`）
+- **清理** — 移除 no-op 的 `_try_broadcast` 死代码、`profile._safe_filename` 重复助手；
+  合集页面爬取复用共享 HTTP 连接（`workshop.py`）
+
+### 测试
+- 新增批次测试：上传限读、配置路径校验、`.rwmod` 脱敏、WS 子协议认证、
+  force 覆盖回滚、SteamCMD 取消、schema 迁移、`last_updated` 保留与旧标记迁移
+  （`tests/test_security_batch.py`, `tests/test_downloader.py`, `tests/test_steamcmd.py`,
+  `tests/test_database.py`, `tests/test_workshop.py`, `tests/test_config.py`）
+- 离线测试套件：**254 通过**；ruff / mypy（strict）全绿
+
 ## [0.4.5] - 2026-08-05
 
 ### 安全 (P1) — 代码审查专项修复

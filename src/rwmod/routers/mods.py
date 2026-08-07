@@ -13,6 +13,7 @@ from rwmod.deps import get_config
 from rwmod.metadata import read_mod_metadata
 from rwmod.mod_cache import get_cached_mods
 from rwmod.routers.download import _bounded_download
+from rwmod.utils import read_upload_limited
 from rwmod.workshop import check_mod_updates, fetch_item_details
 
 router = APIRouter(prefix="/api/mods", tags=["mods"])
@@ -50,9 +51,9 @@ def _cached_mod_list(cfg: Config) -> list[dict]:
 
     # Batch-load all folder→tags mappings in ONE query (avoids N+1
     # per-mod get_tags() calls — a massive speedup for hundreds of mods).
-    from rwmod.database import _get_conn
+    from rwmod.database import get_conn
 
-    db = _get_conn()
+    db = get_conn()
     rows = db.execute("SELECT folder, tag FROM mod_tags ORDER BY folder, tag").fetchall()
     tags_by_folder: dict[str, list[str]] = {}
     for r in rows:
@@ -236,7 +237,9 @@ async def import_local_mod(
         raise HTTPException(400, "请上传 .zip 文件")
     _reject_oversized_mod(file)
 
-    content = await file.read()
+    content = await read_upload_limited(file, _MAX_MOD_ZIP_BYTES)
+    if content is None:
+        raise HTTPException(413, f"文件过大（上限 {_MAX_MOD_ZIP_BYTES // (1024 * 1024)} MB）")
     if not content:
         raise HTTPException(400, "文件为空")
 

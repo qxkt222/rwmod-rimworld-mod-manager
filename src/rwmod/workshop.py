@@ -243,7 +243,9 @@ def _scrape_collection_page(collection_id: str, timeout: int = 30) -> list[str]:
             url,
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
         )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310 — HTTPS-only Steam URL
+        # Reuse the shared opener (HTTP keep-alive) instead of a fresh
+        # TCP+TLS handshake per collection page.
+        with _shared_opener.open(req, timeout=timeout) as resp:  # nosec B310 — HTTPS-only Steam URL
             html = resp.read().decode("utf-8", errors="replace")
     except Exception:
         return []
@@ -395,6 +397,8 @@ def check_mod_updates(mods_dir: str) -> list[dict]:
 
     import time as _time
 
+    from rwmod.database import get_last_updated, set_last_updated
+
     updates: list[dict] = []
     now = int(_time.time())
 
@@ -405,17 +409,25 @@ def check_mod_updates(mods_dir: str) -> list[dict]:
 
         remote_time = remote.get("time_updated", 0)
         mod_dir = mods_path / local["folder"]
-        ts_file = mod_dir / ".rwmod_last_updated"
 
-        # Read locally stored timestamp
-        local_time = 0
-        if ts_file.exists():
-            with contextlib.suppress(ValueError, OSError):
-                local_time = int(ts_file.read_text(encoding="utf-8").strip())
+        # Read the locally stored timestamp — from the DB (migrated away from
+        # per-mod .rwmod_last_updated marker files, which pollute the user's
+        # game directory and break under read-only mounts).
+        local_time = get_last_updated(local["folder"])
+        if local_time == 0:
+            # Legacy upgrade path: pick up the old marker file value so an
+            # existing install doesn't suddenly treat every mod as updated.
+            ts_file = mod_dir / ".rwmod_last_updated"
+            if ts_file.exists():
+                with contextlib.suppress(ValueError, OSError):
+                    local_time = int(ts_file.read_text(encoding="utf-8").strip())
+                if local_time:
+                    set_last_updated(local["folder"], local_time)
+                    ts_file.unlink(missing_ok=True)
 
         # First-time check: no local timestamp → seed it, don't flag as outdated
         if local_time == 0:
-            ts_file.write_text(str(now), encoding="utf-8")
+            set_last_updated(local["folder"], now)
             continue
 
         if remote_time <= local_time:

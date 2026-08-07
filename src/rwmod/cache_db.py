@@ -11,7 +11,7 @@ import os
 import time
 from pathlib import Path
 
-from rwmod.database import _get_conn
+from rwmod.database import get_conn
 from rwmod.metadata import ModMeta, read_mod_metadata
 
 
@@ -34,7 +34,7 @@ def get_or_refresh_metas(mods_dir: Path) -> list[ModMeta]:
         _clear_all()
         return []
 
-    db = _get_conn()
+    db = get_conn()
     cached = {
         row["folder"]: dict(row)
         for row in db.execute("SELECT * FROM local_mod_metadata").fetchall()
@@ -82,10 +82,20 @@ def get_or_refresh_metas(mods_dir: Path) -> list[ModMeta]:
             for m in needs_upsert:
                 mod_path = mods_dir / m.folder
                 mtime = mod_path.stat().st_mtime if mod_path.is_dir() else 0
+                # Explicit column list + ON CONFLICT UPDATE — plain INSERT OR
+                # REPLACE would delete the row first, silently wiping the
+                # last_updated timestamp (and any other new column) every time
+                # a mod folder's mtime changes.
                 db.execute(
-                    """INSERT OR REPLACE INTO local_mod_metadata
+                    """INSERT INTO local_mod_metadata
                        (folder, name, package_id, workshop_id, dir_mtime, cached_at)
-                       VALUES (?,?,?,?,?,?)""",
+                       VALUES (?,?,?,?,?,?)
+                       ON CONFLICT(folder) DO UPDATE SET
+                         name = excluded.name,
+                         package_id = excluded.package_id,
+                         workshop_id = excluded.workshop_id,
+                         dir_mtime = excluded.dir_mtime,
+                         cached_at = excluded.cached_at""",
                     (m.folder, m.name, m.package_id, m.workshop_id, mtime, now),
                 )
 
@@ -94,7 +104,7 @@ def get_or_refresh_metas(mods_dir: Path) -> list[ModMeta]:
 
 def invalidate_folder(folder: str) -> None:
     """Remove a single mod folder from the persistent cache."""
-    db = _get_conn()
+    db = get_conn()
     with db:
         db.execute("DELETE FROM local_mod_metadata WHERE folder = ?", (folder,))
 
@@ -105,6 +115,6 @@ def invalidate_all() -> None:
 
 
 def _clear_all() -> None:
-    db = _get_conn()
+    db = get_conn()
     with db:
         db.execute("DELETE FROM local_mod_metadata")

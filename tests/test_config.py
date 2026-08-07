@@ -61,17 +61,37 @@ class TestConfigLoad:
                 assert cfg.mods_dir == Path("E:/MyMods")
                 assert cfg.backup_dir == Path("F:/Backups")
 
-    def test_auto_prefers_builtin(self, tmp_path: Path):
+    def test_respects_user_configured_steamcmd(self, tmp_path: Path):
+        """A valid user-configured steamcmd_path must be honored — the old code
+        silently overrode it whenever the bundled copy existed, making the
+        config panel's steamcmd field appear to do nothing."""
         f = tmp_path / ".rwmod.toml"
         f.write_text(
-            'steamcmd_path = "D:/old/steamcmd.exe"\n'
+            'steamcmd_path = "D:/user/steamcmd/steamcmd.exe"\n'
             'mods_dir = "D:/RimWorld/Mods"\n'
             'rimworld_dir = "D:/RimWorld"\n'
         )
         with patch.object(Config, "CONFIG_PATH", f):
+            # Both the builtin and the user path exist → user wins.
             with patch.object(Path, "exists", return_value=True):
                 cfg = Config.load()
+                assert str(cfg.steamcmd_path).replace("\\", "/") == "D:/user/steamcmd/steamcmd.exe"
+
+    def test_falls_back_to_builtin_when_configured_broken(self, tmp_path: Path):
+        """A stale configured path (file deleted) falls back to the bundled
+        SteamCMD instead of failing validation."""
+        f = tmp_path / ".rwmod.toml"
+        f.write_text(
+            'steamcmd_path = "D:/gone/steamcmd.exe"\n'
+            'mods_dir = "D:/RimWorld/Mods"\n'
+            'rimworld_dir = "D:/RimWorld"\n'
+        )
+        with patch.object(Config, "CONFIG_PATH", f):
+            # Builtin exists, user path does not → builtin.
+            with patch.object(Path, "exists", lambda self: "gone" not in str(self)):
+                cfg = Config.load()
                 assert "steamcmd" in str(cfg.steamcmd_path).lower()
+                assert "gone" not in str(cfg.steamcmd_path)
 
 
 class TestConfigSave:

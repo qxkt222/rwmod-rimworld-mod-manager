@@ -97,11 +97,11 @@ export const api = {
     }),
 
   /** Export a .rwmod bundle (profiles/backups/tags/config) as a downloadable file. */
-  exportBundle: async (includeBackups: boolean): Promise<void> => {
+  exportBundle: async (includeBackups: boolean, includeSecrets = false): Promise<void> => {
     const resp = await fetch(`${BASE}/transfer/export`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ include_backups: includeBackups }),
+      body: JSON.stringify({ include_backups: includeBackups, include_secrets: includeSecrets }),
     });
     if (!resp.ok) {
       const body = await resp.json().catch(() => ({}));

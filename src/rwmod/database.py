@@ -3,6 +3,11 @@
 Uses a per-thread connection pool to avoid per-query open/close overhead
 while still being safe across FastAPI's threadpool workers. Reads and writes
 go through WAL mode so concurrent access is efficient without a global lock.
+
+Schema versioning: ``PRAGMA user_version`` tracks the schema level. ``init_db``
+runs the base DDL then applies any pending migrations in order, so existing
+databases upgrade in place (no data loss) and fresh databases build the full
+schema in one pass.
 """
 
 from __future__ import annotations
@@ -14,7 +19,9 @@ from pathlib import Path
 
 __all__ = [
     "DB_PATH",
+    "SCHEMA_VERSION",
     "init_db",
+    "get_conn",
     "record_download",
     "get_download_history",
     "get_download_stats",
@@ -24,9 +31,29 @@ __all__ = [
     "find_local_mods_by_workshop_id",
     "upsert_local_mod_workshop_id",
     "remove_local_mod_workshop_id",
+    "get_last_updated",
+    "set_last_updated",
 ]
 
 DB_PATH = Path.home() / ".rwmod.db"
+
+# Current schema version. Bump when adding a new migration to _MIGRATIONS.
+SCHEMA_VERSION = 1
+
+# Ordered schema migrations. Each entry is (target_version, SQL script).
+# init_db() applies every migration whose version is > the database's current
+# PRAGMA user_version, inside a transaction — an interrupted migration rolls
+# back cleanly and re-runs on the next start.
+_MIGRATIONS: list[tuple[int, str]] = [
+    (
+        1,
+        """
+        -- v1: mod "last checked/updated" timestamp moves from a marker file
+        -- inside each mod folder (.rwmod_last_updated) into the metadata DB.
+        ALTER TABLE local_mod_metadata ADD COLUMN last_updated INTEGER DEFAULT 0;
+        """,
+    ),
+]
 
 # Per-thread connections: each thread gets its own sqlite3.Connection so
 # concurrent FastAPI workers never contend on a single connection.
@@ -41,12 +68,12 @@ _initialized = False
 _all_conns: set[sqlite3.Connection] = set()
 # Connections closed by close_db() — sqlite3.Connection has no __dict__, so
 # we can't tag the object; track by id() so threads that still hold a
-# reference rebuild on their next _get_conn() instead of hitting
+# reference rebuild on their next get_conn() instead of hitting
 # "Cannot operate on a closed database".
 _closed_conn_ids: set[int] = set()
 
 
-def _get_conn() -> sqlite3.Connection:
+def get_conn() -> sqlite3.Connection:
     """Return a per-thread persistent connection, creating it lazily."""
     conn: sqlite3.Connection | None = getattr(_local, "conn", None)
     # close_db() closes every registered connection from the shutting-down
@@ -58,9 +85,9 @@ def _get_conn() -> sqlite3.Connection:
         conn = None
     if conn is not None:
         return conn
-    # NOTE: do NOT call _get_conn() while holding _init_lock — the PRAGMA
+    # NOTE: do NOT call get_conn() while holding _init_lock — the PRAGMA
     # below can block on other connections and _init_lock is non-reentrant,
-    # which deadlocks init_db() (it calls _get_conn inside the same lock).
+    # which deadlocks init_db() (it calls get_conn inside the same lock).
     conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
@@ -95,13 +122,25 @@ def close_db() -> None:
 
 def init_db() -> None:
     global _initialized
-    # Get the connection OUTSIDE the lock: _get_conn() itself takes _init_lock
+    # Get the connection OUTSIDE the lock: get_conn() itself takes _init_lock
     # (to register in _all_conns) — calling it here inside the lock would
-    # deadlock (non-reentrant). PRAGMAs in _get_conn can also block on other
+    # deadlock (non-reentrant). PRAGMAs in get_conn can also block on other
     # threads' connections.
-    db = _get_conn()
-    if _initialized:
-        return
+    db = get_conn()
+    with _init_lock:
+        if _initialized:
+            return
+        _apply_migrations(db)
+        _initialized = True
+
+
+def _apply_migrations(db: sqlite3.Connection) -> None:
+    """Create the base schema, then apply any pending migrations.
+
+    ``PRAGMA user_version`` records the applied schema level; every migration
+    in _MIGRATIONS with a higher version is run inside its own transaction.
+    A fresh database gets the base DDL then all migrations in order.
+    """
     db.executescript(
         """
             CREATE TABLE IF NOT EXISTS download_history (
@@ -157,8 +196,19 @@ def init_db() -> None:
         """
     )
     db.commit()
-    with _init_lock:
-        _initialized = True
+
+    current = db.execute("PRAGMA user_version").fetchone()[0]
+    for version, sql in _MIGRATIONS:
+        if version <= current:
+            continue
+        db.execute("BEGIN")
+        try:
+            db.executescript(sql)
+            db.execute(f"PRAGMA user_version = {version}")
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
 
 
 def record_download(
@@ -168,7 +218,7 @@ def record_download(
     package_id: str = "",
     msg: str = "",
 ) -> int:
-    db = _get_conn()
+    db = get_conn()
     sql = (
         "INSERT INTO download_history"
         " (workshop_id, mod_name, package_id, status, msg)"
@@ -180,7 +230,7 @@ def record_download(
 
 
 def get_download_history(limit: int = 50, status: str = "") -> list[dict]:
-    db = _get_conn()
+    db = get_conn()
     query = "SELECT * FROM download_history"
     params: list = []
     if status:
@@ -199,7 +249,7 @@ def cache_mod(
     description: str = "",
     time_updated: int = 0,
 ) -> None:
-    db = _get_conn()
+    db = get_conn()
     db.execute(
         """INSERT OR REPLACE INTO mod_cache (workshop_id, title, author, description, time_updated, cached_at)
            VALUES (?,?,?,?,?,datetime('now'))""",
@@ -209,13 +259,13 @@ def cache_mod(
 
 
 def get_cached_mod(workshop_id: str) -> dict | None:
-    db = _get_conn()
+    db = get_conn()
     row = db.execute("SELECT * FROM mod_cache WHERE workshop_id = ?", (workshop_id,)).fetchone()
     return dict(row) if row else None
 
 
 def get_download_stats() -> dict:
-    db = _get_conn()
+    db = get_conn()
     total = db.execute("SELECT COUNT(*) as n FROM download_history").fetchone()["n"]
     success = db.execute(
         "SELECT COUNT(*) as n FROM download_history WHERE status='success'"
@@ -227,7 +277,7 @@ def get_download_stats() -> dict:
 
 
 def clear_history() -> None:
-    db = _get_conn()
+    db = get_conn()
     db.execute("DELETE FROM download_history")
     db.commit()
 
@@ -241,7 +291,7 @@ def clear_history() -> None:
 
 def find_local_mods_by_workshop_id(workshop_id: str) -> list[str]:
     """Return folder names whose PublishedFileId matches workshop_id."""
-    db = _get_conn()
+    db = get_conn()
     rows = db.execute(
         "SELECT folder FROM local_mod_metadata WHERE workshop_id = ?",
         (workshop_id,),
@@ -251,7 +301,7 @@ def find_local_mods_by_workshop_id(workshop_id: str) -> list[str]:
 
 def upsert_local_mod_workshop_id(folder: str, workshop_id: str) -> None:
     """Record (folder → workshop_id) mapping in the metadata cache index."""
-    db = _get_conn()
+    db = get_conn()
     db.execute(
         """INSERT INTO local_mod_metadata (folder, name, workshop_id, dir_mtime, cached_at)
            VALUES (?, '', ?, 0, ?)
@@ -263,8 +313,38 @@ def upsert_local_mod_workshop_id(folder: str, workshop_id: str) -> None:
 
 def remove_local_mod_workshop_id(folder: str) -> None:
     """Remove a folder mapping (e.g. after force-reinstall deletes a folder)."""
-    db = _get_conn()
+    db = get_conn()
     db.execute("DELETE FROM local_mod_metadata WHERE folder = ?", (folder,))
+    db.commit()
+
+
+# ── last-updated timestamp (migrated from per-mod .rwmod_last_updated) ──
+
+
+def get_last_updated(folder: str) -> int:
+    """Return the stored update-check timestamp for a mod folder (0 if unset)."""
+    db = get_conn()
+    row = db.execute(
+        "SELECT last_updated FROM local_mod_metadata WHERE folder = ?", (folder,)
+    ).fetchone()
+    if row is None or row["last_updated"] is None:
+        return 0
+    return int(row["last_updated"])
+
+
+def set_last_updated(folder: str, timestamp: int) -> None:
+    """Record when a mod folder was last compared against Steam Workshop.
+
+    Upserts so a freshly downloaded mod (no metadata row yet) gets its
+    timestamp recorded too.
+    """
+    db = get_conn()
+    db.execute(
+        """INSERT INTO local_mod_metadata (folder, name, last_updated)
+           VALUES (?, '', ?)
+           ON CONFLICT(folder) DO UPDATE SET last_updated = excluded.last_updated""",
+        (folder, timestamp),
+    )
     db.commit()
 
 
@@ -278,7 +358,7 @@ _QUEUE_UPDATE_COLUMNS = frozenset({"name", "status", "progress", "msg"})
 
 def queue_upsert(workshop_id: str, **kwargs: object) -> None:
     """Insert or update a queue item. kwargs: name, status, progress, msg."""
-    db = _get_conn()
+    db = get_conn()
     safe = {k: v for k, v in kwargs.items() if k in _QUEUE_UPDATE_COLUMNS}
     name = safe.get("name", "")
     status = safe.get("status", "pending")
@@ -300,14 +380,14 @@ def queue_upsert(workshop_id: str, **kwargs: object) -> None:
 
 
 def queue_delete(workshop_id: str) -> None:
-    db = _get_conn()
+    db = get_conn()
     db.execute("DELETE FROM download_queue WHERE workshop_id = ?", (workshop_id,))
     db.commit()
 
 
 def queue_load_pending() -> list[dict]:
     """Load pending/downloading items from DB (for restart recovery)."""
-    db = _get_conn()
+    db = get_conn()
     rows = db.execute(
         "SELECT * FROM download_queue WHERE status IN ('pending','downloading')"
         " ORDER BY created_at ASC"
@@ -317,13 +397,13 @@ def queue_load_pending() -> list[dict]:
 
 def queue_load_all() -> list[dict]:
     """Load all queue items from DB."""
-    db = _get_conn()
+    db = get_conn()
     rows = db.execute("SELECT * FROM download_queue ORDER BY created_at ASC").fetchall()
     return [dict(r) for r in rows]
 
 
 def queue_clear_done() -> None:
     """Remove completed/cancelled items from queue table."""
-    db = _get_conn()
+    db = get_conn()
     db.execute("DELETE FROM download_queue WHERE status IN ('done','cancelled')")
     db.commit()

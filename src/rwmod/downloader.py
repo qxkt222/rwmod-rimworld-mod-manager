@@ -15,16 +15,6 @@ from rwmod.steamcmd import DownloadResult, ErrorKind, SteamCMD
 from rwmod.utils import extract_mod_id, safe_filename
 from rwmod.xmlutil import parse_about_field
 
-
-def _try_broadcast() -> None:
-    """Notify WebSocket clients of queue changes, if server is running.
-
-    The WebSocket endpoint in server.py is a lightweight echo/ping handler
-    without a connection registry, so real broadcasts are not implemented yet.
-    This is intentionally a no-op hook for future use.
-    """
-
-
 __all__ = ["download_one", "extract_mod_id", "_find_existing", "_pick_folder_name"]
 
 _log = logging.getLogger(__name__)
@@ -165,19 +155,31 @@ def _download_one_unlocked(
     """
     steamcmd = SteamCMD(config.steamcmd_path)
 
+    # Force-overwrite: the existing mod is renamed aside (not deleted) so a
+    # failed download can roll it back. Deleting first (the old rmtree) left
+    # a window where a failed download with no backup permanently lost the mod.
     old_backed_up = False
     existing = _find_existing(config.mods_dir, mod_id)
+    stashed: Path | None = None
     if existing:
         if force:
-            _log.info("覆盖前备份: %s", existing.name)
+            _log.info("覆盖前暂存旧版: %s", existing.name)
+            stashed = config.mods_dir / (
+                f".rwmod_stash_{safe_filename(existing.name, allow_empty=False)}_{int(time.time())}"
+            )
             try:
-                from rwmod.backup import backup_mod
+                existing.rename(stashed)
+                old_backed_up = True
+            except OSError as e:
+                _log.warning("暂存旧版失败（将以备份方式覆盖）: %s", e)
+                try:
+                    from rwmod.backup import backup_mod
 
-                if backup_mod(config.mods_dir, mod_id, existing.name, config.backup_dir):
-                    old_backed_up = True
-            except Exception as e:
-                _log.warning("备份失败: %s", e)
-            shutil.rmtree(existing)
+                    if backup_mod(config.mods_dir, mod_id, existing.name, config.backup_dir):
+                        old_backed_up = True
+                except Exception as e2:  # noqa: BLE001
+                    _log.warning("备份失败: %s", e2)
+                shutil.rmtree(existing)
         else:
             _log.info("已安装: %s", existing.name)
             return True
@@ -202,7 +204,6 @@ def _download_one_unlocked(
                     _log.info("[%s/%s] 合集子项 %s", i, len(children), cid)
                     if download_one(config, cid, force=force):
                         ok += 1
-                    _try_broadcast()
                 return ok > 0
             for cid in children:
                 if force or not _find_existing(config.mods_dir, cid):
@@ -266,13 +267,24 @@ def _download_one_unlocked(
 
         try:
             shutil.copytree(workshop_dir, dest)
-            (dest / ".rwmod_last_updated").write_text(str(int(time.time())))
+            # Record the install time in the metadata DB (replaces the old
+            # per-mod .rwmod_last_updated marker file, which polluted the game
+            # directory and failed on read-only mounts). Best effort — a DB
+            # hiccup must never fail an otherwise-successful install.
+            try:
+                from rwmod.database import set_last_updated
+
+                set_last_updated(folder_name, int(time.time()))
+            except Exception:  # noqa: BLE001 — timestamp is auxiliary data
+                _log.debug("写入安装时间戳失败: %s", folder_name)
         except OSError as e:
             _log.error("复制下载内容失败: %s", e)
-            if old_backed_up:
-                _auto_restore_backup(config, mod_id)
+            _auto_restore_backup(config, mod_id)
+            _rollback_stash(config, mod_id, stashed)
             return False
         _log.info("下载完成: %s", folder_name)
+        # Force-overwrite succeeded — the stashed old copy is now obsolete.
+        _discard_stash(stashed)
 
         # Auto-download dependencies (collected, downloaded outside the lock)
         _collect_deps(config, mod_id, deferred)
@@ -289,6 +301,8 @@ def _download_one_unlocked(
         and last_result.error_kind not in ErrorKind.NON_RETRYABLE
         and _skymods_fallback(config, mod_id)
     ):
+        # Skymods installed a copy — the force-overwrite stash is obsolete.
+        _discard_stash(stashed)
         return True
 
     # For non-retryable errors, explain clearly and skip Skymods
@@ -302,10 +316,47 @@ def _download_one_unlocked(
     else:
         _log.error("❌ %s: 下载失败", mod_id)
 
-    # force 覆盖时旧版已被删除——下载失败则自动从备份回滚，避免丢 mod。
+    # force 覆盖时旧版已被移开——下载失败则从暂存目录（或备份）自动回滚，避免丢 mod。
     if old_backed_up:
-        _auto_restore_backup(config, mod_id)
+        if _rollback_stash(config, mod_id, stashed):
+            pass
+        else:
+            _auto_restore_backup(config, mod_id)
     return False
+
+
+def _rollback_stash(config: Config, mod_id: str, stashed: Path | None) -> bool:
+    """Put a force-overwrite's stashed old copy back into place.
+
+    Returns True if the stash existed and was restored (or the mod was
+    already re-installed by the failed download's partial copy).
+    """
+    if stashed is None or not stashed.exists():
+        return False
+    dest = config.mods_dir / stashed.name[len(".rwmod_stash_") :].rsplit("_", 1)[0]
+    if dest.exists():
+        # A partial copy landed in the final location — drop the stash, the
+        # download did install something.
+        _discard_stash(stashed)
+        return True
+    try:
+        stashed.rename(dest)
+        _log.info("下载失败，已自动回滚旧版: %s", dest.name)
+        return True
+    except OSError as e:
+        _log.warning("下载失败且回滚暂存目录失败: %s", e)
+        return False
+
+
+def _discard_stash(stashed: Path | None) -> None:
+    """Remove a force-overwrite stash once it is obsolete."""
+    if stashed is None:
+        return
+    try:
+        if stashed.exists():
+            shutil.rmtree(stashed)
+    except OSError as e:
+        _log.warning("清理暂存目录失败: %s", e)
 
 
 def _auto_restore_backup(config: Config, mod_id: str) -> None:

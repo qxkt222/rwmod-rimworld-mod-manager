@@ -4,6 +4,10 @@ import re
 import sys
 import zipfile
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fastapi import UploadFile
 
 """Shared utilities - mod ID extraction, safe filenames, and common helpers.
 
@@ -11,7 +15,13 @@ All modules that need extract_mod_id or safe_filename should import from here
 instead of duplicating the logic across backup.py, profile.py, and downloader.py.
 """
 
-__all__ = ["extract_mod_id", "safe_filename", "safe_extract_zip", "bundle_root"]
+__all__ = [
+    "extract_mod_id",
+    "safe_filename",
+    "safe_extract_zip",
+    "bundle_root",
+    "read_upload_limited",
+]
 
 
 def bundle_root() -> Path:
@@ -115,3 +125,26 @@ def safe_extract_zip(
         if total > max_total_bytes:
             raise zipfile.BadZipFile("zip 解压总量超限（疑似压缩炸弹）")
     zf.extractall(dest_dir)
+
+
+async def read_upload_limited(file: UploadFile, max_bytes: int) -> bytes | None:
+    """Read an async upload with a hard byte cap.
+
+    ``UploadFile.size`` is only set when the client sends Content-Length; a
+    chunked upload has ``size is None``, so a ``if file.size > cap`` guard is
+    silently skipped and ``await file.read()`` buffers the whole body into
+    memory. Reading ``max_bytes + 1`` bytes instead makes the cap independent
+    of the client's framing: if we get back more than max_bytes the upload is
+    rejected (returning None) without ever buffering more than cap+1 bytes.
+
+    Args:
+        file: An async file-like object (FastAPI UploadFile).
+        max_bytes: Hard cap on the accepted body size.
+
+    Returns:
+        The body bytes, or None if the upload exceeds ``max_bytes``.
+    """
+    data = await file.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        return None
+    return data

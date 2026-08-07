@@ -21,10 +21,19 @@ class TestConfigEndpoint:
         assert "steamcmd_path" in data
         assert "mods_dir" in data
 
-    def test_update_config(self, client: TestClient):
-        resp = client.post("/api/config", json={"mods_dir": "/tmp/Mods"})
+    def test_update_config(self, client: TestClient, tmp_path):
+        resp = client.post("/api/config", json={"mods_dir": str(tmp_path / "OtherMods")})
         assert resp.status_code == 200
         assert resp.json()["ok"]
+
+    def test_update_config_rejects_relative_path(self, client: TestClient):
+        resp = client.post("/api/config", json={"mods_dir": "relative/path"})
+        assert resp.status_code == 400
+
+    def test_update_config_rejects_system_root(self, client: TestClient):
+        # Refuse pointing mods/backup dirs at a filesystem root (C:\ on Windows).
+        resp = client.post("/api/config", json={"mods_dir": "C:\\"})
+        assert resp.status_code == 400
 
 
 class TestModsEndpoint:

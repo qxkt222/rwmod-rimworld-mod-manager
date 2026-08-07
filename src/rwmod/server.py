@@ -91,21 +91,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     yield
     await au.stop_background()
-    # Cancel the queue worker so it stops draining; the in-flight SteamCMD
+    # Stop the queue worker so it stops draining; the in-flight SteamCMD
     # thread may still finish in the background, but the event loop no longer
     # owns tasks that write to the DB after close_db() below.
     queue = get_queue()
     queue.stop()
-    worker = queue._worker
-    if worker is not None:
-        with suppress(asyncio.CancelledError, Exception):
-            await asyncio.wait_for(worker, timeout=3)
+    await queue.wait_stopped(timeout=3)
     close_db()
 
 
 app = FastAPI(
     title="rwmod Web",
-    version="0.4.5",
+    version="0.5.0",
     lifespan=lifespan,
     docs_url="/api/docs",
     openapi_url="/api/openapi.json",
@@ -223,15 +220,36 @@ def index() -> FileResponse:
 
 
 # ── WebSocket ─────────────────────────────────────────────────────
+_WS_SUBPROTOCOL_PREFIX = "rwmod."
+
+
+def _ws_token(ws: WebSocket) -> str:
+    """Extract the JWT from a WebSocket handshake.
+
+    Preferred: the ``Sec-WebSocket-Protocol`` subprotocol (``rwmod.<token>``) —
+    the token never appears in a URL, so it can't leak into access logs,
+    proxies or browser history. Falls back to the legacy ``?token=`` query
+    param for old clients.
+    """
+    for proto in ws.headers.get("sec-websocket-protocol", "").split(","):
+        proto = proto.strip()
+        if proto.startswith(_WS_SUBPROTOCOL_PREFIX):
+            return proto[len(_WS_SUBPROTOCOL_PREFIX) :]
+    return ws.query_params.get("token", "")
+
+
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket) -> None:
     """WebSocket for real-time status updates to frontend.
 
-    Auth: the client must present a valid JWT via ``?token=`` — the endpoint
-    leaks queue/update activity (mod IDs being downloaded) to LAN peers, so
-    it is gated like every other /api route.
+    Auth: the client must present a valid JWT via the ``rwmod.<token>``
+    subprotocol (legacy: ``?token=`` query param) — the endpoint leaks
+    queue/update activity (mod IDs being downloaded) to LAN peers, so it is
+    gated like every other /api route. Echoing the subprotocol back on accept
+    is required: browsers refuse a handshake that advertised a subprotocol
+    the server did not reply with.
     """
-    token = ws.query_params.get("token", "")
+    token = _ws_token(ws)
     # Localhost is trusted without a token (same policy as HTTP routes) unless
     # the operator set a strong RWMOD_SECRET.
     host = ws.client[0] if ws.client else ""
@@ -239,7 +257,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
     if not verify_token(token) and not (local and not is_env_secret()):
         await ws.close(code=1008, reason="unauthorized")
         return
-    await ws.accept()
+    await ws.accept(subprotocol=_WS_SUBPROTOCOL_PREFIX + token if token else None)
     _ws_clients.add(ws)
     try:
         while True:

@@ -86,7 +86,12 @@ class Config:
         if cls.CONFIG_PATH.exists():
             data = tomllib.loads(cls.CONFIG_PATH.read_text(encoding="utf-8"))
             sc = Path(data.get("steamcmd_path", str(builtin)))
-            if builtin.exists():
+            # Honor the user's configured steamcmd_path when it actually
+            # exists. The bundled copy is only a fallback for a stale/broken
+            # configured path (e.g. an old install pointing at a deleted
+            # D:/steamcmd) — silently overriding a valid user setting would
+            # make the config panel's steamcmd field appear to do nothing.
+            if builtin.exists() and not sc.exists():
                 sc = builtin
             return cls(
                 steamcmd_path=sc,

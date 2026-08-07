@@ -10,14 +10,14 @@ Usage:
 
 from __future__ import annotations
 
-from rwmod.database import _get_conn
+from rwmod.database import get_conn
 
 __all__ = ["add_tag", "remove_tag", "get_tags", "get_mods_by_tag", "list_all_tags"]
 
 
 def add_tag(mod_folder: str, tag: str) -> bool:
     """Add a tag to a mod. Returns True if added, False if already exists."""
-    db = _get_conn()
+    db = get_conn()
     cur = db.execute(
         "SELECT 1 FROM mod_tags WHERE folder = ? AND tag = ?",
         (mod_folder, tag.strip()),
@@ -31,7 +31,7 @@ def add_tag(mod_folder: str, tag: str) -> bool:
 
 def remove_tag(mod_folder: str, tag: str) -> bool:
     """Remove a tag from a mod. Returns True if removed."""
-    db = _get_conn()
+    db = get_conn()
     cur = db.execute(
         "DELETE FROM mod_tags WHERE folder = ? AND tag = ?",
         (mod_folder, tag.strip()),
@@ -42,7 +42,7 @@ def remove_tag(mod_folder: str, tag: str) -> bool:
 
 def get_tags(mod_folder: str) -> list[str]:
     """Get all tags for a mod folder."""
-    db = _get_conn()
+    db = get_conn()
     rows = db.execute(
         "SELECT tag FROM mod_tags WHERE folder = ? ORDER BY tag",
         (mod_folder,),
@@ -52,7 +52,7 @@ def get_tags(mod_folder: str) -> list[str]:
 
 def get_mods_by_tag(tag: str) -> list[str]:
     """Get all mod folder names with a given tag."""
-    db = _get_conn()
+    db = get_conn()
     rows = db.execute(
         "SELECT folder FROM mod_tags WHERE tag = ? ORDER BY folder",
         (tag.strip(),),
@@ -62,7 +62,7 @@ def get_mods_by_tag(tag: str) -> list[str]:
 
 def list_all_tags() -> list[dict]:
     """List all tags with mod counts."""
-    db = _get_conn()
+    db = get_conn()
     rows = db.execute(
         "SELECT tag, COUNT(*) as count FROM mod_tags GROUP BY tag ORDER BY count DESC"
     ).fetchall()
@@ -71,7 +71,7 @@ def list_all_tags() -> list[dict]:
 
 def remove_all_tags(mod_folder: str) -> int:
     """Remove all tags for a mod folder. Returns count of removed."""
-    db = _get_conn()
+    db = get_conn()
     cur = db.execute("DELETE FROM mod_tags WHERE folder = ?", (mod_folder,))
     db.commit()
     return cur.rowcount

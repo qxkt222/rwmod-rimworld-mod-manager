@@ -8,6 +8,7 @@ collection/child parsing against mocked Steam API responses.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from rwmod import workshop
 from rwmod.workshop import (
@@ -224,3 +225,69 @@ class TestFetchItemDependencies:
         }
         monkeypatch.setattr(workshop, "_shared_opener", _FakeOpener([payload]))
         assert fetch_item_dependencies(["100"]) == {}
+
+
+class TestCheckModUpdates:
+    """check_mod_updates with the network layer mocked — focuses on the
+    .rwmod_last_updated → DB migration and timestamp comparison."""
+
+    def _make_mod(self, tmp_path: Path, wid: str = "100", name: str = "Some Mod"):
+        mod = tmp_path / "Mods" / name
+        about = mod / "About"
+        about.mkdir(parents=True)
+        (about / "About.xml").write_text(
+            f"<ModMetaData><name>{name}</name><packageId>author.{name.lower()}</packageId></ModMetaData>"
+        )
+        (about / "PublishedFileId.txt").write_text(wid)
+        return mod
+
+    def _mock_remote(self, monkeypatch, time_updated: int):
+        monkeypatch.setattr(
+            workshop,
+            "_fetch_batch_parallel",
+            lambda ids: {wid: {"time_updated": time_updated, "title": "Remote"} for wid in ids},
+        )
+
+    def test_legacy_marker_file_is_migrated_to_db(self, tmp_path: Path, monkeypatch):
+        """An existing .rwmod_last_updated marker must seed the DB timestamp
+        (and the marker file is cleaned up) instead of flagging every mod as
+        updated on the first post-upgrade check."""
+        from unittest.mock import patch as _patch
+
+        from rwmod.database import close_db, get_last_updated, init_db
+
+        mod = self._make_mod(tmp_path)
+        # Legacy marker: mod checked "yesterday" (old), remote is newer.
+        old_ts = int(__import__("time").time()) - 86400
+        (mod / ".rwmod_last_updated").write_text(str(old_ts))
+
+        db_path = tmp_path / "updates.db"
+        with _patch("rwmod.database.DB_PATH", db_path):
+            init_db()
+            self._mock_remote(monkeypatch, old_ts + 3600)  # remote is newer
+
+            updates = workshop.check_mod_updates(str(tmp_path / "Mods"))
+
+            # Mod is correctly reported as outdated AND the marker migrated.
+            assert len(updates) == 1
+            assert updates[0]["workshop_id"] == "100"
+            assert not (mod / ".rwmod_last_updated").exists()
+            assert get_last_updated("Some Mod") == old_ts
+        close_db()
+
+    def test_up_to_date_not_reported(self, tmp_path: Path, monkeypatch):
+        from unittest.mock import patch as _patch
+
+        from rwmod.database import close_db, init_db
+
+        self._make_mod(tmp_path)
+        db_path = tmp_path / "updates.db"
+        with _patch("rwmod.database.DB_PATH", db_path):
+            init_db()
+            now = int(__import__("time").time())
+            self._mock_remote(monkeypatch, now - 100)  # remote older than install
+            # Seed the DB timestamp via a fresh check (no marker file).
+            workshop.check_mod_updates(str(tmp_path / "Mods"))
+            updates = workshop.check_mod_updates(str(tmp_path / "Mods"))
+            assert updates == []
+        close_db()

@@ -159,6 +159,23 @@ src/rwmod/
 └── py.typed            # PEP 561 类型标记
 ```
 
+## ⚖️ 合规声明
+
+- **SteamCMD 匿名下载**：本工具通过 SteamCMD 以 `anonymous` 身份下载创意工坊内容。
+  这利用了 SteamCMD 的公开能力，但**请自行确认**其符合你所在地区与 Steam 订户协议
+  的要求；仅供个人备份与自用，请勿用于商业分发或绕过付费内容。
+- **内置 SteamCMD**：安装包内置 SteamCMD 可执行文件。SteamCMD 版权归 Valve 所有，
+  分发请遵循 Valve 的条款。
+- **Skymods (smods.ru) 备用源**：仅当 SteamCMD 下载失败时作为回退，抓取行为受第三方
+  站点条款约束，内容版权归原作者。
+- 本项目与 Ludeon Studios / Valve 无任何关联。RimWorld 为 Ludeon Studios 商标。
+
+## 🔒 安全说明
+
+- 默认仅监听 localhost；局域网访问需密钥（见「快速开始」）。**不建议**不做任何
+  反代/HTTPS 保护就暴露到公网。
+- 安全漏洞请通过 [SECURITY.md](SECURITY.md) 报告的流程私信提交。
+
 ## 📝 License
 
-MIT
+MIT（详见 [LICENSE](LICENSE)）
