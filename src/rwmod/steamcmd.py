@@ -45,7 +45,13 @@ def cancel_download(mod_id: str) -> bool:
         if os.name == "nt":
             # CTRL_BREAK_EVENT reaches the whole process group on Windows;
             # proc.kill() alone would orphan SteamCMD's download children.
-            proc.send_signal(signal.CTRL_BREAK_EVENT)
+            # It is only defined by typeshed under sys.platform == "win32",
+            # so access it dynamically to keep mypy green on POSIX too.
+            ctrl_break = getattr(signal, "CTRL_BREAK_EVENT", None)
+            if ctrl_break is not None:
+                proc.send_signal(ctrl_break)
+            else:
+                proc.terminate()
         else:
             proc.terminate()
         proc.kill()  # belt and braces — CTRL_BREAK is advisory on some setups
