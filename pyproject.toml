@@ -86,6 +86,12 @@ disable_error_code = ["type-arg"]
 module = ["rwmod.routers.*"]
 disable_error_code = ["no-untyped-def", "no-untyped-call", "type-arg"]
 
+# defusedxml ships no type stubs; ignore_missing_imports keeps mypy green on
+# environments (e.g. fresh CI installs) that don't have types-defusedxml.
+[[tool.mypy.overrides]]
+module = ["defusedxml.*"]
+ignore_missing_imports = true
+
 # ── coverage config ────────────────────────────────────────────────
 [tool.coverage.run]
 source = ["src/rwmod"]
