@@ -177,9 +177,8 @@ src/rwmod/
 - 安全漏洞请通过 [SECURITY.md](SECURITY.md) 报告的流程私信提交。
 - 密钥文件位置
 - | 系统 | 位置 |
-| --- | --- |
-| Windows | C:\\Users\\<用户名>\\.rwmod.secret |
-| Linux / macOS | /home/<用户名>/.rwmod.secret |
+- | Windows | C:\\Users\\<用户名>\\.rwmod.secret |
+- | Linux / macOS | /home/<用户名>/.rwmod.secret |
 ## 📝 License
 
 MIT（详见 [LICENSE](LICENSE)）
