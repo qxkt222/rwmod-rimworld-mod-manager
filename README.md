@@ -175,7 +175,11 @@ src/rwmod/
 - 默认仅监听 localhost；局域网访问需密钥（见「快速开始」）。**不建议**不做任何
   反代/HTTPS 保护就暴露到公网。
 - 安全漏洞请通过 [SECURITY.md](SECURITY.md) 报告的流程私信提交。
-
+- 密钥文件位置
+- | 系统 | 位置 |
+| --- | --- |
+| Windows | C:\\Users\\<用户名>\\.rwmod.secret |
+| Linux / macOS | /home/<用户名>/.rwmod.secret |
 ## 📝 License
 
 MIT（详见 [LICENSE](LICENSE)）
