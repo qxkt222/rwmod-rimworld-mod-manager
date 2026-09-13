@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.6.0] - 2026-09-13
+
+### ⚠️ 破坏性变更
+- **移除登录鉴权** — 项目定位为个人本机 / 局域网自用，删除 JWT 认证与密钥管理：
+  删除 `src/rwmod/auth.py`、`src/rwmod/routers/auth.py`、`frontend/src/auth.ts`，
+  各业务路由的 `Depends(get_current_user)` 全部摘除，`/ws` 不再走子协议鉴权，
+  移除 `pyjwt` 依赖；前端登录弹窗与 token 注入删除，API 对同网段客户端开放
+  （`server.py`, `deps.py`, `routers/*`, `frontend/`, `pyproject.toml`, `uv.lock`）
+
+### ✨ 新功能
+- **SteamCMD 批量下载** — 由「每 Mod 一个 SteamCMD 进程」改为「每批一个进程」
+  （`BATCH_SIZE=6`），单进程内连续 `+workshop_download_item`，配合批量元数据扫描
+  与按层批量依赖查询，显著降低大合集下载开销（`steamcmd.py`, `downloader.py`,
+  `queue.py`, `database.py`）
+- **实时下载进度** — 解析 SteamCMD stdout 的 `Update state ... progress` 行，经
+  SSE / WebSocket 推送；前端下载与合集面板新增进度条与速率显示
+  （`steamcmd.py`, `routers/download.py`, `queue.py`, `frontend/`）
+- **Skymods 流式落盘** — 备用源下载由整包读入内存改为 1 MiB 分块流式写盘，
+  边写边校验大小上限，大包不再占满内存（`skymods.py`）
+
+### 🧪 测试
+- 新增 `tests/test_batch.py`（批量下载 / 批量 SteamCMD / 进度回调）；同步更新
+  `test_steamcmd.py`、`test_skymods.py`、`test_security_batch.py` 至无鉴权模型
+- 离线测试套件现为 **267 通过**
+
+### 📦 打包 / 清理
+- `rwmod.spec` 移除指向已删除模块的 `rwmod.routers.auth` hiddenimport；
+  `.pre-commit-config.yaml` 移除 `types-PyJWT`
+- README / RELEASE_NOTES 同步「已移除鉴权」，并更正测试数与版本口径
+
 ## [0.5.0] - 2026-08-07
 
 ### 安全加固（面向公开发布 + 局域网部署）

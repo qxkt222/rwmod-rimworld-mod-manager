@@ -5,7 +5,6 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
-from rwmod.auth import get_current_user
 from rwmod.config import Config
 from rwmod.deps import get_config
 from rwmod.rimsort import (
@@ -21,7 +20,6 @@ router = APIRouter(prefix="/api/rimsort", tags=["rimsort"])
 @router.post("/generate")
 def rimsort_generate(
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     return {"modsconfig_xml": generate_modsconfig(cfg.mods_dir)}
 
@@ -30,7 +28,6 @@ def rimsort_generate(
 def rimsort_compare(
     payload: dict,
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     xml_content = payload.get("xml", "")
     if not xml_content.strip():
@@ -53,7 +50,6 @@ def rimsort_compare(
 async def rimsort_compare_file(
     file: UploadFile = File(...),
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     from rwmod.routers.download import _reject_oversized
 
@@ -76,7 +72,6 @@ async def rimsort_compare_file(
 @router.get("/check-order")
 def check_load_order(
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     from rwmod.load_order import check_load_order as _check
     from rwmod.profile import resolve_modsconfig_path
@@ -89,7 +84,6 @@ def check_load_order(
 def rimsort_sort(
     payload: dict | None = None,
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     """Preview the optimal load order (does not write anything)."""
     active_ids = (payload or {}).get("active_ids")
@@ -99,7 +93,6 @@ def rimsort_sort(
 @router.post("/apply")
 def rimsort_apply(
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     """Sort the active ModsConfig.xml in place (backs up the original first)."""
     import xml.etree.ElementTree as ET

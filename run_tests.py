@@ -85,7 +85,7 @@ def check(name, code):
 check("errors",
     "from rwmod.errors import ConfigError; e=ConfigError('test'); assert e.detail=='test'")
 check("version",
-    "from rwmod import __version__; assert __version__=='0.4.5', __version__")
+    "from rwmod import __version__; assert __version__=='0.6.0', __version__")
 
 
 check("backup",
@@ -97,9 +97,6 @@ check("offline",
     "from rwmod.offline import safe_fetch")
 check("database_queue",
     "from rwmod.database import queue_upsert,queue_load_pending,queue_clear_done")
-check("auth",
-    "from rwmod.auth import create_token,verify_token\n"
-    "t=create_token('admin'); assert verify_token(t)=='admin'")
 check("schemas",
     "from rwmod.models.schemas import ConfigResponse,DownloadRequest,DownloadResultItem\n"
     "from rwmod.models.schemas import OkResponse,ErrorResponse")
@@ -110,7 +107,7 @@ if fails:
     for f in fails:
         print(f'  ❌ {f}')
     sys.exit(1)
-print('  ✅ 全部 8 项导入通过')
+print('  ✅ 全部 7 项导入通过')
 """,
                 ],
                 "新模块导入 + 核心逻辑验证",

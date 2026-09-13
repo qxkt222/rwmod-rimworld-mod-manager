@@ -3,16 +3,22 @@
 import asyncio
 import contextlib
 import tempfile
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 
-from rwmod.auth import get_current_user
 from rwmod.config import Config
 from rwmod.database import record_download
 from rwmod.deps import get_config
-from rwmod.downloader import _find_existing, download_one, extract_mod_id
+from rwmod.downloader import (
+    BATCH_SIZE,
+    _find_existing,
+    download_batch,
+    download_one,
+    extract_mod_id,
+)
 from rwmod.logger import get_log
 from rwmod.parser import (
     get_installed_package_ids,
@@ -121,7 +127,6 @@ async def _read_modlist(file: UploadFile) -> str:
 async def download_mods(
     payload: dict,
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     ids: list[str] = payload.get("ids", [])
     force: bool = payload.get("force", False)
@@ -144,7 +149,6 @@ async def download_stream(
     id: str,
     force: bool = False,
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     mid = extract_mod_id(id)
     if not mid:
@@ -182,7 +186,7 @@ async def _event_stream(cfg: Config, mid: str, force: bool):
             yield f"data: {_sse_event('warn', msg='未能获取合集内容')}\n\n"
             yield f"data: {_sse_event('done', id=mid)}\n\n"
             return
-        yield f"data: {_sse_event('info', msg=f'合集包含 {len(collection_ids)} 个 Mod，逐个下载中...')}\n\n"
+        yield f"data: {_sse_event('info', msg=f'合集包含 {len(collection_ids)} 个 Mod，批量下载中...', total=len(collection_ids))}\n\n"
         # Build the installed map ONCE — per-item directory scans on a 500-mod
         # collection × 500 folders would stall the event loop.
         existing_map = await asyncio.to_thread(_build_existing_map, cfg.mods_dir)
@@ -196,17 +200,93 @@ async def _event_stream(cfg: Config, mid: str, force: bool):
             else:
                 to_download.append(cid)
         if skip:
-            yield f"data: {_sse_event('info', msg=f'{skip} 个已安装，跳过；{len(to_download)} 个待下载')}\n\n"
+            yield f"data: {_sse_event('info', msg=f'{skip} 个已安装，跳过；{len(to_download)} 个待下载', total=len(to_download))}\n\n"
         ok = 0
         fail = 0
-        for i, cid in enumerate(to_download, 1):
-            yield f"data: {_sse_event('info', msg=f'[{i}/{len(to_download)}] 下载 {cid}...')}\n\n"
-            if await _drain_heartbeat(_bounded_download_stream(cfg, cid, force)):
-                ok += 1
-                yield f"data: {_sse_event('info', msg=f'  ✓ {cid}')}\n\n"
-            else:
-                fail += 1
-                yield f"data: {_sse_event('warn', msg=f'  ✗ {cid} 失败')}\n\n"
+        i = 0
+        # Batch pipeline: BATCH_SIZE mods per SteamCMD process, with missing
+        # dependencies / sub-collections (extra) automatically appended so the
+        # whole dependency graph drains in one stream.
+        pending = list(to_download)
+        seen: set[str] = set(pending)
+        while pending:
+            batch = pending[:BATCH_SIZE]
+            pending = pending[BATCH_SIZE:]
+            yield f"data: {_sse_event('info', msg=f'[{i + 1}-{i + len(batch)}/{len(to_download)}] 批量下载中...')}\n\n"
+            extra: list[str] = []
+            # Live SteamCMD byte progress → forwarded as SSE 'progress'
+            # events. download_batch runs in a worker thread, so the callback
+            # (also on that thread) pushes into an asyncio.Queue via
+            # call_soon_threadsafe; the generator drains it while awaiting
+            # the batch, throttled to ~2 events/sec per mod.
+            progress_queue: asyncio.Queue = asyncio.Queue()
+            loop = asyncio.get_running_loop()
+            last_push = [0.0]
+
+            def _progress(
+                mod_id: str,
+                percent: float,
+                downloaded: float,
+                total: float,
+                _last_push: list[float] = last_push,
+                _loop: asyncio.AbstractEventLoop = loop,
+                _queue: asyncio.Queue = progress_queue,
+            ) -> None:
+                now = time.monotonic()
+                if now - _last_push[0] < 0.5:
+                    return
+                _last_push[0] = now
+                with contextlib.suppress(RuntimeError):
+                    _loop.call_soon_threadsafe(
+                        _queue.put_nowait,
+                        {
+                            "id": mod_id,
+                            "percent": round(percent, 1),
+                            "downloaded": int(downloaded),
+                            "total": int(total),
+                        },
+                    )
+
+            task = asyncio.create_task(
+                asyncio.to_thread(
+                    download_batch,
+                    cfg,
+                    batch,
+                    force=force,
+                    extra_out=extra,
+                    progress_cb=_progress,
+                )
+            )
+            # Drain progress events while the batch runs; a heartbeat info
+            # event every 30s of silence keeps client-side timeouts (and
+            # proxies) alive during SteamCMD's startup cache-validation,
+            # which can take minutes with a large cache.
+            last_heartbeat = [time.monotonic()]
+            while not task.done():
+                try:
+                    evt = await asyncio.wait_for(progress_queue.get(), timeout=0.5)
+                except TimeoutError:
+                    if time.monotonic() - last_heartbeat[0] >= 30:
+                        last_heartbeat[0] = time.monotonic()
+                        yield f"data: {_sse_event('info', msg='仍在下载中（SteamCMD 校验/下载）...')}\n\n"
+                    continue
+                last_heartbeat[0] = time.monotonic()
+                yield f"data: {_sse_event('progress', **evt)}\n\n"
+            ok_map = task.result()
+            for cid in batch:
+                i += 1
+                if ok_map.get(cid):
+                    ok += 1
+                    yield f"data: {_sse_event('ok', msg=f'  {cid}')}\n\n"
+                else:
+                    fail += 1
+                    yield f"data: {_sse_event('warn', msg=f'  {cid} 失败')}\n\n"
+            for eid in extra:
+                if eid not in seen:
+                    seen.add(eid)
+                    pending.append(eid)
+            if extra:
+                yield f"data: {_sse_event('info', msg=f'发现 {len(extra)} 个新依赖/子合集，加入队列继续下载')}\n\n"
             await asyncio.sleep(0)
         yield f"data: {_sse_event('ok', msg=f'合集完成: {ok} 下载, {skip} 跳过, {fail} 失败')}\n\n"
         yield f"data: {_sse_event('done', id=mid)}\n\n"
@@ -222,7 +302,7 @@ async def _event_stream(cfg: Config, mid: str, force: bool):
     if await _drain_heartbeat(_bounded_download_stream(cfg, mid, force)):
         final = await asyncio.to_thread(_find_existing, cfg.mods_dir, mid)
         name = final.name if final else mid
-        yield f"data: {_sse_event('ok', msg=f'✓ {name}', id=mid)}\n\n"
+        yield f"data: {_sse_event('ok', msg=f'{name}', id=mid)}\n\n"
         record_download(mid, "success", mod_name=name)
     else:
         yield f"data: {_sse_event('fail', msg='下载失败（含 Skymods 备用源）', id=mid)}\n\n"
@@ -235,7 +315,6 @@ async def import_file(
     file: UploadFile = File(...),
     force: bool = False,
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     cfg.validate()
     _reject_oversized(file)
@@ -258,7 +337,6 @@ async def import_file(
 async def import_collection_api(
     payload: dict,
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     raw_id = payload.get("collection_id", "")
     collection_id = extract_mod_id(raw_id)
@@ -270,10 +348,22 @@ async def import_collection_api(
     if not mod_ids:
         raise HTTPException(404, "未能获取合集内容")
     _log.info("合集 %s 包含 %s 个 Mod", collection_id, len(mod_ids))
-    results = []
-    for mid in mod_ids:
-        ok = await _bounded_download(cfg, mid, force)
-        results.append({"id": mid, "ok": ok})
+    # Batch pipeline: BATCH_SIZE mods per SteamCMD process; missing
+    # dependencies / sub-collections (extra) are drained too.
+    results: list[dict] = []
+    pending = list(mod_ids)
+    seen: set[str] = set(pending)
+    while pending:
+        batch = pending[:BATCH_SIZE]
+        pending = pending[BATCH_SIZE:]
+        extra: list[str] = []
+        ok_map = await asyncio.to_thread(download_batch, cfg, batch, force=force, extra_out=extra)
+        for mid in batch:
+            results.append({"id": mid, "ok": ok_map.get(mid, False)})
+        for eid in extra:
+            if eid not in seen:
+                seen.add(eid)
+                pending.append(eid)
     return {"total": len(results), "results": results}
 
 
@@ -282,7 +372,6 @@ async def import_sort_api(
     file: UploadFile = File(...),
     force: bool = False,
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     cfg.validate()
     _reject_oversized(file)

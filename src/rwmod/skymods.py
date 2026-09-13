@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gzip
+import io
 import ipaddress
 import logging
 import re
@@ -12,7 +13,8 @@ import tempfile
 import urllib.parse
 import urllib.request
 import zipfile
-from contextlib import suppress
+from collections.abc import Buffer
+from http.client import HTTPResponse
 from pathlib import Path
 
 __all__ = ["try_skymods"]
@@ -35,6 +37,11 @@ _USER_AGENT = (
 _ALLOWED_DOWNLOAD_DOMAINS = ("smods.ru", "modsbase.com")
 MAX_PAGE_BYTES = 2 * 1024 * 1024  # search/redirect page HTML cap
 MAX_RESPONSE_BYTES = 1024 * 1024 * 1024  # 1 GB cap on fallback mod downloads
+_STREAM_CHUNK = 1 << 20  # 1 MiB chunks while streaming to disk
+
+
+class _DownloadTooBig(Exception):
+    """Raised when a streamed download exceeds MAX_RESPONSE_BYTES."""
 
 
 def _host_allowed(host: str) -> bool:
@@ -126,6 +133,57 @@ def _extract_download_url(html: str, mod_id: str) -> str | None:
 _MAX_REDIRECTS = 5
 
 
+def _stream_to_file(resp: HTTPResponse, sniff: bytes, tmp_path: Path) -> tuple[str, int]:
+    """Stream a response body to ``tmp_path`` in chunks.
+
+    Returns ``(kind, total_bytes)`` where kind is ``"zip"`` (or ``"raw"``)
+    on success. Raises _DownloadTooBig when the body exceeds
+    MAX_RESPONSE_BYTES, and OSError on IO problems.
+    """
+    total = 0
+    with open(tmp_path, "wb") as fh:
+        # gzip-wrapped zips (some CDNs) are decompressed on the fly so a
+        # multi-GB mod never lands in RAM — it streams disk → disk.
+        if sniff[:2] == b"\x1f\x8b":
+
+            class _ChainReader(io.RawIOBase):
+                """Reads the sniffed head first, then the live response."""
+
+                def __init__(self, head: bytes, tail: HTTPResponse) -> None:
+                    super().__init__()
+                    self._head = io.BytesIO(head)
+                    self._tail = tail
+
+                def readinto(self, b: Buffer) -> int:
+                    n = self._head.readinto(b)
+                    if n:
+                        return n
+                    return self._tail.readinto(b)
+
+            gz = gzip.GzipFile(fileobj=_ChainReader(sniff, resp))
+            while True:
+                chunk = gz.read(_STREAM_CHUNK)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_RESPONSE_BYTES:
+                    raise _DownloadTooBig
+                fh.write(chunk)
+            return "zip", total
+
+        fh.write(sniff)
+        total = len(sniff)
+        while True:
+            chunk = resp.read(_STREAM_CHUNK)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAX_RESPONSE_BYTES:
+                raise _DownloadTooBig
+            fh.write(chunk)
+    return "raw", total
+
+
 def _download_and_extract(
     url: str,
     mod_id: str,
@@ -143,54 +201,43 @@ def _download_and_extract(
         _log.warning("Skymods 下载 URL 不合法，拒绝 (%s): %s", mod_id, url[:120])
         return None
 
+    tmp_path: Path | None = None
     try:
         req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
         with _shared_opener.open(req, timeout=60) as resp:
-            content_type = resp.headers.get("Content-Type", "")
-            data = resp.read(MAX_RESPONSE_BYTES + 1)
-            if len(data) > MAX_RESPONSE_BYTES:
+            sniff = resp.read(512)
+            if len(sniff) < 512:
+                _log.warning("Skymods 响应内容过短 (%s): %s bytes", mod_id, len(sniff))
+                return None
+
+            # Detect HTML responses — likely a redirect page or error
+            if sniff.startswith(b"<!") or sniff.startswith(b"<html") or sniff.startswith(b"<HTML"):
+                page = sniff + resp.read(MAX_PAGE_BYTES)
+                text = page.decode("utf-8", errors="replace")
+                redirect_url = _extract_download_url(text, mod_id)
+                if redirect_url and redirect_url != url:
+                    _log.info("Skymods 重定向: %s → %s", url[:80], redirect_url[:80])
+                    return _download_and_extract(redirect_url, mod_id, config, _depth + 1)
+                _log.warning("Skymods 返回 HTML 而非 zip (%s): %s", mod_id, text[:200])
+                return None
+
+            # Stream the body (gzip-aware) to a temp file — bounded by
+            # MAX_RESPONSE_BYTES, never buffered fully in RAM.
+            with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
+                tmp_path = Path(tmp.name)
+            try:
+                kind, _size = _stream_to_file(resp, sniff, tmp_path)
+            except _DownloadTooBig:
                 _log.warning("Skymods 下载内容过大，放弃 (%s)", mod_id)
                 return None
-    except OSError as e:
-        _log.warning("Skymods 下载失败 (%s): %s", mod_id, e)
-        return None
-
-    if len(data) < 512:
-        _log.warning("Skymods 响应内容过短 (%s): %s bytes", mod_id, len(data))
-        return None
-
-    # Detect HTML responses — likely a redirect page or error
-    sniff = data[:512]
-    if sniff.startswith(b"<!") or sniff.startswith(b"<html") or sniff.startswith(b"<HTML"):
-        # Try to extract a download URL from the HTML redirect page
-        text = data.decode("utf-8", errors="replace")
-        redirect_url = _extract_download_url(text, mod_id)
-        if redirect_url and redirect_url != url:
-            _log.info("Skymods 重定向: %s → %s", url[:80], redirect_url[:80])
-            return _download_and_extract(redirect_url, mod_id, config, _depth + 1)
-        _log.warning("Skymods 返回 HTML 而非 zip (%s): %s", mod_id, text[:200])
-        return None
-
-    # Try gzip decompression first (some CDNs apply gzip to zip files)
-    if sniff[:2] == b"\x1f\x8b":
-        with suppress(OSError):
-            data = gzip.decompress(data)
-
-    # Save to temp file
-    tmp_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
-            tmp.write(data)
-            tmp_path = Path(tmp.name)
+            _log.debug("Skymods 已流式落盘 (%s): kind=%s", mod_id, kind)
 
         if not zipfile.is_zipfile(tmp_path):
             _log.warning(
-                "Skymods 下载内容不是 zip (%s): 首字节 %s, 大小 %s",
+                "Skymods 下载内容不是 zip (%s): 首字节 %s",
                 mod_id,
                 sniff[:16].hex(),
-                len(data),
             )
-            tmp_path.unlink()
             return None
 
         # Extract to temp directory (with path-traversal protection)
@@ -217,7 +264,7 @@ def _download_and_extract(
         _log.info("Skymods 下载成功: %s → %s", mod_id, folder_name)
         return dest
     except (OSError, zipfile.BadZipFile) as e:
-        _log.warning("Skymods 解压失败 (%s): %s", mod_id, e)
+        _log.warning("Skymods 下载/解压失败 (%s): %s", mod_id, e)
         return None
     finally:
         if tmp_path is not None and tmp_path.exists():

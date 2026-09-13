@@ -151,17 +151,19 @@ class TestWorkshopDownload:
     """Exercises the real subprocess orchestration with a mocked Popen."""
 
     def test_timeout(self, steamcmd: SteamCMD):
+        from io import StringIO
         from unittest.mock import MagicMock, patch
 
         proc = MagicMock()
-        proc.communicate.side_effect = subprocess.TimeoutExpired(cmd=["steamcmd"], timeout=1)
-        proc.stdout = object()
+        proc.wait.side_effect = subprocess.TimeoutExpired(cmd=["steamcmd"], timeout=1)
+        proc.stdout = StringIO("")
         with patch("rwmod.steamcmd.subprocess.Popen", return_value=proc):
             result = steamcmd.workshop_download("123")
         assert result.error_kind == ErrorKind.TIMEOUT
         proc.kill.assert_called_once()
 
     def test_success(self, steamcmd: SteamCMD):
+        from io import StringIO
         from unittest.mock import MagicMock, patch
 
         content = steamcmd.workshop_content_dir / "123"
@@ -171,14 +173,15 @@ class TestWorkshopDownload:
         log.write_text("[AppID 294100] Download item 123 result : OK\n")
 
         proc = MagicMock()
-        proc.communicate.return_value = ("[AppID 294100] Download item 123 result : OK\n", "")
-        proc.stdout = object()
+        proc.wait.return_value = 0
+        proc.stdout = StringIO("[AppID 294100] Download item 123 result : OK\n")
         with patch("rwmod.steamcmd.subprocess.Popen", return_value=proc):
             result = steamcmd.workshop_download("123")
         assert result.success
         assert result.output_lines[0].endswith("result : OK")
 
     def test_missing_content_treated_as_failure(self, steamcmd: SteamCMD):
+        from io import StringIO
         from unittest.mock import MagicMock, patch
 
         log = steamcmd.steam_dir / "logs" / "workshop_log.txt"
@@ -186,8 +189,8 @@ class TestWorkshopDownload:
         log.write_text("[AppID 294100] Download item 123 result : OK\n")
 
         proc = MagicMock()
-        proc.communicate.return_value = ("[AppID 294100] Download item 123 result : OK\n", "")
-        proc.stdout = object()
+        proc.wait.return_value = 0
+        proc.stdout = StringIO("[AppID 294100] Download item 123 result : OK\n")
         with patch("rwmod.steamcmd.subprocess.Popen", return_value=proc):
             result = steamcmd.workshop_download("123")
         assert not result.success
@@ -200,6 +203,34 @@ class TestWorkshopDownload:
             result = steamcmd.workshop_download("123")
         assert not result.success
         assert result.error_kind == ErrorKind.UNKNOWN
+
+    def test_progress_callback_fires(self, steamcmd: SteamCMD):
+        """The reader thread parses SteamCMD progress lines into callbacks."""
+        from io import StringIO
+        from unittest.mock import MagicMock, patch
+
+        content = steamcmd.workshop_content_dir / "123"
+        content.mkdir(parents=True)
+        log = steamcmd.steam_dir / "logs" / "workshop_log.txt"
+        log.parent.mkdir(parents=True)
+        log.write_text("[AppID 294100] Download item 123 result : OK\n")
+
+        out = (
+            "Downloading item 123 ...\n"
+            "Update state (0x61) downloading, progress: 12.50 (100 / 800)\n"
+            "Update state (0x61) downloading, progress: 50.00 (400 / 800)\n"
+            "Update state (0x61) downloading, progress: 100.00 (800 / 800)\n"
+            "Success. Downloaded item 123\n"
+        )
+        proc = MagicMock()
+        proc.wait.return_value = 0
+        proc.stdout = StringIO(out)
+        seen: list[tuple[str, float, float, float]] = []
+        with patch("rwmod.steamcmd.subprocess.Popen", return_value=proc):
+            steamcmd.workshop_download_many(["123"], progress_cb=lambda *a: seen.append(a))
+        assert len(seen) == 3
+        assert seen[0] == ("123", 12.5, 100.0, 800.0)
+        assert seen[2] == ("123", 100.0, 800.0, 800.0)
 
 
 class TestCancelDownload:
@@ -231,6 +262,7 @@ class TestCancelDownload:
 
     def test_workshop_download_unregisters_after_finish(self, steamcmd: SteamCMD):
         """The registry must not leak: after a download finishes the slot is freed."""
+        from io import StringIO
         from unittest.mock import MagicMock, patch
 
         from rwmod.steamcmd import _live_procs
@@ -243,8 +275,8 @@ class TestCancelDownload:
         log.write_text("[AppID 294100] Download item 123 result : OK\n")
 
         proc = MagicMock()
-        proc.communicate.return_value = ("[AppID 294100] Download item 123 result : OK\n", "")
-        proc.stdout = object()
+        proc.wait.return_value = 0
+        proc.stdout = StringIO("[AppID 294100] Download item 123 result : OK\n")
         with patch("rwmod.steamcmd.subprocess.Popen", return_value=proc):
             result = steamcmd.workshop_download("123")
         assert result.success

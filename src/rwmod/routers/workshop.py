@@ -2,7 +2,6 @@
 
 from fastapi import APIRouter, Depends
 
-from rwmod.auth import get_current_user
 from rwmod.config import Config
 from rwmod.database import get_download_history
 from rwmod.deps import get_config
@@ -22,7 +21,6 @@ def search(
     q: str = "",
     page: int = 1,
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     if not q.strip():
         return {"results": []}
@@ -44,7 +42,7 @@ def search(
 
 
 @router.get("/workshop/{mod_id}")
-def workshop_detail(mod_id: str, _user: str = Depends(get_current_user)):
+def workshop_detail(mod_id: str):
     try:
         details = fetch_item_details([mod_id])
     except Exception:
@@ -58,7 +56,6 @@ def workshop_detail(mod_id: str, _user: str = Depends(get_current_user)):
 def collection_preview(
     collection_id: str,
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     cid = extract_mod_id(collection_id) or collection_id
     try:
@@ -106,7 +103,6 @@ def collection_preview(
 def mod_dependencies(
     payload: dict,
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     from rwmod.workshop import fetch_item_dependencies
 

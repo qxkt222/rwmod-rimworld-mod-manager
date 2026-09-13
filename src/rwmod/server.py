@@ -21,7 +21,6 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from rwmod.auth import is_env_secret, verify_token
 from rwmod.database import close_db, init_db
 from rwmod.deps import get_autoupdate
 from rwmod.errors import RwmodError
@@ -29,7 +28,6 @@ from rwmod.logger import get_log, init_logging
 from rwmod.queue import get_queue
 
 # ── routers ────────────────────────────────────────────────────────
-from rwmod.routers.auth import router as auth_router
 from rwmod.routers.auto_update import router as autoupdate_router
 from rwmod.routers.backups import router as backups_router
 from rwmod.routers.compat import router as compat_router
@@ -102,7 +100,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title="rwmod Web",
-    version="0.5.0",
+    version="0.6.0",
     lifespan=lifespan,
     docs_url="/api/docs",
     openapi_url="/api/openapi.json",
@@ -190,8 +188,6 @@ async def catchall_handler(request: Request, exc: Exception) -> JSONResponse:
 
 
 # ── routers ────────────────────────────────────────────────────────
-# Order: auth first (login doesn't need auth), then functional routes
-app.include_router(auth_router)
 app.include_router(health_router)
 app.include_router(config_router)
 app.include_router(dashboard_router)
@@ -220,44 +216,12 @@ def index() -> FileResponse:
 
 
 # ── WebSocket ─────────────────────────────────────────────────────
-_WS_SUBPROTOCOL_PREFIX = "rwmod."
-
-
-def _ws_token(ws: WebSocket) -> str:
-    """Extract the JWT from a WebSocket handshake.
-
-    Preferred: the ``Sec-WebSocket-Protocol`` subprotocol (``rwmod.<token>``) —
-    the token never appears in a URL, so it can't leak into access logs,
-    proxies or browser history. Falls back to the legacy ``?token=`` query
-    param for old clients.
-    """
-    for proto in ws.headers.get("sec-websocket-protocol", "").split(","):
-        proto = proto.strip()
-        if proto.startswith(_WS_SUBPROTOCOL_PREFIX):
-            return proto[len(_WS_SUBPROTOCOL_PREFIX) :]
-    return ws.query_params.get("token", "")
 
 
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket) -> None:
-    """WebSocket for real-time status updates to frontend.
-
-    Auth: the client must present a valid JWT via the ``rwmod.<token>``
-    subprotocol (legacy: ``?token=`` query param) — the endpoint leaks
-    queue/update activity (mod IDs being downloaded) to LAN peers, so it is
-    gated like every other /api route. Echoing the subprotocol back on accept
-    is required: browsers refuse a handshake that advertised a subprotocol
-    the server did not reply with.
-    """
-    token = _ws_token(ws)
-    # Localhost is trusted without a token (same policy as HTTP routes) unless
-    # the operator set a strong RWMOD_SECRET.
-    host = ws.client[0] if ws.client else ""
-    local = host in ("127.0.0.1", "::1", "localhost")
-    if not verify_token(token) and not (local and not is_env_secret()):
-        await ws.close(code=1008, reason="unauthorized")
-        return
-    await ws.accept(subprotocol=_WS_SUBPROTOCOL_PREFIX + token if token else None)
+    """WebSocket for real-time status updates to frontend."""
+    await ws.accept()
     _ws_clients.add(ws)
     try:
         while True:

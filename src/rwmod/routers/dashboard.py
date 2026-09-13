@@ -9,7 +9,6 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 
-from rwmod.auth import get_current_user
 from rwmod.autoupdate import AutoUpdateManager
 from rwmod.config import Config
 from rwmod.database import get_download_history
@@ -58,7 +57,6 @@ def _cached_dashboard(cfg: Config) -> dict:
 async def dashboard(
     cfg: Config = Depends(get_config),
     au: AutoUpdateManager = Depends(get_autoupdate),
-    _user: str = Depends(get_current_user),
 ):
     """Dashboard stats: mod count, update status, disk usage, recent activity.
 
@@ -77,7 +75,7 @@ async def dashboard(
     try:
         from rwmod.routers.mods import mod_health
 
-        health = await asyncio.to_thread(mod_health, cfg, _user="")
+        health = await asyncio.to_thread(mod_health, cfg)
         for m in health.get("mods", []):
             if m["status"] == "abandoned":
                 abandoned += 1
@@ -100,7 +98,6 @@ async def dashboard(
 @router.get("/steamcmd/check")
 def steamcmd_check(
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     """Verify SteamCMD is functional.
 

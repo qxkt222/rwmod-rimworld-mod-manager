@@ -10,10 +10,8 @@ from __future__ import annotations
 import time
 from collections import defaultdict
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import PlainTextResponse
-
-from rwmod.auth import get_current_user
 
 router = APIRouter(tags=["metrics"])
 
@@ -60,7 +58,7 @@ def set_gauge(key: str, value: float | bool | int) -> None:
 
 
 @router.get("/metrics")
-def metrics(_user: str = Depends(get_current_user)):
+def metrics():
     """Prometheus-compatible metrics endpoint.
 
     Gated like every other route — it exposes request volume / download

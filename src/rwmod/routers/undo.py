@@ -2,7 +2,6 @@
 
 from fastapi import APIRouter, Depends
 
-from rwmod.auth import get_current_user
 from rwmod.config import Config
 from rwmod.deps import get_config
 from rwmod.undo import list_undo_snapshots, undo_last
@@ -13,7 +12,6 @@ router = APIRouter(prefix="/api/undo", tags=["undo"])
 @router.get("")
 def api_list_undo(
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     """List available undo snapshots (newest first)."""
     from rwmod.profile import resolve_modsconfig_path
@@ -27,7 +25,7 @@ def api_list_undo(
 
 
 @router.post("")
-def api_undo(cfg: Config = Depends(get_config), _user: str = Depends(get_current_user)):
+def api_undo(cfg: Config = Depends(get_config)):
     """Restore the most recent pre-operation snapshot of ModsConfig.xml."""
     from rwmod.profile import resolve_modsconfig_path
 

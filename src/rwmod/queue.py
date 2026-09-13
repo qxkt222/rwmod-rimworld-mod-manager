@@ -10,17 +10,21 @@ import asyncio
 import contextlib
 import logging
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from rwmod.config import Config
-from rwmod.downloader import _find_existing, download_one
+from rwmod.downloader import BATCH_SIZE, _find_existing, download_batch, download_one
 
 __all__ = ["DownloadQueue", "get_queue", "MAX_CONCURRENT"]
 
 _log = logging.getLogger(__name__)
 
-MAX_CONCURRENT = 3
+# Concurrent SteamCMD *batches* (each batch = BATCH_SIZE mods in one process).
+# Two processes already saturate most home connections; more would only
+# contend for Steam's servers and the shared workshop_log.txt.
+MAX_CONCURRENT = 2
 
 
 @dataclass
@@ -30,6 +34,11 @@ class QueueItem:
     status: str = "pending"  # pending | downloading | done | failed | cancelled
     progress: float = 0.0
     msg: str = ""
+    # Live download telemetry (SteamCMD byte progress, updated by the reader
+    # thread while a batch download is in flight).
+    downloaded: float = 0.0  # bytes downloaded so far
+    total: float = 0.0  # total bytes (0 while unknown)
+    speed_bps: float = 0.0  # smoothed bytes/second
 
 
 @dataclass
@@ -150,6 +159,9 @@ class DownloadQueue:
                 "status": i.status,
                 "progress": i.progress,
                 "msg": i.msg,
+                "downloaded": i.downloaded,
+                "total": i.total,
+                "speed_bps": i.speed_bps,
             }
             for i in items
         ]
@@ -192,14 +204,20 @@ class DownloadQueue:
             _log.warning("队列 worker 在 %ss 内未停止", timeout)
 
     async def _worker_loop(self) -> None:
-        """Drain pending items forever until the queue is empty and idle."""
+        """Drain pending items forever until the queue is empty and idle.
+
+        Items are consumed in batches: up to BATCH_SIZE pending ids are
+        handed to download_batch(), which downloads them in ONE SteamCMD
+        process (one login) instead of starting a process per mod. Up to
+        MAX_CONCURRENT batches run concurrently.
+        """
         self._running = True
         try:
             while True:
-                # Grab the next pending item (if any).
+                # Grab the next pending batch (if any).
                 with self._items_lock:
-                    item = next((i for i in self.items if i.status == "pending"), None)
-                if item is None:
+                    batch = [i for i in self.items if i.status == "pending"][:BATCH_SIZE]
+                if not batch:
                     # Nothing to do — wait for a wake-up (new item or start()).
                     self._wake.clear()
                     with contextlib.suppress(asyncio.TimeoutError):
@@ -213,20 +231,143 @@ class DownloadQueue:
                 if config is None:
                     continue
                 try:
-                    await self._download_one(config, item, self._force)
+                    await self._process_batch(config, batch, self._force)
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:  # noqa: BLE001 — a crash must never kill the worker
-                    _log.exception("队列 worker 处理 %s 异常", item.id)
+                    _log.exception("队列 worker 处理批次异常: %s", [i.id for i in batch])
                     with self._items_lock:
-                        item.status = "failed"
-                        item.progress = 0
-                        item.msg = f"下载异常: {e}"
-                    self._persist(item)
+                        for item in batch:
+                            if item.status == "pending":
+                                item.status = "failed"
+                                item.progress = 0
+                                item.msg = f"下载异常: {e}"
+                    for item in batch:
+                        self._persist(item)
                     await self._notify()
         finally:
             self._running = False
             await self._notify()
+
+    async def _process_batch(self, config: Config, batch: list[QueueItem], force: bool) -> None:
+        """Download one batch of items via a single SteamCMD process."""
+        async with self._semaphore:
+            ids = [i.id for i in batch]
+
+            # Items cancelled while this batch waited for a slot stay cancelled.
+            live: list[QueueItem] = []
+            for item in batch:
+                with self._items_lock:
+                    cancelled = item.id in self._cancelled
+                    if cancelled:
+                        self._cancelled.discard(item.id)
+                if cancelled:
+                    item.status = "cancelled"
+                    item.msg = "已取消"
+                    self._persist(item)
+                    continue
+                item.status = "downloading"
+                item.progress = 0.1
+                item.msg = "下载中..."
+                self._persist(item)
+                live.append(item)
+            if live:
+                await self._notify()
+            if not live:
+                return
+
+            # Check already installed (skip unless force)
+            ids = [i.id for i in live]
+            remaining: list[QueueItem] = []
+            for item in live:
+                existing = _find_existing(config.mods_dir, item.id)
+                if existing and not force:
+                    item.status = "done"
+                    item.progress = 1.0
+                    item.name = existing.name
+                    item.msg = "已安装"
+                    self._persist(item)
+                else:
+                    if existing and force:
+                        item.name = existing.name
+                    remaining.append(item)
+            if remaining:
+                await self._notify()
+            live = remaining
+            if not live:
+                return
+
+            ids = [i.id for i in live]
+            # Live progress from the SteamCMD reader thread: update each
+            # item's byte counters + speed, and push a throttled WS snapshot.
+            speed_samples: dict[str, tuple[float, float]] = {}
+            last_push = [0.0]
+
+            def _progress(mod_id: str, percent: float, downloaded: float, total: float) -> None:
+                item = next((i for i in live if i.id == mod_id), None)
+                if item is None:
+                    return
+                item.progress = min(0.95, percent / 100.0)  # keep 5% for install
+                item.downloaded = downloaded
+                item.total = total
+                now = time.monotonic()
+                prev = speed_samples.get(mod_id)
+                if prev is not None and now - prev[0] >= 0.5:
+                    dt = now - prev[0]
+                    item.speed_bps = max(0.0, (downloaded - prev[1]) / dt)
+                    speed_samples[mod_id] = (now, downloaded)
+                else:
+                    speed_samples[mod_id] = (now, downloaded)
+                item.msg = f"下载中 {percent:.1f}%"
+                # Throttle WebSocket pushes to ~1/s — SteamCMD emits progress
+                # lines several times per second.
+                if now - last_push[0] >= 1.0:
+                    last_push[0] = now
+                    loop = self._loop
+                    if loop is not None:
+                        with contextlib.suppress(RuntimeError):
+                            loop.call_soon_threadsafe(lambda: asyncio.create_task(self._notify()))
+
+            # Batch download (blocking — runs in a thread). Collection
+            # children / new dependencies come back via extra_out and are
+            # re-queued below, so they flow through the same batch pipeline.
+            extra: list[str] = []
+            ok = await asyncio.to_thread(
+                download_batch,
+                config,
+                ids,
+                force=force,
+                extra_out=extra,
+                progress_cb=_progress,
+            )
+
+            for item in live:
+                # Cancelled while the batch was in flight — keep cancelled.
+                with self._items_lock:
+                    cancelled = item.id in self._cancelled
+                    if cancelled:
+                        self._cancelled.discard(item.id)
+                if cancelled:
+                    item.status = "cancelled"
+                    item.msg = "已取消"
+                    self._persist(item)
+                    continue
+                if ok.get(item.id):
+                    final = _find_existing(config.mods_dir, item.id)
+                    item.status = "done"
+                    item.progress = 1.0
+                    item.name = final.name if final else item.id
+                    item.msg = "完成"
+                else:
+                    item.status = "failed"
+                    item.progress = 0
+                    item.msg = "下载失败（含 Skymods 备用源）"
+                self._persist(item)
+            await self._notify()
+
+            # Re-queue collection children / missing dependencies.
+            if extra:
+                self.add(extra)
 
     async def _download_one(self, config: Config, item: QueueItem, force: bool) -> None:
         async with self._semaphore:

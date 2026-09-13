@@ -6,7 +6,6 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from rwmod.auth import get_current_user
 from rwmod.config import Config
 from rwmod.deps import get_config
 
@@ -78,7 +77,6 @@ def _validate_steamcmd_path(raw: str) -> Path:
 @router.get("/config")
 def get_config_route(
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     return {
         "steamcmd_path": str(cfg.steamcmd_path),
@@ -96,7 +94,6 @@ def get_config_route(
 def update_config(
     payload: dict,
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     if "steamcmd_path" in payload:
         cfg.steamcmd_path = _validate_steamcmd_path(str(payload["steamcmd_path"]))

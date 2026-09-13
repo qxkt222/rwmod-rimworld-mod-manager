@@ -19,10 +19,10 @@ Please include:
 
 ## Scope
 
-rwmod is a local-first desktop tool. By default it listens on localhost; when
-the host firewall allows it, LAN clients can reach the web UI. The threat
-model is: **a malicious LAN peer or a crafted uploaded file** (mod zip,
-ModsConfig.xml, `.rwmod` bundle, modlist).
+rwmod is a local-first desktop tool for **personal use**. Login/JWT auth has been
+removed — the web UI is open to any client on the same network. The threat model
+is: **a crafted uploaded file** (mod zip, ModsConfig.xml, `.rwmod` bundle,
+modlist).
 
 ## What we care about
 
@@ -31,13 +31,13 @@ ModsConfig.xml, `.rwmod` bundle, modlist).
 - Arbitrary file read/write/deletion on the host
 - SSRF via the Skymods fallback downloader
 - Zip-bomb / decompression exhaustion
-- Auth bypass on the JWT / WebSocket / login endpoints
-- Secrets (Steam API key, `~/.rwmod.secret`) leaking into exports, logs or URLs
+- Upload size exhaustion (chunked uploads bypassing Content-Length checks)
+- Secrets (Steam API key) leaking into exports, logs or URLs
 
 ## Out of scope
 
 - Public-internet deployment without HTTPS and reverse-proxy auth (not a
-  supported configuration — the web UI is designed for localhost/LAN)
+  supported configuration — the web UI is designed for localhost/LAN personal use)
 - Steam Workshop / SteamCMD / smods.ru ToS compliance
 
 ## Supported versions

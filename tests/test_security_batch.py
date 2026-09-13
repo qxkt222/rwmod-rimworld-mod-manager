@@ -1,4 +1,4 @@
-"""Batch-1 security fixes — upload caps, config path validation, secret redaction, WS subprotocol auth.
+"""Batch-1 security fixes — upload caps, config path validation, secret redaction, open WebSocket.
 
 Covers:
 - read_upload_limited() enforces the cap even when the client sends no
@@ -6,7 +6,7 @@ Covers:
   was silently skipped for chunked uploads.
 - transfer._save_upload() streams to disk with a hard cap.
 - .rwmod export redacts the Steam API key by default.
-- /ws accepts the JWT via Sec-WebSocket-Protocol instead of only ?token=.
+- /ws connects without any token (auth removed for personal use).
 """
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from starlette.websockets import WebSocketDisconnect
 
 # ── upload cap helpers ─────────────────────────────────────────────
 
@@ -168,25 +167,12 @@ class TestTransferSecrets:
         assert "sk_live_secret_123" in config_toml
 
 
-# ── WebSocket subprotocol auth ──────────────────────────────────────
+# ── WebSocket (no auth — open for local/LAN use) ──────────────────
 
 
-class TestWebSocketAuth:
-    def test_subprotocol_token_accepted(self, client: TestClient):
-        from rwmod.auth import create_token
-
-        token = create_token("admin")
-        with client.websocket_connect("/ws", subprotocols=[f"rwmod.{token}"]) as ws:
+class TestWebSocketOpen:
+    def test_ws_connects_without_token(self, client: TestClient):
+        with client.websocket_connect("/ws") as ws:
             ws.send_json({"cmd": "ping"})
             msg = ws.receive_json()
             assert msg["type"] == "pong"
-
-    def test_no_token_rejected(self, client: TestClient):
-        with pytest.raises((WebSocketDisconnect, Exception)):
-            with client.websocket_connect("/ws"):
-                pass  # must be closed with 1008 before accept
-
-    def test_bad_token_rejected(self, client: TestClient):
-        with pytest.raises((WebSocketDisconnect, Exception)):
-            with client.websocket_connect("/ws", subprotocols=["rwmod.invalid"]):
-                pass

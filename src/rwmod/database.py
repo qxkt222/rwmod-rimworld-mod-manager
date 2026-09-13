@@ -299,6 +299,27 @@ def find_local_mods_by_workshop_id(workshop_id: str) -> list[str]:
     return [r["folder"] for r in rows]
 
 
+def find_local_mods_by_workshop_ids(workshop_ids: list[str]) -> dict[str, list[str]]:
+    """Batch variant — one query for many workshop ids.
+
+    Returns {workshop_id: [folder, ...]} for the ids that have a metadata
+    row. Used by the batch downloader to avoid N separate queries (and N
+    fallback directory scans) when checking which mods are already installed.
+    """
+    if not workshop_ids:
+        return {}
+    db = get_conn()
+    marks = ",".join("?" for _ in workshop_ids)
+    rows = db.execute(
+        f"SELECT folder, workshop_id FROM local_mod_metadata WHERE workshop_id IN ({marks})",
+        workshop_ids,
+    ).fetchall()
+    result: dict[str, list[str]] = {}
+    for r in rows:
+        result.setdefault(r["workshop_id"], []).append(r["folder"])
+    return result
+
+
 def upsert_local_mod_workshop_id(folder: str, workshop_id: str) -> None:
     """Record (folder → workshop_id) mapping in the metadata cache index."""
     db = get_conn()
