@@ -120,7 +120,7 @@ async function startCollection() {
       return;
     } else if (evt.event === "ok" || evt.event === "warn" || evt.event === "skip") {
       doneCount += 1;
-      if (evt.event !== "skip") delete current[evt.id];
+      if (evt.event !== "skip" && evt.id) delete current[evt.id];
       renderProgress();
     } else if (evt.event === "done") {
       finished = true;
