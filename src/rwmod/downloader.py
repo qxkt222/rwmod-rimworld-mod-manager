@@ -7,20 +7,34 @@ import shutil
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from rwmod.config import Config
-from rwmod.database import find_local_mods_by_workshop_id
+from rwmod.database import find_local_mods_by_workshop_id, find_local_mods_by_workshop_ids
 from rwmod.steamcmd import DownloadResult, ErrorKind, SteamCMD
 from rwmod.utils import extract_mod_id, safe_filename
 from rwmod.xmlutil import parse_about_field
 
-__all__ = ["download_one", "extract_mod_id", "_find_existing", "_pick_folder_name"]
+__all__ = [
+    "download_one",
+    "download_batch",
+    "extract_mod_id",
+    "_find_existing",
+    "_pick_folder_name",
+]
 
 _log = logging.getLogger(__name__)
 
 MAX_RETRIES = 3
 RETRY_DELAY = 5
+
+# Batch mode: one SteamCMD process downloads several mods back-to-back (the
+# per-mod login/startup overhead is paid once per batch instead of per mod).
+BATCH_SIZE = 6
+# Copy / Skymods-fallback workers used after a batch download finishes.
+_BATCH_WORKERS = 4
 
 # Per-mod locks: concurrent downloads of the same mod are serialized so the
 # check-then-download sequence is atomic. Prevents TOCTOU races where two
@@ -75,27 +89,68 @@ def _find_existing(mods_dir: Path, mod_id: str) -> Path | None:
     except Exception:  # noqa: BLE001 - DB issues must not break downloads
         _log.warning("数据库查找 mod %s 失败，回退目录扫描", mod_id)
 
-    found: Path | None = None
+    return _scan_find_existing(mods_dir, {mod_id}).get(mod_id)
+
+
+def _find_existing_many(mods_dir: Path, mod_ids: list[str]) -> dict[str, Path | None]:
+    """Batch variant of _find_existing — one DB query, one fallback scan.
+
+    Used by the batch downloader: checking N mods with _find_existing would
+    issue N DB queries and — when the metadata table lacks a row — N full
+    directory scans. Here a single directory scan indexes every
+    PublishedFileId.txt at once and repairs the metadata table.
+    """
+    if not mods_dir.exists() or not mod_ids:
+        return {mid: None for mid in mod_ids}
+
+    result: dict[str, Path | None] = {}
+    missing: list[str] = []
+    try:
+        by_id = find_local_mods_by_workshop_ids(mod_ids)
+        for mid in mod_ids:
+            folder = next((f for f in by_id.get(mid, []) if (mods_dir / f).is_dir()), None)
+            if folder is not None:
+                result[mid] = mods_dir / folder
+            else:
+                missing.append(mid)
+    except Exception:  # noqa: BLE001 - DB issues must not break downloads
+        missing = list(mod_ids)
+
+    if missing:
+        result.update(_scan_find_existing(mods_dir, set(missing)))
+    return result
+
+
+def _scan_find_existing(mods_dir: Path, mod_ids: set[str]) -> dict[str, Path | None]:
+    """One directory scan resolving PublishedFileId.txt → folder for many ids.
+
+    Repairs the metadata table for hits so future lookups are DB-only.
+    """
+    found: dict[str, Path | None] = {mid: None for mid in mod_ids}
+    hits: list[tuple[str, str]] = []  # (folder, workshop_id) to persist
     try:
         for d in mods_dir.iterdir():
             if not d.is_dir():
                 continue
             pf = d / "About" / "PublishedFileId.txt"
             try:
-                if pf.exists() and pf.read_text(encoding="utf-8").strip() == mod_id:
-                    found = d
-                    break
+                if pf.exists():
+                    wid = pf.read_text(encoding="utf-8").strip()
+                    if wid in mod_ids and found[wid] is None:
+                        found[wid] = d
+                        hits.append((d.name, wid))
             except OSError:
                 continue
     except OSError as e:
         _log.warning("扫描 %s 失败: %s", mods_dir, e)
-        return None
+        return found
 
-    if found is not None:
+    if hits:
         try:
             from rwmod.database import upsert_local_mod_workshop_id
 
-            upsert_local_mod_workshop_id(found.name, mod_id)
+            for folder, wid in hits:
+                upsert_local_mod_workshop_id(folder, wid)
         except Exception:  # noqa: BLE001
             pass
     return found
@@ -119,6 +174,162 @@ def _pick_folder_name(workshop_path: Path, mod_id: str) -> str:
     if name:
         return f"{safe_filename(name, allow_empty=False)}_{mod_id}"
     return f"mod_{mod_id}"
+
+
+def _install_content(config: Config, mod_id: str, force: bool = False) -> bool:
+    """Copy SteamCMD's downloaded workshop content into the mods directory.
+
+    Returns True when the mod ended up installed. Failures are logged and
+    returned as False so the caller can fall back (Skymods / restore).
+    """
+    steamcmd = SteamCMD(config.steamcmd_path)
+    workshop_dir = steamcmd.workshop_content_dir / mod_id
+    if not workshop_dir.exists():
+        _log.warning("未找到下载内容: %s", mod_id)
+        return False
+
+    # Check if this is a valid mod (has About.xml)
+    about = workshop_dir / "About" / "About.xml"
+    if not about.exists():
+        _log.warning("Downloaded content is not a valid mod (no About.xml): %s", mod_id)
+        return False
+
+    folder_name = _pick_folder_name(workshop_dir, mod_id)
+    dest = config.mods_dir / folder_name
+    if dest.exists() and not force:
+        _log.info("目标已存在: %s", dest)
+        return True
+    if dest.exists() and force:
+        shutil.rmtree(dest)
+
+    try:
+        shutil.copytree(workshop_dir, dest)
+        # Record the install time in the metadata DB (replaces the old
+        # per-mod .rwmod_last_updated marker file, which polluted the game
+        # directory and failed on read-only mounts). Best effort — a DB
+        # hiccup must never fail an otherwise-successful install.
+        try:
+            from rwmod.database import set_last_updated
+
+            set_last_updated(folder_name, int(time.time()))
+        except Exception:  # noqa: BLE001 — timestamp is auxiliary data
+            _log.debug("写入安装时间戳失败: %s", folder_name)
+    except OSError as e:
+        _log.error("复制下载内容失败: %s", e)
+        return False
+    return True
+
+
+def download_batch(
+    config: Config,
+    mod_ids: list[str],
+    force: bool = False,
+    extra_out: list[str] | None = None,
+    progress_cb: Callable[[str, float, float, float], None] | None = None,
+) -> dict[str, bool]:
+    """Download several mods in ONE SteamCMD process — the fast path.
+
+    The per-mod login/startup overhead of SteamCMD (several seconds per
+    process) is paid once for the whole batch, and SteamCMD runs the item
+    downloads back-to-back in a single session.
+
+    - Already-installed ids (unless ``force``) count as success and are skipped.
+    - Collection ids are detected up front; their children are appended to
+      ``extra_out`` (the caller re-queues them) instead of being downloaded
+      via SteamCMD (which cannot download collections).
+    - Items that fail the batch download are retried individually via
+      ``download_one`` (which has its own retry + Skymods fallback).
+
+    Returns a dict {workshop_id: success}. ``extra_out`` collects ids that
+    still need downloading (collection children / new dependencies).
+    """
+    out: dict[str, bool] = {mid: True for mid in dict.fromkeys(mod_ids)}
+    unique_ids = list(dict.fromkeys(mod_ids))
+    if not force:
+        existing = _find_existing_many(config.mods_dir, unique_ids)
+        todo = [mid for mid in unique_ids if existing.get(mid) is None]
+    else:
+        todo = unique_ids
+    if not todo:
+        return out
+
+    # ── collections: detect up front, hand children to the caller ──
+    children: list[str] = []
+    try:
+        from rwmod.workshop import fetch_collection_children, is_collection
+
+        def _collection_children(mid: str) -> list[str] | None:
+            try:
+                if is_collection(mid):
+                    return fetch_collection_children(mid)
+            except Exception:  # noqa: BLE001 — detection must not break the batch
+                return None
+            return None
+
+        with ThreadPoolExecutor(max_workers=_BATCH_WORKERS) as ex:
+            collection_results = list(ex.map(_collection_children, todo))
+        for mid, kids in zip(todo, collection_results, strict=True):
+            if kids:
+                _log.info("合集 ID %s：%s 个子项交给队列下载", mid, len(kids))
+                children.extend(kids)
+                out[mid] = True  # collection itself is not a mod
+        if children:
+            if extra_out is not None:
+                extra_out.extend(children)
+            else:
+                # No collector (direct call): keep the old recursive behavior.
+                for cid in children:
+                    download_one(config, cid, force)
+            todo = [mid for mid, kids in zip(todo, collection_results, strict=True) if not kids]
+            if not todo:
+                return out
+    except Exception as e:  # noqa: BLE001 — collection detection must not kill the batch
+        _log.debug("合集检测失败（继续批量下载）: %s", e)
+
+    # ── batch SteamCMD download (one process, one login) ──────────
+    steamcmd = SteamCMD(config.steamcmd_path)
+    results = steamcmd.workshop_download_many(todo, progress_cb=progress_cb)
+    # Defensive: every requested id must have a result entry.
+    for mid in todo:
+        if mid not in results:
+            _log.error("批量下载缺少 %s 的结果（进程异常退出）", mid)
+            out[mid] = False
+
+    # ── install downloaded content in parallel ───────────────────
+    ok_ids = [mid for mid, r in results.items() if r.success]
+
+    def _install(mid: str) -> bool:
+        with _lock_for(mid):
+            return _install_content(config, mid, force)
+
+    installed: dict[str, bool] = {}
+    if ok_ids:
+        with ThreadPoolExecutor(max_workers=min(_BATCH_WORKERS, max(1, len(ok_ids)))) as ex:
+            installed = dict(zip(ok_ids, ex.map(_install, ok_ids), strict=True))
+        for mid in ok_ids:
+            if installed[mid]:
+                _collect_deps(config, mid, extra_out)
+            else:
+                _log.warning("安装失败（内容已下载），尝试 Skymods: %s", mid)
+                out[mid] = _skymods_fallback(config, mid)
+
+    # ── failures: retry individually (retry loop + Skymods) ──────
+    for mid, r in results.items():
+        if r.success:
+            out[mid] = installed.get(mid, True)
+            continue
+        if r.error_kind in ErrorKind.NON_RETRYABLE:
+            _log.error(
+                "❌ %s (%s): %s — 已跳过 Skymods（错误不可恢复）",
+                mid,
+                r.error_kind,
+                r.error_detail or ErrorKind.explain(r.error_kind),
+            )
+            out[mid] = False
+            continue
+        # Recoverable failure → per-mod retry path (own retries + Skymods).
+        out[mid] = download_one(config, mid, force)
+    return out
 
 
 def download_one(config: Config, mod_id: str, force: bool = False) -> bool:
@@ -246,43 +457,10 @@ def _download_one_unlocked(
 
     # ── handle successful download ───────────────────────────────
     if last_result and last_result.success:
-        workshop_dir = steamcmd.workshop_content_dir / mod_id
-        if not workshop_dir.exists():
-            _log.warning("未找到下载内容: %s", mod_id)
+        if not _install_content(config, mod_id, force):
+            _log.warning("安装下载内容失败，尝试 Skymods: %s", mod_id)
             return _skymods_fallback(config, mod_id)
-
-        # Check if this is a collection
-        about = workshop_dir / "About" / "About.xml"
-        if not about.exists():
-            _log.warning("Downloaded content is not a valid mod (no About.xml): %s", mod_id)
-            return _skymods_fallback(config, mod_id)
-
-        folder_name = _pick_folder_name(workshop_dir, mod_id)
-        dest = config.mods_dir / folder_name
-        if dest.exists() and not force:
-            _log.info("目标已存在: %s", dest)
-            return True
-        if dest.exists() and force:
-            shutil.rmtree(dest)
-
-        try:
-            shutil.copytree(workshop_dir, dest)
-            # Record the install time in the metadata DB (replaces the old
-            # per-mod .rwmod_last_updated marker file, which polluted the game
-            # directory and failed on read-only mounts). Best effort — a DB
-            # hiccup must never fail an otherwise-successful install.
-            try:
-                from rwmod.database import set_last_updated
-
-                set_last_updated(folder_name, int(time.time()))
-            except Exception:  # noqa: BLE001 — timestamp is auxiliary data
-                _log.debug("写入安装时间戳失败: %s", folder_name)
-        except OSError as e:
-            _log.error("复制下载内容失败: %s", e)
-            _auto_restore_backup(config, mod_id)
-            _rollback_stash(config, mod_id, stashed)
-            return False
-        _log.info("下载完成: %s", folder_name)
+        _log.info("下载完成: %s", mod_id)
         # Force-overwrite succeeded — the stashed old copy is now obsolete.
         _discard_stash(stashed)
 
@@ -393,6 +571,11 @@ def _collect_deps(config: Config, mod_id: str, deferred: list[str] | None) -> No
     own dependencies) are also fetched, not just the direct ones. A visited
     set prevents infinite loops on cyclic dependency graphs.
 
+    The Steam API query is done **per BFS level** (fetch_item_dependencies
+    accepts many ids in one GetPublishedFileDetails call), so a mod with
+    dozens of dependencies costs a handful of requests instead of one per
+    dependency.
+
     Collected IDs are appended to ``deferred`` and downloaded by the caller
     AFTER the per-mod lock is released (see download_one).
     """
@@ -400,23 +583,27 @@ def _collect_deps(config: Config, mod_id: str, deferred: list[str] | None) -> No
         from rwmod.workshop import fetch_item_dependencies
 
         queue: deque[str] = deque([mod_id])
-        visited: set[str] = set()
+        queued: set[str] = {mod_id}  # ids already queued / decided (dedupe)
         while queue:
-            current = queue.popleft()
-            if current in visited:
+            # Drain the whole current level, then query it in ONE API call.
+            level: list[str] = []
+            while queue:
+                current = queue.popleft()
+                level.append(current)
+            if not level:
                 continue
-            visited.add(current)
-            deps = fetch_item_dependencies([current])
-            for dep_id in deps.get(current, []):
-                if dep_id in visited:
-                    continue
-                if _find_existing(config.mods_dir, dep_id):
-                    visited.add(dep_id)
-                    continue
-                _log.info("收集依赖: %s", dep_id)
-                if deferred is not None:
-                    deferred.append(dep_id)
-                visited.add(dep_id)
-                queue.append(dep_id)
+            deps_map = fetch_item_dependencies(level)
+            for current in level:
+                for dep_id in deps_map.get(current, []):
+                    if dep_id in queued:
+                        continue
+                    if _find_existing(config.mods_dir, dep_id):
+                        queued.add(dep_id)
+                        continue
+                    _log.info("收集依赖: %s", dep_id)
+                    if deferred is not None:
+                        deferred.append(dep_id)
+                    queued.add(dep_id)
+                    queue.append(dep_id)
     except Exception as e:
         _log.warning("依赖检测失败: %s", e)

@@ -24,7 +24,6 @@ a = Analysis(
         'uvicorn.lifespan.off',
         # Core modules
         'rwmod.app_state',
-        'rwmod.auth',
         'rwmod.autoupdate',
         'rwmod.backup',
         'rwmod.cache_db',
@@ -57,7 +56,6 @@ a = Analysis(
         'rwmod.utils',
         'rwmod.workshop',
         # All router modules
-        'rwmod.routers.auth',
         'rwmod.routers.auto_update',
         'rwmod.routers.backups',
         'rwmod.routers.compat',

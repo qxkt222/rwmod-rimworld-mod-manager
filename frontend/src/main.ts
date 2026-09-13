@@ -11,7 +11,6 @@ import { initRouter } from "./router";
 import { connectWS, type WSMessage } from "./ws";
 import { initDashboardPanel, stopQueuePolling } from "./panels/dashboard";
 import { toast } from "./toast";
-import { clearToken, ensureAuth, getToken, showLoginOverlay } from "./auth";
 
 
 // ── state ──────────────────────────────────────────────────────
@@ -206,6 +205,13 @@ document.getElementById("app")!.innerHTML = /* html */ `
           <span>📋 下载日志</span>
           <button class="btn btn-ghost btn-sm" id="btn-clear-log">清空</button>
         </div>
+        <div id="download-progress" style="display:none;padding:0 16px 8px">
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
+            <span>下载进度</span>
+            <span id="dp-current" style="color:var(--gray-text)"></span>
+          </div>
+          <div class="queue-bar"><div class="queue-bar-inner" id="dp-bar" style="width:0%"></div></div>
+        </div>
         <div class="log-console" id="log"></div>
       </div>
     </div>
@@ -224,6 +230,14 @@ document.getElementById("app")!.innerHTML = /* html */ `
       </div>
       <div class="card" style="flex:1;display:flex;flex-direction:column;overflow-y:auto;min-height:0">
         <div class="card-header">📋 日志</div>
+        <div id="collection-progress" style="display:none;padding:8px 16px 0">
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
+            <span id="cp-total-label">合集下载进度</span>
+            <span id="cp-count" style="color:var(--gray-text)"></span>
+          </div>
+          <div class="queue-bar"><div class="queue-bar-inner" id="cp-total-bar" style="width:0%"></div></div>
+          <div id="cp-current" style="font-size:11px;color:var(--gray-text);margin-top:4px"></div>
+        </div>
         <div class="log-console" id="log-collection"></div>
       </div>
     </div>
@@ -462,22 +476,6 @@ document.getElementById("app")!.innerHTML = /* html */ `
     <div id="cmd-results" class="cmd-results"></div>
   </div>
 </div>
-
-<div id="login-overlay" class="login-overlay">
-  <div class="login-box">
-    <div style="font-size:40px;margin-bottom:8px">🔐</div>
-    <h2 style="margin:0 0 4px;font-size:18px">rwmod 需要认证</h2>
-    <p style="color:var(--gray-text);font-size:12px;margin:0 0 16px">
-      请输入访问密钥。未设置 RWMOD_SECRET 环境变量时，密钥见服务启动日志或配置文件目录下的 <code>rwmod.secret</code> 文件。
-    </p>
-    <input type="password" id="login-password" class="cmd-input" placeholder="访问密钥" autocomplete="off" style="width:100%;box-sizing:border-box;margin-bottom:12px" />
-    <div id="login-error" style="color:var(--red,#e5484d);font-size:12px;margin-bottom:8px;min-height:16px"></div>
-    <div style="display:flex;gap:8px;justify-content:flex-end">
-      <button class="btn btn-ghost" id="login-cancel">取消</button>
-      <button class="btn btn-primary" id="login-submit">登录</button>
-    </div>
-  </div>
-</div>
 `;
 
 
@@ -593,52 +591,8 @@ document.getElementById("btn-export")?.addEventListener("click", async () => {
   }
 });
 
-// ── auth: inject Bearer token into every /api fetch ─────────────
-// The backend enforces JWT auth on all /api routes. We patch window.fetch
-// once so every panel's bare fetch() automatically carries the token.
-function patchFetchWithAuth(): void {
-  const origFetch = window.fetch.bind(window);
-  window.fetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    // Only attach the token to same-origin /api requests.
-    if (url.startsWith("/api")) {
-      const token = getToken();
-      if (token) {
-        init = init || {};
-        init.headers = new Headers(init.headers);
-        (init.headers as Headers).set("Authorization", `Bearer ${token}`);
-      }
-      // Global 401 handling: drop the stale token and re-show the login overlay.
-      // (login/verify 属于认证流程本身，由 auth.ts 显式处理)
-      if (url !== "/api/auth/login" && url !== "/api/auth/verify") {
-        return origFetch(input, init).then((resp) => {
-          if (resp.status === 401) {
-            clearToken();
-            showLoginOverlay();
-          }
-          return resp;
-        });
-      }
-    }
-    return origFetch(input, init);
-  };
-}
-
 // ── startup ────────────────────────────────────────────────────
 (async () => {
-  // Authenticate first (verify stored token, or show the login overlay).
-  const authed = await ensureAuth();
-  if (!authed) {
-    // User cancelled login — still patch fetch (no token) so the UI renders,
-    // but most panels will show errors until they reload after logging in.
-    patchFetchWithAuth();
-    initRouter(switchPanel);
-    return;
-  }
-
-  // Inject the token into all subsequent /api fetches.
-  patchFetchWithAuth();
-
   // Hash-based routing (back/forward + deep links), including #saves / #tags
   initRouter(switchPanel);
 

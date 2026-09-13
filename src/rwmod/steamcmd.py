@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import re
 import signal
 import subprocess  # nosec B404 — subprocess is required to run SteamCMD
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import IO
 
 __all__ = [
     "SteamCMD",
@@ -115,6 +118,77 @@ class DownloadResult:
     output_lines: list[str] = field(default_factory=list)
 
 
+# Progress callback signature: (mod_id, percent, downloaded_bytes, total_bytes).
+ProgressCallback = Callable[[str, float, float, float], None]
+
+
+class _ProgressReader(threading.Thread):
+    """Reads SteamCMD stdout line-by-line and reports live download progress.
+
+    SteamCMD prints lines like::
+
+        Downloading item 2822234567 ...
+        Update state (0x61) downloading, progress: 42.30 (360448 / 2912345)
+        ...
+        Success. Downloaded item 2822234567
+
+    The ``Downloading item`` line tells us *which* mod the following progress
+    lines belong to; the ``Update state ... downloading`` lines carry the
+    real byte counts. All lines are kept for the caller's output_lines.
+    """
+
+    _PROGRESS_RE = re.compile(
+        r"Update state \(0x[0-9a-fA-F]+\) downloading, progress: ([\d.]+) \((\d+) / (\d+)\)"
+    )
+    _ITEM_START_RE = re.compile(r"Downloading item (\d+)")
+    _ITEM_END_RE = re.compile(r"Success\. Downloaded item (\d+)|Download item (\d+) result")
+
+    def __init__(
+        self,
+        stdout: IO[str] | None,
+        mod_ids: set[str],
+        progress_cb: ProgressCallback | None,
+    ) -> None:
+        super().__init__(daemon=True, name="rwmod-steamcmd-reader")
+        self._fh = stdout
+        self._mod_ids = mod_ids
+        self._cb = progress_cb
+        self.lines: list[str] = []
+        self.current_id: str | None = None
+
+    def run(self) -> None:
+        if self._fh is None:
+            return
+        with contextlib.suppress(Exception):  # broken pipe / closed stdout on kill
+            for raw in self._fh:
+                line = raw.rstrip("\r\n")
+                if not line:
+                    continue
+                self.lines.append(line)
+                with contextlib.suppress(Exception):  # a parse hiccup must not kill the reader
+                    self._parse(line)
+
+    def _parse(self, line: str) -> None:
+        m = self._ITEM_START_RE.search(line)
+        if m and m.group(1) in self._mod_ids:
+            self.current_id = m.group(1)
+            return
+        if self._ITEM_END_RE.search(line):
+            self.current_id = None
+            return
+        if self._cb is None or self.current_id is None:
+            return
+        m = self._PROGRESS_RE.search(line)
+        if m and self._cb is not None:
+            with contextlib.suppress(Exception):  # callback must never break the reader
+                self._cb(
+                    self.current_id,
+                    float(m.group(1)),
+                    float(m.group(2)),
+                    float(m.group(3)),
+                )
+
+
 class SteamCMD:
     """Run SteamCMD commands with structured error parsing."""
 
@@ -152,27 +226,65 @@ class SteamCMD:
             return 0
 
     def workshop_download(self, mod_id: str) -> DownloadResult:
-        """Download a workshop item, return structured result with error classification."""
-        # Last-line defense: workshop IDs must be purely numeric so a crafted
-        # value can never inject SteamCMD command tokens (e.g.
-        # "+force_install_dir <path>" or "+download_depot ...").
-        if not mod_id.isdigit():
-            return DownloadResult(
-                success=False,
-                mod_id=mod_id,
-                error_kind=ErrorKind.UNKNOWN,
-                error_detail=f"非法的 Mod ID: {mod_id!r}",
-            )
-        cmd = [
-            self.exe,
-            "+login",
-            "anonymous",
-            "+workshop_download_item",
-            self.STEAM_APP_ID,
-            mod_id,
-            "+quit",
-        ]
+        """Download a single workshop item (batch of one)."""
+        return self.workshop_download_many([mod_id])[mod_id]
+
+    def workshop_download_many(
+        self,
+        mod_ids: list[str],
+        progress_cb: ProgressCallback | None = None,
+    ) -> dict[str, DownloadResult]:
+        """Download several workshop items in ONE SteamCMD process.
+
+        SteamCMD accepts repeated ``+workshop_download_item`` args in a single
+        invocation — one ``+login anonymous``, one process, N downloads. This
+        removes the per-mod process startup/login overhead (several seconds
+        each) and lets SteamCMD run the downloads back-to-back without the
+        login handshake in between.
+
+        The process is registered in ``_live_procs`` under *every* mod id in
+        the batch, so queue cancellation of any one of them kills the whole
+        batch (the sibling items then fail fast and are re-queued by the
+        caller).
+
+        ``progress_cb(mod_id, percent, downloaded, total)`` is invoked from a
+        reader thread as SteamCMD reports byte progress (only for ids in the
+        batch; the callback must be cheap and thread-safe).
+
+        Returns a dict keyed by mod id. Invalid (non-numeric) ids are
+        rejected up front without launching SteamCMD.
+        """
+        results: dict[str, DownloadResult] = {}
+        valid: list[str] = []
+        for mid in mod_ids:
+            # Last-line defense: workshop IDs must be purely numeric so a
+            # crafted value can never inject SteamCMD command tokens (e.g.
+            # "+force_install_dir <path>" or "+download_depot ...").
+            if mid.isdigit():
+                valid.append(mid)
+            else:
+                results[mid] = DownloadResult(
+                    success=False,
+                    mod_id=mid,
+                    error_kind=ErrorKind.UNKNOWN,
+                    error_detail=f"非法的 Mod ID: {mid!r}",
+                )
+        if not valid:
+            return results
+
+        cmd = [self.exe, "+login", "anonymous"]
+        for mid in valid:
+            cmd += ["+workshop_download_item", self.STEAM_APP_ID, mid]
+        cmd += ["+quit"]
         log_offset = self._log_offset()
+
+        # Total timeout scales with batch size (each item gets the 10-min
+        # budget of the single-item path) but is capped so a giant batch can
+        # never pin a worker for hours.
+        timeout_secs = min(
+            40 * 60,
+            max(self._TIMEOUT_MINUTES * 60, 5 * 60 * len(valid)),
+        )
 
         try:
             proc = subprocess.Popen(  # nosec B603 — command list is fixed, no shell, no user input
@@ -182,68 +294,94 @@ class SteamCMD:
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                bufsize=-1,
+                bufsize=1,  # line-buffered — progress lines arrive promptly
                 cwd=str(self.steam_dir),
             )
         except OSError as e:
-            return DownloadResult(
-                success=False,
-                mod_id=mod_id,
-                error_kind=ErrorKind.UNKNOWN,
-                error_detail=f"无法启动 SteamCMD: {e}",
-            )
+            return {
+                mid: DownloadResult(
+                    success=False,
+                    mod_id=mid,
+                    error_kind=ErrorKind.UNKNOWN,
+                    error_detail=f"无法启动 SteamCMD: {e}",
+                )
+                for mid in valid
+            }
 
-        # Register so queue.remove() / cancel_download() can kill this run.
+        # Register under every id so cancel_download(mod_id) can kill the
+        # shared process from any of the batch's items.
         with _live_guard:
-            _live_procs[mod_id] = proc
+            for mid in valid:
+                _live_procs[mid] = proc
+        reader: _ProgressReader | None = None
         try:
-            out, _err = proc.communicate(timeout=self._TIMEOUT_MINUTES * 60)
+            # A reader thread drains stdout line-by-line while the process
+            # runs, so progress callbacks fire in real time (communicate()
+            # would buffer everything until exit).
+            reader = _ProgressReader(proc.stdout, set(valid), progress_cb)
+            reader.start()
+            proc.wait(timeout=timeout_secs)
         except subprocess.TimeoutExpired:
             proc.kill()
             try:
                 proc.wait(timeout=30)
             except subprocess.TimeoutExpired:
-                # TerminateProcess is asynchronous on Windows / AV can delay
-                # it — the process may still be alive; log it so it can't
-                # silently linger and hold workshop locks.
-                _log.warning("SteamCMD %s 超时且 kill 后 30s 仍未退出（进程可能残留）", mod_id)
-            return DownloadResult(
-                success=False,
-                mod_id=mod_id,
-                error_kind=ErrorKind.TIMEOUT,
-                error_detail="SteamCMD 超时无响应",
-            )
+                _log.warning(
+                    "SteamCMD 批量 %s 超时且 kill 后 30s 仍未退出（进程可能残留）",
+                    valid[:5],
+                )
+            if reader is not None:
+                reader.join(timeout=5)
+            with contextlib.suppress(Exception):
+                if proc.stdout:
+                    proc.stdout.close()
+            return {
+                mid: DownloadResult(
+                    success=False,
+                    mod_id=mid,
+                    error_kind=ErrorKind.TIMEOUT,
+                    error_detail="SteamCMD 批量下载超时",
+                )
+                for mid in valid
+            }
         finally:
-            # The process has exited (or was killed) — free the registry slot.
+            # The process has exited (or was killed) — free all registry slots.
             with _live_guard:
-                _live_procs.pop(mod_id, None)
+                for mid in valid:
+                    _live_procs.pop(mid, None)
+            if reader is not None:
+                reader.join(timeout=5)
+            with contextlib.suppress(Exception):
+                if proc.stdout:
+                    proc.stdout.close()
 
-        lines: list[str] = [line for line in (out or "").splitlines() if line.strip()]
+        lines: list[str] = list(reader.lines) if reader is not None else []
 
         # ── parse workshop_log.txt (only this run's appended section) ──
-        error_kind, error_detail = self._parse_workshop_error(mod_id, log_offset)
-
-        if error_kind == ErrorKind.OK:
-            # Double-check the content actually exists
-            content_dir = self.workshop_content_dir / mod_id
-            if content_dir.exists():
-                return DownloadResult(
-                    success=True,
-                    mod_id=mod_id,
-                    error_kind=ErrorKind.OK,
-                    output_lines=lines,
-                )
-            # SteamCMD said OK but file not on disk → treat as failure
-            error_kind = ErrorKind.FAILURE
-            error_detail = "SteamCMD 返回成功但未找到下载内容"
-
-        return DownloadResult(
-            success=False,
-            mod_id=mod_id,
-            error_kind=error_kind,
-            error_detail=error_detail,
-            output_lines=lines,
-        )
+        for mid in valid:
+            error_kind, error_detail = self._parse_workshop_error(mid, log_offset)
+            if error_kind == ErrorKind.OK:
+                # Double-check the content actually exists
+                content_dir = self.workshop_content_dir / mid
+                if content_dir.exists():
+                    results[mid] = DownloadResult(
+                        success=True,
+                        mod_id=mid,
+                        error_kind=ErrorKind.OK,
+                        output_lines=lines,
+                    )
+                    continue
+                # SteamCMD said OK but file not on disk → treat as failure
+                error_kind = ErrorKind.FAILURE
+                error_detail = "SteamCMD 返回成功但未找到下载内容"
+            results[mid] = DownloadResult(
+                success=False,
+                mod_id=mid,
+                error_kind=error_kind,
+                error_detail=error_detail,
+                output_lines=lines,
+            )
+        return results
 
     def _parse_workshop_error(self, mod_id: str, offset: int = 0) -> tuple[str, str]:
         """Parse workshop_log.txt to extract the real error reason.

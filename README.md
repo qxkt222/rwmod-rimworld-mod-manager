@@ -13,6 +13,7 @@
 | 🔍 **搜索** | Steam Workshop 搜索（Web API，无需 API Key） |
 | 🔄 **一键更新** | 自动检测可用更新，后台下载，队列管理 |
 | 🔌 **实时队列** | WebSocket 实时推送队列状态，前端无需手动刷新 |
+| ⚡ **批量下载** | 每批多个 Mod 共用一个 SteamCMD 进程，SSE/WS 实时进度条 |
 | 🛡 **安全加固** | 备份/解压路径穿越防护、Steam API Key 脱敏、进程超时保护 |
 | 🧩 **依赖管理** | 下载前预览依赖树，自动补装缺失依赖 |
 | 💾 **备份回滚** | 更新前自动备份旧版，一键恢复 |
@@ -42,7 +43,7 @@
 
 ### 🔒 安全修复（P1）
 
-- __全新鉴权模型__ — 本机（localhost）免密钥直接可用，局域网客户端需密钥（持久化于 `~/.rwmod.secret`）；设置 `RWMOD_SECRET` 可启用严格模式
+- __移除登录鉴权__ — 项目定位为个人本机 / 局域网自用，已删除 JWT 认证与密钥管理（无 `~/.rwmod.secret`、无 `RWMOD_SECRET`）；API 对同一网段客户端开放，请勿直接暴露公网
 - __workshop_id 校验链__ — 全链路强制数字校验，堵住备份任意写盘 / restore 目录穿越 / SteamCMD 命令注入
 - __Skymods SSRF 防护__ — 域名白名单 + 私网 IP 拒绝 + 响应大小上限
 - __zip 炸弹防护__ — 解压成员数 / 总量 / 重复路径上限，上传端点统一限大小
@@ -67,7 +68,7 @@
 
 ### 🧹 清理（P3）
 
-- 测试断言更新至 0.4.5，全套 __223 项测试通过__
+- 测试断言更新至 0.6.0，全套 __267 项测试通过__
 - mypy 0 错误，ruff 全量格式化，dead code 清理
 
 ## 🚀 快速开始
@@ -131,11 +132,10 @@ pre-commit install
 
 ```
 src/rwmod/
-├── server.py           # FastAPI app factory (85行)
+├── server.py           # FastAPI app factory (325行)
 ├── deps.py             # 依赖注入 (Config/DB/Queue)
 ├── errors.py           # 统一异常体系
-├── routers/            # 19 个路由模块（全部 /api 前缀）
-│   ├── auth.py         # 登录 / token 校验
+├── routers/            # 18 个路由模块（全部 /api 前缀）
 │   ├── auto_update.py  # 自动更新
 │   ├── backups.py      # 备份管理
 │   ├── compat.py       # 兼容性检查
@@ -172,13 +172,12 @@ src/rwmod/
 
 ## 🔒 安全说明
 
-- 默认仅监听 localhost；局域网访问需密钥（见「快速开始」）。**不建议**不做任何
-  反代/HTTPS 保护就暴露到公网。
+- 本项目定位为**个人本机使用**：已移除登录鉴权（无 JWT / 密钥），API 对同一网络的
+  任何客户端开放。**不建议**不做任何反代/HTTPS 保护就暴露到公网。
+- 保留的上传文件安全：上传大小硬上限、zip 解压路径穿越/炸弹防护、workshop_id 数字
+  校验、配置路径黑名单、Skymods SSRF 白名单。
 - 安全漏洞请通过 [SECURITY.md](SECURITY.md) 报告的流程私信提交。
-- 密钥文件位置
-- | 系统 | 位置 |
-- | Windows | C:\\Users\\<用户名>\\.rwmod.secret |
-- | Linux / macOS | /home/<用户名>/.rwmod.secret |
+
 ## 📝 License
 
 MIT（详见 [LICENSE](LICENSE)）

@@ -1,8 +1,6 @@
 """Health / status router."""
 
-from fastapi import APIRouter, Depends
-
-from rwmod.auth import get_current_user
+from fastapi import APIRouter
 
 router = APIRouter(prefix="/api", tags=["status"])
 
@@ -24,7 +22,7 @@ def get_locale_api():
 
 
 @router.post("/locale")
-def set_locale_api(payload: dict, _user: str = Depends(get_current_user)):
+def set_locale_api(payload: dict):
     """Set the current locale (zh-CN or en)."""
     from rwmod.i18n import set_locale
 
@@ -34,7 +32,7 @@ def set_locale_api(payload: dict, _user: str = Depends(get_current_user)):
 
 
 @router.get("/onboarding/check")
-def onboarding_check(_user: str = Depends(get_current_user)):
+def onboarding_check():
     """Check what still needs configuration for first-time setup.
 
     Returns a list of onboarding steps with their status.

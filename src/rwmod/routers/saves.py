@@ -2,7 +2,6 @@
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 
-from rwmod.auth import get_current_user
 from rwmod.config import Config
 from rwmod.deps import get_config
 from rwmod.parser import get_installed_package_ids
@@ -14,7 +13,6 @@ router = APIRouter(prefix="/api/saves", tags=["saves"])
 @router.get("")
 def list_saves(
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     """List all found save files with basic analysis."""
     saves = find_save_files(cfg.rimworld_dir)
@@ -39,7 +37,6 @@ def list_saves(
 def save_detail(
     save_name: str,
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     """Analyze a specific save file in detail."""
     saves = find_save_files(cfg.rimworld_dir)
@@ -53,7 +50,6 @@ def save_detail(
 @router.post("/analyze")
 async def api_upload_and_analyze(
     file: UploadFile,
-    _user: str = Depends(get_current_user),
 ):
     """Upload a .rws save file and get its mod requirements."""
     from rwmod.routers.download import _reject_oversized
@@ -74,7 +70,6 @@ async def api_upload_and_analyze(
 async def download_missing_mods(
     save_name: str,
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     """Download all mods that a save requires but are not installed.
 

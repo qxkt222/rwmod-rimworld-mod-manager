@@ -104,6 +104,36 @@ function clearDepPreview() {
   if (container) container.innerHTML = "";
 }
 
+function fmtBytes(n: number): string {
+  if (!n || n <= 0 || !isFinite(n)) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v >= 100 ? v.toFixed(0) : v.toFixed(1)} ${units[i]}`;
+}
+
+// Live per-mod progress from SSE 'progress' events → top progress bar.
+let dlCurrent: { id: string; percent: number; downloaded: number; total: number } | null = null;
+
+function renderDlProgress() {
+  const box = document.getElementById("download-progress");
+  if (!box) return;
+  const show = dlCurrent !== null;
+  box.style.display = show ? "block" : "none";
+  if (!show) return;
+  const bar = document.getElementById("dp-bar");
+  const cur = document.getElementById("dp-current");
+  const pct = Math.min(100, dlCurrent!.percent);
+  if (bar) bar.style.width = `${pct}%`;
+  if (cur) {
+    const bytes = dlCurrent!.downloaded > 0
+      ? ` · ${fmtBytes(dlCurrent!.downloaded)} / ${fmtBytes(dlCurrent!.total)}`
+      : "";
+    cur.textContent = `${dlCurrent!.id} ${pct.toFixed(1)}%${bytes}`;
+  }
+}
+
 async function startDownload() {
   const input = document.getElementById("mod-input") as HTMLInputElement;
   const forceChk = document.getElementById("force-dl") as HTMLInputElement;
@@ -117,17 +147,20 @@ async function startDownload() {
   setStatus("blue", `正在下载 ${ids.length} 个 Mod...`);
 
   for (const id of ids) {
+    dlCurrent = null;
+    renderDlProgress();
     renderLog(`── Mod ${id} ──`);
     await new Promise<void>((resolve) => {
-      // 超时兜底：2 分钟没有任何事件则中止，避免 Promise 永久挂起
+      // 超时兜底：5 分钟没有任何事件则中止（合集/大 Mod 下载可能长时间
+      // 无事件——SteamCMD 启动校验缓存可达数分钟；后端每 30s 发心跳）。
       let timer: ReturnType<typeof setTimeout> | null = null;
       const armTimeout = () => {
         if (timer) clearTimeout(timer);
         timer = setTimeout(() => {
           activeController?.abort();
-          renderLog("  ✗ 超时：2 分钟无响应，已中止", "line-error");
+          renderLog("  ✗ 超时：5 分钟无响应，已中止", "line-error");
           resolve();
-        }, 2 * 60 * 1000);
+        }, 5 * 60 * 1000);
       };
       armTimeout();
       activeController = api.downloadStream(id, force, (evt: SSEEvent) => {
@@ -140,6 +173,8 @@ async function startDownload() {
         renderSSE(evt);
       });
     });
+    dlCurrent = null;
+    renderDlProgress();
   }
 
   setStatus("green", "下载完成");
@@ -164,6 +199,16 @@ function renderSSE(evt: SSEEvent) {
       return renderLog(`  ✗ ${evt.msg}`, "line-error");
     case "done":
       return renderLog(`✅ 完成 ${evt.id}`, "line-ok");
+    case "progress":
+      // Live byte progress → top progress bar (not the log — too chatty).
+      dlCurrent = {
+        id: evt.id || "?",
+        percent: evt.percent ?? 0,
+        downloaded: evt.downloaded ?? 0,
+        total: evt.total ?? 0,
+      };
+      renderDlProgress();
+      return;
   }
 }
 

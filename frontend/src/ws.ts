@@ -1,20 +1,7 @@
 /**
  * WebSocket client for real-time download progress.
  * Falls back to SSE via api.downloadStream if WS unavailable.
- *
- * Auth: the backend /ws endpoint validates a JWT presented as the
- * ``rwmod.<token>`` subprotocol (Sec-WebSocket-Protocol header) — carrying it
- * in the URL (?token=) would leak the token into access logs / browser
- * history. The legacy query-param form is still accepted by the server.
- * If the token is missing/expired the connection is rejected — after
- * MAX_RECONNECT attempts we fall back to REST polling of /api/queue (every
- * 5s), and any 401 on those fetches triggers the unified re-login flow
- * (patchFetchWithAuth / fetchJSON). Once the socket reconnects (e.g. after
- * re-login), polling stops automatically.
  */
-import { getToken } from "./auth";
-
-const WS_PROTOCOL_PREFIX = "rwmod.";
 
 export interface WSMessage {
   type: string;
@@ -45,13 +32,8 @@ export function connectWS(onMessage: WSCallback): WebSocket | null {
 
   const protocol = location.protocol === "https:" ? "wss" : "ws";
   const url = new URL(`${protocol}://${location.host}/ws`);
-  // Present the token as a WebSocket subprotocol instead of a query param —
-  // the server echoes it back on accept, and the browser refuses the
-  // handshake if the server doesn't (which the backend does).
-  const token = getToken();
-  const protocols = token ? [WS_PROTOCOL_PREFIX + token] : [];
   try {
-    ws = new WebSocket(url.toString(), protocols);
+    ws = new WebSocket(url.toString());
   } catch {
     console.log("[WS] WebSocket not available, using REST fallback");
     return null;

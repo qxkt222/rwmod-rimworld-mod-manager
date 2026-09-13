@@ -11,6 +11,9 @@ interface QueueItem {
   status: string;
   progress: number;
   msg: string;
+  downloaded?: number;
+  total?: number;
+  speed_bps?: number;
 }
 
 let items: QueueItem[] = [];
@@ -61,6 +64,23 @@ async function clearQueue() {
   refreshState();
 }
 
+function fmtBytes(n: number): string {
+  if (!n || n <= 0 || !isFinite(n)) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v >= 100 ? v.toFixed(0) : v.toFixed(1)} ${units[i]}`;
+}
+
+function fmtSpeed(bps: number): string {
+  if (!bps || bps <= 0 || !isFinite(bps)) return "";
+  return `${fmtBytes(bps)}/s`;
+}
+
 function render() {
   const container = document.getElementById("queue-list")!;
   if (!items.length) {
@@ -77,17 +97,26 @@ function render() {
   };
 
   container.innerHTML = items
-    .map(
-      (i) => /* html */ `
+    .map((i) => {
+      const downloading = i.status === "downloading";
+      const pct = Math.round(i.progress * 100);
+      const speed = downloading ? fmtSpeed(i.speed_bps || 0) : "";
+      const bytes =
+        downloading && (i.downloaded || 0) > 0
+          ? `${fmtBytes(i.downloaded!)} / ${fmtBytes(i.total!)}`
+          : "";
+      const detailBits = [speed, bytes].filter(Boolean).join(" · ");
+      return /* html */ `
     <div class="queue-item">
       <span class="q-status">${statusIcons[i.status] || "❓"}</span>
       <span class="q-id">${esc(i.id)}</span>
       <span class="q-name">${esc(i.name || "")}</span>
-      <span class="q-progress">${esc(i.msg || i.status)}</span>
+      <span class="q-progress">${esc(i.msg || i.status)}${detailBits ? ` <span class="q-speed">${esc(detailBits)}</span>` : ""}</span>
       ${i.status === "pending" ? `<button class="btn btn-ghost btn-sm" data-remove="${esc(i.id)}">✕</button>` : ""}
     </div>
-    ${i.status === "downloading" ? `<div class="queue-bar"><div class="queue-bar-inner" style="width:${Math.round(i.progress * 100)}%"></div></div>` : ""}`,
-    )
+    ${downloading ? `<div class="queue-bar"><div class="queue-bar-inner" style="width:${pct}%"></div></div>
+    <div class="queue-meta">${pct}%${detailBits ? ` — ${esc(detailBits)}` : ""}</div>` : ""}`;
+    })
     .join("");
 
   container.querySelectorAll("[data-remove]").forEach((btn) => {

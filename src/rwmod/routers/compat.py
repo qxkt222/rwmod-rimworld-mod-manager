@@ -2,7 +2,6 @@
 
 from fastapi import APIRouter, Depends
 
-from rwmod.auth import get_current_user
 from rwmod.compat import check_compatibility
 from rwmod.config import Config
 from rwmod.deps import get_config
@@ -13,7 +12,6 @@ router = APIRouter(prefix="/api/compat", tags=["compat"])
 @router.get("/check")
 def compat_check(
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     """Check installed mods for missing dependencies and conflicts."""
     result = check_compatibility(cfg.mods_dir)

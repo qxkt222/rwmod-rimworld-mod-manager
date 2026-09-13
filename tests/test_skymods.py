@@ -59,17 +59,23 @@ class TestFindModFolder:
 
 
 class _FakeResp:
-    """Fake urllib response: read() returns bytes, headers is a dict."""
+    """Fake urllib response: read() advances the position like the real
+    ``http.client.HTTPResponse`` (the streaming downloader relies on it)."""
 
     def __init__(self, data: bytes) -> None:
         self._data = data
+        self._pos = 0
         self.headers = {"Content-Type": "application/zip"}
 
     def read(self, size: int = -1) -> bytes:
-        """Read up to `size` bytes (mimics urllib response.read())."""
+        """Read up to `size` bytes from the current position."""
         if size is None or size < 0:
-            return self._data
-        return self._data[:size]
+            chunk = self._data[self._pos :]
+            self._pos = len(self._data)
+            return chunk
+        chunk = self._data[self._pos : self._pos + size]
+        self._pos += len(chunk)
+        return chunk
 
 
 def _make_zip_bytes(members: dict[str, str]) -> bytes:

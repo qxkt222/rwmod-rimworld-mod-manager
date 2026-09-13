@@ -3,18 +3,18 @@
 import asyncio
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
-from rwmod.auth import get_current_user
 from rwmod.config import Config
 from rwmod.deps import get_config
 from rwmod.metadata import read_mod_metadata
 from rwmod.mod_cache import get_cached_mods
-from rwmod.routers.download import _bounded_download
+from rwmod.routers.download import _dl_semaphore
 from rwmod.utils import read_upload_limited
-from rwmod.workshop import check_mod_updates, fetch_item_details
+from rwmod.workshop import _fetch_batch_parallel, check_mod_updates
 
 router = APIRouter(prefix="/api/mods", tags=["mods"])
 
@@ -101,7 +101,6 @@ def _get_dir_size_mb(dir_path) -> float:
 @router.get("")
 def list_mods(
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     return _cached_mod_list(cfg)
 
@@ -109,7 +108,6 @@ def list_mods(
 @router.get("/check-updates")
 def check_updates(
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     return {"updates": check_mod_updates(str(cfg.mods_dir))}
 
@@ -123,7 +121,6 @@ _HEALTH_CACHE_TTL = 60  # 1 minute — Steam API data changes slowly
 @router.get("/health")
 def mod_health(
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     now = time.time()
     key = str(cfg.mods_dir)
@@ -133,13 +130,14 @@ def mod_health(
 
     if not cfg.mods_dir.exists():
         return {"mods": []}
-    metas = [
-        m
-        for m in (read_mod_metadata(d) for d in sorted(cfg.mods_dir.iterdir()))
-        if m and m.workshop_id
-    ]
+    # Reuse the shared metadata cache (memory → SQLite → one-time scan)
+    # instead of re-parsing About.xml for every folder.
+    metas = [m for m in get_cached_mods(cfg.mods_dir) if m.workshop_id]
     all_ids = [m.workshop_id for m in metas]
-    details = fetch_item_details(all_ids)
+    # Batch + parallel API fetch: Steam caps GetPublishedFileDetails at 100
+    # ids per call, so >100 mods MUST be split (the old fetch_item_details
+    # single-batch call silently returned incomplete data for large setups).
+    details = _fetch_batch_parallel(all_ids)
     results = []
     for meta in metas:
         remote = details.get(meta.workshop_id)
@@ -166,31 +164,27 @@ def mod_health(
 @router.get("/export")
 def export_mods(
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     from datetime import datetime
 
     if not cfg.mods_dir.exists():
         return {"mods": []}
     mods = []
-    for d in sorted(cfg.mods_dir.iterdir()):
-        meta = read_mod_metadata(d)
-        if meta:
-            mods.append(
-                {
-                    "folder": meta.folder,
-                    "name": meta.name,
-                    "package_id": meta.package_id,
-                    "workshop_id": meta.workshop_id,
-                }
-            )
+    for m in get_cached_mods(cfg.mods_dir):
+        mods.append(
+            {
+                "folder": m.folder,
+                "name": m.name,
+                "package_id": m.package_id,
+                "workshop_id": m.workshop_id,
+            }
+        )
     return {"exported_at": datetime.now().isoformat(), "total": len(mods), "mods": mods}
 
 
 @router.get("/export-collection")
 def export_collection(
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     metas = get_cached_mods(cfg.mods_dir)
     mods = []
@@ -208,7 +202,6 @@ def export_collection(
 @router.get("/compatibility")
 def mod_compatibility(
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     from rwmod.compatibility import check_compatibility, detect_rimworld_version
 
@@ -224,7 +217,6 @@ def mod_compatibility(
 async def import_local_mod(
     file: UploadFile = File(...),
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     """Import a local mod from a zip file.
 
@@ -313,7 +305,6 @@ def _import_local_sync(content: bytes, cfg: Config) -> dict:
 def batch_delete_mods(
     payload: dict,
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     """Delete multiple mod folders. Each is backed up to backup_dir first."""
     import shutil
@@ -352,10 +343,14 @@ def batch_delete_mods(
 async def batch_download_mods(
     payload: dict,
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
-    """Download multiple mods by workshop ID (or collection URL)."""
-    from rwmod.downloader import extract_mod_id
+    """Download multiple mods by workshop ID (or collection URL).
+
+    Uses the batch pipeline: one SteamCMD process per batch of mods (one
+    login) instead of a process per mod; collection ids are detected and
+    their children downloaded too.
+    """
+    from rwmod.downloader import download_batch, extract_mod_id
 
     ids: list[str] = payload.get("ids", [])
     force: bool = payload.get("force", False)
@@ -367,11 +362,16 @@ async def batch_download_mods(
     # Route through the shared global semaphore so batch + queue + SSE streams
     # together never exceed the SteamCMD concurrency budget (Steam rate-limits
     # parallel anonymous logins).
-    results = []
-    for mid in parsed:
-        ok = await _bounded_download(cfg, mid, force)
-        results.append({"id": mid, "ok": ok})
+    async with _dl_semaphore:
+        try:
+            ok_map = await asyncio.to_thread(download_batch, cfg, parsed, force=force)
+        except Exception as e:  # noqa: BLE001 — never crash the batch endpoint
+            from rwmod.logger import get_log
 
+            get_log("rwmod.mods").error("批量下载异常: %s", e, exc_info=True)
+            ok_map = {mid: False for mid in parsed}
+
+    results = [{"id": mid, "ok": ok_map.get(mid, False)} for mid in parsed]
     return {"total": len(results), "results": results}
 
 
@@ -398,25 +398,23 @@ def _detect_chinese(mod_dir) -> bool:
 @router.get("/localization")
 def localization_status(
     cfg: Config = Depends(get_config),
-    _user: str = Depends(get_current_user),
 ):
     """Report which mods ship a Chinese translation (汉化)."""
     if not cfg.mods_dir.exists():
         return {"mods": []}
-    results = []
-    for d in sorted(cfg.mods_dir.iterdir()):
-        if not d.is_dir():
-            continue
-        meta = read_mod_metadata(d)
-        if meta is None:
-            continue
-        results.append(
-            {
-                "folder": meta.folder,
-                "name": meta.name,
-                "workshop_id": meta.workshop_id,
-                "has_chinese": _detect_chinese(d),
-            }
-        )
+    metas = [m for m in get_cached_mods(cfg.mods_dir) if m.folder]
+
+    # Scan the Languages/ dirs in parallel — folder stat + iterdir per mod
+    # adds up when the Mods dir holds hundreds of entries.
+    def _check(m) -> dict:
+        return {
+            "folder": m.folder,
+            "name": m.name,
+            "workshop_id": m.workshop_id,
+            "has_chinese": _detect_chinese(cfg.mods_dir / m.folder),
+        }
+
+    with ThreadPoolExecutor(max_workers=min(8, max(1, len(metas)))) as ex:
+        results = list(ex.map(_check, metas))
     translated = sum(1 for r in results if r["has_chinese"])
     return {"total": len(results), "translated": translated, "mods": results}

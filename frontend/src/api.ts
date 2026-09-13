@@ -1,7 +1,6 @@
 /**
  * REST API client for rwmod backend.
  */
-import { clearToken, showLoginOverlay } from "./auth";
 
 const BASE = "/api";
 
@@ -29,16 +28,11 @@ export interface DownloadResult {
 }
 
 /**
- * fetch + JSON 的统一封装：非 2xx 抛 Error（优先用后端 detail），
- * 401 统一清除 token 并重新显示登录 overlay。
+ * fetch + JSON 的统一封装：非 2xx 抛 Error（优先用后端 detail）。
  */
 export async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   const resp = await fetch(url, init);
   if (!resp.ok) {
-    if (resp.status === 401) {
-      clearToken();
-      showLoginOverlay();
-    }
     const body = await resp.json().catch(() => ({}));
     throw new Error((body as any).detail || `${resp.status} ${resp.statusText}`);
   }
@@ -146,12 +140,8 @@ export const api = {
 
     fetch(url, { signal: ctrl.signal })
       .then(async (resp) => {
-        // 非 2xx（401 未认证 / 400 无效 ID）时按事件上报，避免下载永久挂起
+        // 非 2xx（400 无效 ID 等）时按事件上报，避免下载永久挂起
         if (!resp.ok) {
-          if (resp.status === 401) {
-            clearToken();
-            showLoginOverlay();
-          }
           const body = await resp.json().catch(() => ({}));
           onEvent({ event: "fail", msg: (body as any).detail || `HTTP ${resp.status}` });
           return;
@@ -192,4 +182,9 @@ export interface SSEEvent {
   msg?: string;
   line?: string;
   mod_id?: string;
+  /** Collection total (info event) or per-mod byte totals (progress event). */
+  total?: number;
+  /** Live download progress (progress event). */
+  percent?: number;
+  downloaded?: number;
 }
