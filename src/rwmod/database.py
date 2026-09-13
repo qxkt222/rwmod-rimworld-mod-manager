@@ -311,7 +311,7 @@ def find_local_mods_by_workshop_ids(workshop_ids: list[str]) -> dict[str, list[s
     db = get_conn()
     marks = ",".join("?" for _ in workshop_ids)
     rows = db.execute(
-        f"SELECT folder, workshop_id FROM local_mod_metadata WHERE workshop_id IN ({marks})",
+        f"SELECT folder, workshop_id FROM local_mod_metadata WHERE workshop_id IN ({marks})",  # nosec B608 — marks is '?' placeholders only, values bound
         workshop_ids,
     ).fetchall()
     result: dict[str, list[str]] = {}
