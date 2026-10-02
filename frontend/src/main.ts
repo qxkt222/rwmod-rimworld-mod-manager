@@ -8,6 +8,7 @@
 import "./style.css";
 import { api, type ModEntry, type ConfigData } from "./api";
 import { esc } from "./dom";
+import { DEFAULT_PANEL, resolvePanel, type PanelName } from "./panel-registry";
 import { initRouter } from "./router";
 import { connectWS, type WSMessage } from "./ws";
 import { initDashboardPanel, stopQueuePolling } from "./panels/dashboard";
@@ -16,91 +17,71 @@ import { toast } from "./toast";
 
 // ── state ──────────────────────────────────────────────────────
 let mods: ModEntry[] = [];
-let currentPanel = "dashboard";
+let currentPanel: PanelName = DEFAULT_PANEL;
 
 // ── panel init registry ────────────────────────────────────────
-const _panelInited = new Set<string>();
+const _panelInited = new Set<PanelName>();
 
-/** Lazy import + init a panel module. Called once per panel. */
-async function _lazyInit(panel: string): Promise<void> {
+/**
+ * Lazy import + init a panel module. Called once per panel.
+ *
+ * Typed as Record<PanelName, …>: the compiler now rejects a missing panel or
+ * a stale name, which the previous string switch silently ignored.
+ */
+const PANEL_INIT: Record<PanelName, () => void | Promise<void>> = {
+  dashboard: () => {
+    initDashboardPanel();
+  },
+  download: async () => {
+    (await import("./panels/download")).initDownloadPanel();
+  },
+  collection: async () => {
+    (await import("./panels/collection")).initCollectionPanel();
+  },
+  import: async () => {
+    (await import("./panels/import")).initImportPanel();
+  },
+  mods: async () => {
+    const { initModsPanel } = await import("./panels/mods");
+    initModsPanel(mods, (mod) => {
+      // show mod detail (future)
+    });
+  },
+  search: async () => {
+    (await import("./panels/search")).initSearchPanel();
+  },
+  queue: async () => {
+    (await import("./panels/queue")).initQueuePanel();
+    // 队列面板上的「检查更新/全部更新」按钮由 updates 模块绑定
+    (await import("./panels/updates")).initUpdatePanel();
+  },
+  rimsort: async () => {
+    (await import("./panels/rimsort")).initRimsortPanel();
+  },
+  profiles: async () => {
+    (await import("./panels/profiles")).initProfilePanel();
+  },
+  history: async () => {
+    (await import("./panels/history")).initHistoryPanel();
+  },
+  backups: async () => {
+    (await import("./panels/backup")).initBackupPanel();
+  },
+  config: async () => {
+    (await import("./panels/config")).initConfigPanel();
+  },
+  saves: async () => {
+    (await import("./panels/saves")).initSavesPanel();
+  },
+  tags: async () => {
+    (await import("./panels/tags")).initTagsPanel();
+  },
+};
+
+async function _lazyInit(panel: PanelName): Promise<void> {
   if (_panelInited.has(panel)) return;
   _panelInited.add(panel);
-
-  switch (panel) {
-    case "dashboard":
-      initDashboardPanel();
-      break;
-    case "download": {
-      const { initDownloadPanel } = await import("./panels/download");
-      initDownloadPanel();
-      break;
-    }
-    case "collection": {
-      const { initCollectionPanel } = await import("./panels/collection");
-      initCollectionPanel();
-      break;
-    }
-    case "import": {
-      const { initImportPanel } = await import("./panels/import");
-      initImportPanel();
-      break;
-    }
-    case "mods": {
-      const { initModsPanel, onModClick } = await import("./panels/mods");
-      initModsPanel(mods, (mod) => {
-        // show mod detail (future)
-      });
-      break;
-    }
-    case "search": {
-      const { initSearchPanel } = await import("./panels/search");
-      initSearchPanel();
-      break;
-    }
-    case "queue": {
-      const { initQueuePanel } = await import("./panels/queue");
-      initQueuePanel();
-      // 队列面板上的「检查更新/全部更新」按钮由 updates 模块绑定
-      const { initUpdatePanel } = await import("./panels/updates");
-      initUpdatePanel();
-      break;
-    }
-    case "rimsort": {
-      const { initRimsortPanel } = await import("./panels/rimsort");
-      initRimsortPanel();
-      break;
-    }
-    case "profiles": {
-      const { initProfilePanel } = await import("./panels/profiles");
-      initProfilePanel();
-      break;
-    }
-    case "history": {
-      const { initHistoryPanel } = await import("./panels/history");
-      initHistoryPanel();
-      break;
-    }
-    case "backups": {
-      const { initBackupPanel } = await import("./panels/backup");
-      initBackupPanel();
-      break;
-    }
-    case "config": {
-      const { initConfigPanel } = await import("./panels/config");
-      initConfigPanel();
-      break;
-    }
-    case "saves": {
-      const { initSavesPanel } = await import("./panels/saves");
-      initSavesPanel();
-      break;
-    }
-    case "tags": {
-      const { initTagsPanel } = await import("./panels/tags");
-      initTagsPanel();
-      break;
-    }
-  }
+  await PANEL_INIT[panel]();
 }
 
 // ── build layout ───────────────────────────────────────────────
@@ -484,23 +465,32 @@ document.getElementById("app")!.innerHTML = /* html */ `
 // Tab/sidebar clicks and browser back/forward are handled by the hash router
 // (router.ts → initRouter(switchPanel) at startup).
 export function switchPanel(name: string) {
+  const resolved = resolvePanel(name);
+  if (!resolved) {
+    // Names come from the router, which only emits known panels — reaching
+    // here means a nav element/URL is out of sync with the registry. Fall
+    // back to the default panel so an unknown name can never blank the page.
+    console.warn(`[panel] 未知面板 "${name}"，回退到 ${DEFAULT_PANEL}`);
+  }
+  const panel = resolved ?? DEFAULT_PANEL;
+
   // 离开 dashboard 时清理其轮询 interval，避免 setInterval 泄漏
-  if (currentPanel === "dashboard" && name !== "dashboard") {
+  if (currentPanel === DEFAULT_PANEL && panel !== DEFAULT_PANEL) {
     stopQueuePolling();
   }
-  currentPanel = name;
+  currentPanel = panel;
   document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
   document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
   document.querySelectorAll(".side-item").forEach((s) => s.classList.remove("active"));
 
-  const panel = document.getElementById(`panel-${name}`);
-  if (panel) panel.classList.add("active");
+  const panelEl = document.getElementById(`panel-${panel}`);
+  if (panelEl) panelEl.classList.add("active");
 
-  const tab = document.querySelector(`[data-panel="${name}"]`);
+  const tab = document.querySelector(`[data-panel="${panel}"]`);
   if (tab) tab.classList.add("active");
 
   // Lazy-init the panel on first visit
-  _lazyInit(name);
+  _lazyInit(panel);
 }
 
 // ── global actions ─────────────────────────────────────────────

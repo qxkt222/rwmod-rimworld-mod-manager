@@ -9,8 +9,8 @@
  *   import { initRouter } from "./router";
  *   initRouter(onPanelChange);
  */
+import { DEFAULT_PANEL, resolvePanel, type PanelName } from "./panel-registry";
 
-type PanelName = string;
 type PanelChangeHandler = (panel: PanelName) => void;
 
 /**
@@ -27,7 +27,11 @@ export function initRouter(onPanelChange: PanelChangeHandler): () => void {
     ) as HTMLElement | null;
     if (!target) return;
 
-    const panel = target.dataset.panel;
+    const raw = target.dataset.panel;
+    if (!raw) return;
+    const panel = resolvePanel(raw);
+    // Unknown data-panel → ignore the click instead of navigating to a name
+    // that has no DOM (the old #updates blank-page failure mode).
     if (!panel) return;
 
     e.preventDefault();
@@ -38,14 +42,13 @@ export function initRouter(onPanelChange: PanelChangeHandler): () => void {
 
   // ── listen for browser back/forward ──────────────────────────
   const popHandler = () => {
-    const panel = readPanelFromHash();
-    onPanelChange(panel || "dashboard");
+    onPanelChange(readPanelFromHash() ?? DEFAULT_PANEL);
   };
 
   window.addEventListener("popstate", popHandler);
 
   // ── initial load — restore from URL or default ───────────────
-  const initial = readPanelFromHash() || "dashboard";
+  const initial = readPanelFromHash() ?? DEFAULT_PANEL;
   replaceState(initial); // don't push a new history entry on load
 
   // Trigger initial panel
@@ -69,15 +72,10 @@ function replaceState(panel: PanelName): void {
   window.history.replaceState({ panel }, "", `#${panel}`);
 }
 
-/** Read the current panel from URL hash. */
+/**
+ * Read the current panel from the URL hash, resolved through the shared
+ * registry (aliases included); null for empty/unknown hashes.
+ */
 function readPanelFromHash(): PanelName | null {
-  const hash = window.location.hash.slice(1); // remove #
-  if (!hash) return null;
-  // Only accept known panel names
-  const known = new Set([
-    "dashboard", "download", "collection", "import", "mods",
-    "search", "queue", "rimsort", "profiles", "history",
-    "backups", "config", "updates", "saves", "tags",
-  ]);
-  return known.has(hash) ? hash : null;
+  return resolvePanel(window.location.hash.slice(1)); // remove #
 }

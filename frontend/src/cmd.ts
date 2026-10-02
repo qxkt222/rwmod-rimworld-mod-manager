@@ -2,6 +2,7 @@
  * Ctrl+K Command Palette — keyboard-driven navigation.
  * Uses a lazy-registry pattern to avoid circular imports from main.ts.
  */
+import type { PanelName } from "./panel-registry";
 
 interface CmdItem {
   label: string;
@@ -11,7 +12,7 @@ interface CmdItem {
 }
 
 /** Navigate via the hash router so the URL stays in sync. */
-function _makePanelAction(panel: string): () => void {
+function _makePanelAction(panel: PanelName): () => void {
   return () => {
     import("./router").then(({ navigate }) => navigate(panel));
   };
