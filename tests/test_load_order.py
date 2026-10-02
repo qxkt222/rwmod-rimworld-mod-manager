@@ -5,6 +5,9 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import pytest
+
+from rwmod.errors import ModNotFoundError
 from rwmod.load_order import check_load_order
 
 
@@ -48,9 +51,10 @@ class TestCheckLoadOrder:
         result = check_load_order(cfg, mods_dir)
         assert any("重复" in i["message"] for i in result["issues"])
 
-    def test_missing_config(self, tmp_path: Path):
-        result = check_load_order(tmp_path / "nonexistent.xml", tmp_path / "Mods")
-        assert "error" in result
+    def test_missing_config_raises_not_found(self, tmp_path: Path):
+        """A missing file is a failure, not a result carrying an `error` key."""
+        with pytest.raises(ModNotFoundError):
+            check_load_order(tmp_path / "nonexistent.xml", tmp_path / "Mods")
 
     def test_known_conflict(self, tmp_path: Path):
         cfg = tmp_path / "ModsConfig.xml"

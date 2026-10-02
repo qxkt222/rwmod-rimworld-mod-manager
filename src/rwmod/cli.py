@@ -8,6 +8,7 @@ import typer
 
 from rwmod.config import Config
 from rwmod.downloader import download_one
+from rwmod.errors import RwmodError
 from rwmod.metadata import read_mod_metadata
 from rwmod.parser import (
     get_installed_package_ids,
@@ -404,10 +405,10 @@ def check_load_order() -> None:
     from rwmod.profile import resolve_modsconfig_path
 
     path = resolve_modsconfig_path(cfg.rimworld_dir) or (cfg.rimworld_dir / "ModsConfig.xml")
-    result = _check(path, cfg.mods_dir)
-
-    if "error" in result:
-        typer.echo(result["error"], err=True)
+    try:
+        result = _check(path, cfg.mods_dir)
+    except RwmodError as e:
+        typer.echo(e.detail, err=True)
         return
 
     typer.echo(f"\n排序分析 — {result['total_mods']} 个 Mod\n")

@@ -9,6 +9,7 @@ import pytest
 
 from rwmod.database import (
     close_db,
+    get_conn,
     init_db,
     queue_clear_done,
     queue_delete,
@@ -47,15 +48,27 @@ class TestQueueUpsert:
         assert items[0]["status"] == "downloading"
         assert items[0]["progress"] == 0.5
 
-    def test_updated_at_changes(self, temp_db):
-        queue_upsert("123", status="pending")
-        first = queue_load_all()[0]["updated_at"]
-        import time
+    def test_updated_at_is_refreshed_on_upsert(self, temp_db):
+        """A re-upsert must overwrite a stale updated_at.
 
-        time.sleep(1)
+        Backdates the row instead of sleeping a real second. updated_at comes
+        from SQLite's ``datetime('now')``, which has second granularity, so the
+        old version burned 1s of every run just to make two values differ — and
+        all it proved was "some time elapsed". Writing a known-old value pins the
+        actual behaviour with no clock dependency.
+        """
+        queue_upsert("123", status="pending")
+        stale = "2000-01-01 00:00:00"
+        conn = get_conn()
+        conn.execute(
+            "UPDATE download_queue SET updated_at = ? WHERE workshop_id = ?", (stale, "123")
+        )
+        conn.commit()
+        assert queue_load_all()[0]["updated_at"] == stale
+
         queue_upsert("123", status="done")
-        second = queue_load_all()[0]["updated_at"]
-        assert first != second  # updated_at should change
+
+        assert queue_load_all()[0]["updated_at"] != stale
 
 
 class TestQueueDelete:

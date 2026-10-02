@@ -27,7 +27,7 @@ def _reset_offline_state() -> Iterator[None]:
 
 
 @pytest.fixture
-def client(tmp_path: Path) -> TestClient:
+def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     """Return a TestClient with an isolated config and temp DB."""
     # Override Config.CONFIG_PATH and DB_PATH
     import rwmod.config as cfg_mod
@@ -35,6 +35,12 @@ def client(tmp_path: Path) -> TestClient:
 
     orig_config = cfg_mod.Config.CONFIG_PATH
     orig_db = db_mod.DB_PATH
+
+    # profile.resolve_modsconfig_path() consults the user's LocalLow profile
+    # *before* it ever looks at cfg.rimworld_dir, so without this the suite reads
+    # the developer's real RimWorld ModsConfig.xml — results then depend on the
+    # machine and on whatever the developer happens to have installed.
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
 
     cfg_mod.Config.CONFIG_PATH = tmp_path / ".rwmod_test.toml"
     db_mod.DB_PATH = tmp_path / ".rwmod_test.db"

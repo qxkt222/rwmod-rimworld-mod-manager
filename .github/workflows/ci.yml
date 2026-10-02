@@ -17,8 +17,10 @@ jobs:
       - uses: astral-sh/setup-uv@v3
         with:
           python-version: "3.13"
+      # No `uv pip install ruff` here: uv sync already installs the dev group
+      # (ruff/mypy/bandit/pytest), and installing the *latest* unpinned ruff on
+      # top meant CI could disagree with uv.lock and with local pre-commit.
       - run: uv sync
-      - run: uv pip install ruff
       - run: uv run ruff check src/ tests/ tools/
       - run: uv run ruff format --check src/ tests/ tools/
 
@@ -32,7 +34,6 @@ jobs:
         with:
           python-version: "3.13"
       - run: uv sync
-      - run: uv pip install mypy pydantic fastapi
       - run: uv run mypy src/rwmod/
 
   # ── Tests + Coverage ────────────────────────────────────────────
@@ -45,7 +46,6 @@ jobs:
         with:
           python-version: "3.13"
       - run: uv sync
-      - run: uv pip install pytest pytest-cov httpx fastapi
       # --cov-fail-under stops a new module from landing with no tests at all.
       # Baseline when this was added: 57% (267 tests). Raise it as coverage
       # improves; do not lower it to make a red build go away.
@@ -65,7 +65,10 @@ jobs:
         with:
           python-version: "3.13"
       - run: uv sync
-      - run: uv pip install bandit pip-audit
+      # bandit comes from the dev group (locked). pip-audit is installed
+      # unpinned on purpose: its step is advisory-only, so a floating version
+      # cannot fail the build and is not worth a standing dev dependency.
+      - run: uv pip install pip-audit
       # -ll = medium+ severity only (matches local gate); must pass.
       - run: uv run bandit -c pyproject.toml -r src/ -ll
       # pip-audit needs network access to the OSV API — keep advisory-only
@@ -82,6 +85,8 @@ jobs:
         with:
           python-version: "3.13"
       - run: uv sync
+      # radon is installed unpinned on purpose: this step only prints a report,
+      # so a floating version cannot fail the build.
       - run: uv pip install radon
       # Report-only, and named to say so. Grade-C functions exist today
       # (downloader.py / queue.py), so gating on them would just be noise — but

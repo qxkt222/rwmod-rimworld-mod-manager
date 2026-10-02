@@ -143,11 +143,12 @@ class TestRimsortEndpoint:
         assert resp.status_code == 200
         assert "modsconfig_xml" in resp.json()
 
-    def test_check_order(self, client: TestClient):
+    def test_check_order_without_modsconfig(self, client: TestClient):
+        """An isolated home has no ModsConfig.xml, so this is a 404 — not a 200
+        body carrying error text."""
         resp = client.get("/api/rimsort/check-order")
-        assert resp.status_code == 200
-        # May return error if no ModsConfig.xml, but should be valid JSON
-        assert isinstance(resp.json(), dict)
+        assert resp.status_code == 404
+        assert resp.json()["error"] == "ModNotFoundError"
 
 
 class TestBackupsEndpoint:

@@ -73,6 +73,12 @@ async def rimsort_compare_file(
 def check_load_order(
     cfg: Config = Depends(get_config),
 ):
+    """Analyze the active load order.
+
+    Raises ModNotFoundError (404) / ValidationError (400) when ModsConfig.xml is
+    absent or unreadable — load_order raises rather than returning an `error`
+    key, so this endpoint no longer answers 200 with error text in the body.
+    """
     from rwmod.load_order import check_load_order as _check
     from rwmod.profile import resolve_modsconfig_path
 

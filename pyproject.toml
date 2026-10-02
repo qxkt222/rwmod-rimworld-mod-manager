@@ -85,8 +85,9 @@ disable_error_code = ["type-arg"]
 module = ["rwmod.routers.*"]
 disable_error_code = ["no-untyped-def", "no-untyped-call", "type-arg"]
 
-# defusedxml ships no type stubs; ignore_missing_imports keeps mypy green on
-# environments (e.g. fresh CI installs) that don't have types-defusedxml.
+# defusedxml ships no inline types. types-defusedxml is a dev dependency, so this
+# override is belt-and-braces for an environment that lacks the stubs (e.g. a bare
+# `pip install mypy` without the dev group) rather than load-bearing for CI.
 [[tool.mypy.overrides]]
 module = ["defusedxml.*"]
 ignore_missing_imports = true
@@ -127,4 +128,8 @@ dev = [
     "mypy>=1.10",
     "bandit>=1.7",
     "pyinstaller>=6.0",
+    # Stubs for defusedxml — .pre-commit-config.yaml already pinned this for its
+    # mypy hook; without it here, CI's mypy ran against a different type surface
+    # than local. See the [[tool.mypy.overrides]] note below.
+    "types-defusedxml>=0.7",
 ]
