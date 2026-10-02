@@ -38,5 +38,11 @@ Invariants that are invisible from the code layout and expensive to rediscover:
   *probe* whose job is to report a verdict may use `{ok: false, msg}` as
   `/api/steamcmd/check` does. Raising plain `HTTPException` yields the same shape with
   `error: "HTTPError"` — seeing that generic name marks a site worth migrating.
+- **`static/` is generated, never committed.** It used to be half-tracked
+  (`static/index.html` in git, `static/assets/**` ignored), so every build dirtied the
+  tree and a fresh clone served an index.html whose assets 404'd. The whole directory is
+  now ignored: running from source and packaging both require building the frontend
+  first (`cd frontend && npm install && npm run build`, or `python tools/build_frontend.py`),
+  and `/` answers 503 with that instruction when the build is missing.
 - **`python run_tests.py` is the local gate** — import smoke, ruff, ruff format,
   pytest, mypy strict and bandit in one shot.

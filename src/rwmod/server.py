@@ -15,7 +15,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -288,7 +288,19 @@ app.include_router(undo_router)
 # ── static files ───────────────────────────────────────────────────
 @app.get("/")
 def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+    index_path = STATIC_DIR / "index.html"
+    if not index_path.is_file():
+        # static/ is a build artifact and is not in git, so a fresh clone lands here.
+        # FileResponse would fail with an opaque 500 — say what to do instead.
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "前端未构建：static/index.html 不存在。请先构建前端："
+                "cd frontend && npm install && npm run build"
+                "（或 python tools/build_frontend.py），然后重启服务。"
+            ),
+        )
+    return FileResponse(index_path)
 
 
 # ── WebSocket ─────────────────────────────────────────────────────
