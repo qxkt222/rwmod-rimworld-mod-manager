@@ -16,10 +16,12 @@ from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from rwmod.database import close_db, init_db
 from rwmod.deps import get_autoupdate
@@ -171,6 +173,50 @@ async def rwmod_error_handler(request: Request, exc: RwmodError) -> JSONResponse
         status_code=exc.status_code,
         content={"error": type(exc).__name__, "detail": exc.detail},
     )
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_error_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    """Normalise plain HTTPException into the one failure shape.
+
+    Routers still raise HTTPException in ~45 places; FastAPI's default body for
+    it is a bare {"detail": str}, which would leave the frontend parsing two
+    shapes forever. Normalising here makes the client's job complete today, and
+    lets those sites migrate to errors.py one at a time without any client-side
+    change. `error` stays generic ("HTTPError") so a name like ModNotFoundError
+    only ever means the errors.py class was actually raised — the generic value
+    is a visible marker of a site still to migrate.
+    """
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": "HTTPError", "detail": str(exc.detail)},
+        headers=getattr(exc, "headers", None),
+    )
+
+
+def _describe_validation_errors(exc: RequestValidationError) -> str:
+    """Flatten FastAPI's error list into one readable detail string."""
+    parts: list[str] = []
+    for err in exc.errors():
+        # "body" is noise — the client already knows which request it sent.
+        loc = ".".join(str(p) for p in err.get("loc", ()) if p != "body")
+        msg = str(err.get("msg", ""))
+        parts.append(f"{loc}: {msg}" if loc else msg)
+    return "; ".join(p for p in parts if p) or "请求体无效"
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Give body/query validation failures the same shape as every other error.
+
+    FastAPI's default is a bare {"detail": [ {...}, ... ]} — a fifth error shape
+    for the frontend to parse, and a *list* where every other detail is a string.
+    The status stays 422 because clients already branch on it; only the body is
+    brought in line with the failure contract.
+    """
+    detail = _describe_validation_errors(exc)
+    _log.warning("%s %s → 422 校验失败: %s", request.method, request.url.path, detail)
+    return JSONResponse(status_code=422, content={"error": "ValidationError", "detail": detail})
 
 
 @app.exception_handler(Exception)

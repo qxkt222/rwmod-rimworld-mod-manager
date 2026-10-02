@@ -209,10 +209,25 @@ class TestErrorHandling:
         assert resp.status_code == 404
 
     def test_error_response_format(self, client: TestClient):
-        """Global error handler should return structured JSON."""
+        """Bad input answers with the one failure shape, never a bare `detail`.
+
+        This endpoint raises HTTPException, so `error` is the generic marker that
+        the site has not migrated to errors.py yet — the shape is what matters.
+        """
         resp = client.post("/api/download", json={"ids": []})
-        # Should be 400 or have error detail
-        assert resp.status_code in (200, 400, 422)
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "HTTPError"
+        assert isinstance(resp.json()["detail"], str)
+        assert resp.json()["detail"]
+
+    def test_body_validation_uses_the_standard_shape(self, client: TestClient):
+        """A non-object body is FastAPI's own validation path; its default body is
+        {"detail": [...]}, a shape nothing else uses. It must be normalised."""
+        resp = client.post("/api/queue/add", json=[1, 2, 3])
+        assert resp.status_code == 422
+        body = resp.json()
+        assert body["error"] == "ValidationError"
+        assert isinstance(body["detail"], str)
 
 
 class TestDownloadAPIWithPatchedDownloader:
