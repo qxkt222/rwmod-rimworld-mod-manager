@@ -3,7 +3,7 @@
  */
 import { api, type QueueItem } from "../api";
 import { esc, fmtBytes } from "../dom";
-import { connectWS } from "../ws";
+import { addWSListener, connectWS } from "../ws";
 import { refreshMods, setStatus } from "../main";
 
 let items: QueueItem[] = [];
@@ -13,14 +13,12 @@ export function initQueuePanel() {
   document.getElementById("btn-queue-clear")?.addEventListener("click", clearQueue);
 
   // Listen for WebSocket queue updates
-  connectWS(() => {});
-  import("../ws").then((m) => {
-    m.addWSListener((msg) => {
-      if (msg.type === "queue_update" && msg.items) {
-        items = msg.items as QueueItem[];
-        render();
-      }
-    });
+  connectWS();
+  addWSListener((msg) => {
+    if (msg.type === "queue_update" && msg.items) {
+      items = msg.items;
+      render();
+    }
   });
 
   refreshState();

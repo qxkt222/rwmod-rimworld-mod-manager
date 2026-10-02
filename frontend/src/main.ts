@@ -6,7 +6,7 @@
  * This reduces initial JS footprint by ~60%.
  */
 import "./style.css";
-import { api, type ModEntry, type ConfigData } from "./api";
+import { api, type ModEntry, type QueueItem } from "./api";
 import { esc } from "./dom";
 import { DEFAULT_PANEL, resolvePanel, type PanelName } from "./panel-registry";
 import { initRouter } from "./router";
@@ -535,6 +535,44 @@ function renderModList(modList: ModEntry[]) {
   import('./panels/mods').then(m => m.refreshBadges()).catch(() => {});
 }
 
+// ── queue badge + WS connection state ──────────────────────────
+function renderQueueBadge(items: QueueItem[]): void {
+  const el = document.getElementById("queue-count");
+  if (!el) return;
+  const active = items.filter((i) => i.status === "pending" || i.status === "downloading");
+  el.textContent = String(active.length);
+}
+
+async function refreshQueueBadge(): Promise<void> {
+  try {
+    const data = await api.getQueue();
+    renderQueueBadge(data.items || []);
+  } catch { /* 网络错误 — 保持现有角标 */ }
+}
+
+/** 断线期间角标数字不可信——明确标注，而不是继续展示陈旧数字。 */
+function setWSConnected(connected: boolean): void {
+  const el = document.getElementById("queue-count");
+  if (!el) return;
+  el.title = connected ? "" : "实时连接已断开，数字可能不是最新";
+  el.style.opacity = connected ? "" : "0.5";
+}
+
+function onWSMessage(msg: WSMessage): void {
+  switch (msg.type) {
+    case "queue_update":
+      renderQueueBadge(msg.items || []);
+      break;
+    case "connected":
+      setWSConnected(true);
+      refreshQueueBadge(); // 重连后立即对齐一次，消除断线期间的过期角标
+      break;
+    case "disconnected":
+      setWSConnected(false);
+      break;
+  }
+}
+
 // ── keyboard shortcuts ─────────────────────────────────────────
 document.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === "k") {
@@ -586,16 +624,8 @@ document.getElementById("btn-export")?.addEventListener("click", async () => {
   // Load mod list
   await refreshMods();
 
-  // Connect WebSocket (non-blocking)
-  connectWS((msg) => {
-    if (msg.type === "queue_update") {
-      const el = document.getElementById("queue-count");
-      if (el && msg.items) {
-        const active = (msg.items as any[]).filter((i: any) => i.status === "pending" || i.status === "downloading");
-        el.textContent = String(active.length);
-      }
-    }
-  });
+  // Connect WebSocket (non-blocking) — also drives the connection-state UI
+  connectWS(onWSMessage);
 
   // Poll online status every 30s
   pollOnlineStatus();
