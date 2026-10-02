@@ -12,6 +12,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from rwmod.errors import ModNotFoundError, RwmodError, ValidationError
+from rwmod.metadata import package_id_to_workshop_id
 from rwmod.xmlutil import parse_xml_root
 
 # Safe XML parser: rejects entity-expansion / external-entity (XXE) attacks.
@@ -48,6 +50,11 @@ _KNOWN_CONFLICTS: tuple[tuple[str, str, str], ...] = (
 def check_load_order(modsconfig_path: Path, mods_dir: Path) -> dict:
     """Analyze ModsConfig.xml load order for common issues.
 
+    Raises ModNotFoundError when the file is absent and ValidationError when it
+    is unreadable — "cannot analyze" is a failure, not a result with an `error`
+    key, so callers get one failure channel (see the failure contract in
+    CLAUDE.md).
+
     Returns:
         {
             "total_mods": int,
@@ -56,19 +63,21 @@ def check_load_order(modsconfig_path: Path, mods_dir: Path) -> dict:
         }
     """
     if not modsconfig_path.exists():
-        return {"error": f"ModsConfig.xml 未找到: {modsconfig_path}"}
+        raise ModNotFoundError(f"ModsConfig.xml 未找到: {modsconfig_path}")
 
     try:
         root = parse_xml_root(modsconfig_path)
         active = root.find("activeMods")
         if active is None:
-            return {"error": "ModsConfig.xml 中没有 activeMods"}
+            raise ValidationError("ModsConfig.xml 中没有 activeMods")
         load_order = [li.text or "" for li in active.findall("li") if li.text]
+    except RwmodError:
+        raise
     except Exception as e:
-        return {"error": f"解析 ModsConfig.xml 失败: {e}"}
+        raise ValidationError(f"解析 ModsConfig.xml 失败: {e}") from e
 
     if not load_order:
-        return {"error": "加载顺序为空"}
+        raise ValidationError("加载顺序为空")
 
     issues: list[dict] = []
 
@@ -171,19 +180,9 @@ def _check_known_conflicts(order: list[str], mods_dir: Path, issues: list[dict])
         from rwmod.rimpy_db import RimPyDB
 
         db = RimPyDB.get()
-        # Collect workshop IDs from installed mods
-        pkg_to_wid: dict[str, str] = {}
-        for d in mods_dir.iterdir():
-            pf = d / "About" / "PublishedFileId.txt"
-            about = d / "About" / "About.xml"
-            if pf.exists() and about.exists():
-                try:
-                    pid = parse_xml_root(about).findtext("packageId", "")
-                    wid = pf.read_text(encoding="utf-8").strip()
-                    if pid and wid:
-                        pkg_to_wid[pid.lower()] = wid
-                except Exception:
-                    pass
+        # Collect workshop IDs from installed mods. RimPy's conflict keys are
+        # case-insensitive, hence the lowered keys.
+        pkg_to_wid = {pkg.lower(): wid for pkg, wid in package_id_to_workshop_id(mods_dir).items()}
 
         active_wids = {pkg_to_wid[p] for p in pid_lower if p in pkg_to_wid}
         if active_wids and db.ensure_loaded():

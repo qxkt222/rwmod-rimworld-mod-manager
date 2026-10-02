@@ -15,16 +15,20 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from rwmod.database import close_db, init_db
 from rwmod.deps import get_autoupdate
 from rwmod.errors import RwmodError
 from rwmod.logger import get_log, init_logging
+from rwmod.models.schemas import ErrorResponse
 from rwmod.queue import get_queue
 
 # ── routers ────────────────────────────────────────────────────────
@@ -76,10 +80,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     au = get_autoupdate()
     await au.start_background()
     set_gauge("steam_online", True)
-    # Seed app state (future: migrate singletons here)
-    from rwmod.app_state import AppState
-
-    app.state.rwmod = AppState()
 
     # Push real-time queue snapshots to all connected WebSocket clients.
     get_queue().on_update(broadcast_queue_update)
@@ -105,6 +105,38 @@ app = FastAPI(
     docs_url="/api/docs",
     openapi_url="/api/openapi.json",
 )
+
+
+def _custom_openapi() -> dict:
+    """Generate the schema, then make the documented 422 match reality.
+
+    FastAPI documents every 422 as its default ``HTTPValidationError``
+    (``{"detail": [...]}``), but validation_error_handler answers
+    ``{error, detail: str}`` like every other failure. Left alone, /api/docs
+    would describe a body the server no longer sends.
+    """
+    if app.openapi_schema:
+        return app.openapi_schema
+
+    schema = get_openapi(title=app.title, version=app.version, routes=app.routes)
+    error_schema = ErrorResponse.model_json_schema()
+    error_schema.pop("$defs", None)  # no nested models to hoist
+    schema.setdefault("components", {}).setdefault("schemas", {})["ErrorResponse"] = error_schema
+    ref = {"$ref": "#/components/schemas/ErrorResponse"}
+
+    for operations in schema.get("paths", {}).values():
+        for operation in operations.values():
+            if not isinstance(operation, dict):
+                continue
+            documented = operation.get("responses", {}).get("422")
+            if isinstance(documented, dict) and "content" in documented:
+                documented["content"]["application/json"]["schema"] = ref
+
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = _custom_openapi  # type: ignore[method-assign]  # documented FastAPI pattern
 
 # ── middleware ─────────────────────────────────────────────────────
 app.add_middleware(GZipMiddleware, minimum_size=500)
@@ -177,6 +209,50 @@ async def rwmod_error_handler(request: Request, exc: RwmodError) -> JSONResponse
     )
 
 
+@app.exception_handler(StarletteHTTPException)
+async def http_error_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    """Normalise plain HTTPException into the one failure shape.
+
+    Routers still raise HTTPException in ~45 places; FastAPI's default body for
+    it is a bare {"detail": str}, which would leave the frontend parsing two
+    shapes forever. Normalising here makes the client's job complete today, and
+    lets those sites migrate to errors.py one at a time without any client-side
+    change. `error` stays generic ("HTTPError") so a name like ModNotFoundError
+    only ever means the errors.py class was actually raised — the generic value
+    is a visible marker of a site still to migrate.
+    """
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": "HTTPError", "detail": str(exc.detail)},
+        headers=getattr(exc, "headers", None),
+    )
+
+
+def _describe_validation_errors(exc: RequestValidationError) -> str:
+    """Flatten FastAPI's error list into one readable detail string."""
+    parts: list[str] = []
+    for err in exc.errors():
+        # "body" is noise — the client already knows which request it sent.
+        loc = ".".join(str(p) for p in err.get("loc", ()) if p != "body")
+        msg = str(err.get("msg", ""))
+        parts.append(f"{loc}: {msg}" if loc else msg)
+    return "; ".join(p for p in parts if p) or "请求体无效"
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Give body/query validation failures the same shape as every other error.
+
+    FastAPI's default is a bare {"detail": [ {...}, ... ]} — a fifth error shape
+    for the frontend to parse, and a *list* where every other detail is a string.
+    The status stays 422 because clients already branch on it; only the body is
+    brought in line with the failure contract.
+    """
+    detail = _describe_validation_errors(exc)
+    _log.warning("%s %s → 422 校验失败: %s", request.method, request.url.path, detail)
+    return JSONResponse(status_code=422, content={"error": "ValidationError", "detail": detail})
+
+
 @app.exception_handler(Exception)
 async def catchall_handler(request: Request, exc: Exception) -> JSONResponse:
     """Catch unhandled exceptions — log full traceback, return 500."""
@@ -212,7 +288,19 @@ app.include_router(undo_router)
 # ── static files ───────────────────────────────────────────────────
 @app.get("/")
 def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+    index_path = STATIC_DIR / "index.html"
+    if not index_path.is_file():
+        # static/ is a build artifact and is not in git, so a fresh clone lands here.
+        # FileResponse would fail with an opaque 500 — say what to do instead.
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "前端未构建：static/index.html 不存在。请先构建前端："
+                "cd frontend && npm install && npm run build"
+                "（或 python tools/build_frontend.py），然后重启服务。"
+            ),
+        )
+    return FileResponse(index_path)
 
 
 # ── WebSocket ─────────────────────────────────────────────────────

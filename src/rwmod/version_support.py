@@ -1,7 +1,10 @@
-"""RimWorld version detection and mod compatibility checking.
+"""RimWorld version detection and per-mod version support checking.
 
 Reads RimWorld version from Version.txt and compares against each
 mod's <supportedVersions> in About.xml.
+
+This is the *version* view. For missing dependencies and declared conflicts
+between installed mods, see mod_conflicts.py.
 """
 
 from __future__ import annotations
@@ -45,7 +48,7 @@ def detect_rimworld_version(rimworld_dir: Path) -> str | None:
     return None
 
 
-def check_compatibility(
+def check_version_support(
     metas: list[ModMeta],
     rimworld_version: str,
 ) -> dict[str, list[dict]]:

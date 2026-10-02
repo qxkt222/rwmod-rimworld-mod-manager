@@ -1,15 +1,15 @@
-"""Tests for compatibility.py — version detection and mod compatibility."""
+"""Tests for version_support.py — version detection and per-mod version support."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from rwmod.compatibility import (
+from rwmod.metadata import ModMeta
+from rwmod.version_support import (
     _normalize_version,
-    check_compatibility,
+    check_version_support,
     detect_rimworld_version,
 )
-from rwmod.metadata import ModMeta
 
 
 class TestDetectRimWorldVersion:
@@ -28,13 +28,13 @@ class TestDetectRimWorldVersion:
         assert v is None
 
 
-class TestCheckCompatibility:
+class TestCheckVersionSupport:
     def test_compatible(self):
         metas = [
             ModMeta("mod1", "A", "a.b", "111", supported_versions=["1.4", "1.5"]),
             ModMeta("mod2", "B", "c.d", "222", supported_versions=["1.5"]),
         ]
-        result = check_compatibility(metas, "1.5")
+        result = check_version_support(metas, "1.5")
         assert len(result["compatible"]) == 2
         assert len(result["incompatible"]) == 0
 
@@ -42,7 +42,7 @@ class TestCheckCompatibility:
         metas = [
             ModMeta("old", "Old Mod", "old.pkg", "999", supported_versions=["1.3", "1.4"]),
         ]
-        result = check_compatibility(metas, "1.5")
+        result = check_version_support(metas, "1.5")
         assert len(result["incompatible"]) == 1
         assert len(result["compatible"]) == 0
 
@@ -50,7 +50,7 @@ class TestCheckCompatibility:
         metas = [
             ModMeta("mystery", "Mystery Mod", "", "", supported_versions=[]),
         ]
-        result = check_compatibility(metas, "1.5")
+        result = check_version_support(metas, "1.5")
         assert len(result["unknown"]) == 1
         assert len(result["incompatible"]) == 0
 
@@ -60,7 +60,7 @@ class TestCheckCompatibility:
             ModMeta("b", "B", "b", "2", supported_versions=["1.4"]),
             ModMeta("c", "C", "c", "3", supported_versions=[]),
         ]
-        result = check_compatibility(metas, "1.5")
+        result = check_version_support(metas, "1.5")
         assert len(result["compatible"]) == 1
         assert len(result["incompatible"]) == 1
         assert len(result["unknown"]) == 1

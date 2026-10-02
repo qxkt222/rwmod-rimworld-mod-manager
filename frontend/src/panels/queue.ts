@@ -1,20 +1,10 @@
 /**
  * Queue panel — manage download queue, view progress bars.
  */
-import { fetchJSON } from "../api";
-import { connectWS } from "../ws";
+import { api, type QueueItem } from "../api";
+import { esc, escAttr, fmtBytes } from "../dom";
+import { addWSListener, connectWS } from "../ws";
 import { refreshMods, setStatus } from "../main";
-
-interface QueueItem {
-  id: string;
-  name: string;
-  status: string;
-  progress: number;
-  msg: string;
-  downloaded?: number;
-  total?: number;
-  speed_bps?: number;
-}
 
 let items: QueueItem[] = [];
 
@@ -23,14 +13,12 @@ export function initQueuePanel() {
   document.getElementById("btn-queue-clear")?.addEventListener("click", clearQueue);
 
   // Listen for WebSocket queue updates
-  connectWS(() => {});
-  import("../ws").then((m) => {
-    m.addWSListener((msg) => {
-      if (msg.type === "queue_update" && msg.items) {
-        items = msg.items as QueueItem[];
-        render();
-      }
-    });
+  connectWS();
+  addWSListener((msg) => {
+    if (msg.type === "queue_update" && msg.items) {
+      items = msg.items;
+      render();
+    }
   });
 
   refreshState();
@@ -38,7 +26,7 @@ export function initQueuePanel() {
 
 async function refreshState() {
   try {
-    const data = await fetchJSON<{ items: QueueItem[] }>("/api/queue");
+    const data = await api.getQueue();
     items = data.items || [];
     render();
   } catch {}
@@ -49,7 +37,7 @@ async function startQueue() {
   btn.disabled = true;
   setStatus("blue", "正在处理队列...");
   try {
-    await fetchJSON("/api/queue/start", { method: "POST" });
+    await api.startQueue();
     await refreshMods();
     setStatus("green", "队列完成");
   } catch {
@@ -60,20 +48,8 @@ async function startQueue() {
 }
 
 async function clearQueue() {
-  await fetchJSON("/api/queue/clear", { method: "POST" });
+  await api.clearQueue();
   refreshState();
-}
-
-function fmtBytes(n: number): string {
-  if (!n || n <= 0 || !isFinite(n)) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  let i = 0;
-  let v = n;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return `${v >= 100 ? v.toFixed(0) : v.toFixed(1)} ${units[i]}`;
 }
 
 function fmtSpeed(bps: number): string {
@@ -112,7 +88,7 @@ function render() {
       <span class="q-id">${esc(i.id)}</span>
       <span class="q-name">${esc(i.name || "")}</span>
       <span class="q-progress">${esc(i.msg || i.status)}${detailBits ? ` <span class="q-speed">${esc(detailBits)}</span>` : ""}</span>
-      ${i.status === "pending" ? `<button class="btn btn-ghost btn-sm" data-remove="${esc(i.id)}">✕</button>` : ""}
+      ${i.status === "pending" ? `<button class="btn btn-ghost btn-sm" data-remove="${escAttr(i.id)}">✕</button>` : ""}
     </div>
     ${downloading ? `<div class="queue-bar"><div class="queue-bar-inner" style="width:${pct}%"></div></div>
     <div class="queue-meta">${pct}%${detailBits ? ` — ${esc(detailBits)}` : ""}</div>` : ""}`;
@@ -122,14 +98,8 @@ function render() {
   container.querySelectorAll("[data-remove]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const id = (btn as HTMLElement).dataset.remove!;
-      await fetchJSON(`/api/queue/${id}`, { method: "DELETE" });
+      await api.removeQueueItem(id);
       refreshState();
     });
   });
-}
-
-function esc(s: string): string {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
 }

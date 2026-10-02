@@ -1,7 +1,8 @@
 /**
  * Download panel — mod ID input, force toggle, SSE log, dependency preview.
  */
-import { api, fetchJSON, type SSEEvent } from "../api";
+import { api, type SSEEvent } from "../api";
+import { esc, fmtBytes } from "../dom";
 import { setStatus, refreshMods } from "../main";
 
 let activeController: AbortController | null = null;
@@ -40,11 +41,7 @@ async function previewDeps(raw: string) {
   container.innerHTML = '<span style="font-size:11px;color:var(--gray-text)">查询依赖中...</span>';
 
   try {
-    const data = await fetchJSON<{ deps?: Record<string, any[]> }>("/api/mods/dependencies", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ids }),
-    });
+    const data = await api.getModDependencies(ids);
     const deps = data.deps || {};
 
     let totalInstalled = 0;
@@ -67,13 +64,13 @@ async function previewDeps(raw: string) {
           <div class="dep-item" style="font-size:11px;padding:2px 0 2px 12px">
             <span style="color:var(--green)">✓</span>
             <span>${esc(d.name)}</span>
-            <span style="color:var(--gray-text);font-size:10px;margin-left:4px">${d.id}</span>
+            <span style="color:var(--gray-text);font-size:10px;margin-left:4px">${esc(d.id)}</span>
           </div>`).join("")}
         ${missing.map((d: any) => /* html */ `
           <div class="dep-item" style="font-size:11px;padding:2px 0 2px 12px">
             <span style="color:var(--yellow)">⚠</span>
             <span>${esc(d.name)}</span>
-            <span style="color:var(--gray-text);font-size:10px;margin-left:4px">${d.id}</span>
+            <span style="color:var(--gray-text);font-size:10px;margin-left:4px">${esc(d.id)}</span>
             <span style="color:var(--red);font-size:10px">未安装</span>
           </div>`).join("")}
       `);
@@ -102,15 +99,6 @@ async function previewDeps(raw: string) {
 function clearDepPreview() {
   const container = document.getElementById("dep-preview");
   if (container) container.innerHTML = "";
-}
-
-function fmtBytes(n: number): string {
-  if (!n || n <= 0 || !isFinite(n)) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  let i = 0;
-  let v = n;
-  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
-  return `${v >= 100 ? v.toFixed(0) : v.toFixed(1)} ${units[i]}`;
 }
 
 // Live per-mod progress from SSE 'progress' events → top progress bar.
@@ -224,10 +212,4 @@ export function renderLog(msg: string, cls = "") {
   const style = cls ? ` style="${classes[cls] || ""}"` : "";
   log.innerHTML += `<span${style}>${esc(msg)}</span>\n`;
   log.scrollTop = log.scrollHeight;
-}
-
-function esc(s: string): string {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
 }

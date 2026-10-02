@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from rwmod.config import Config
 from rwmod.deps import get_config
+from rwmod.models.schemas import ModsConfigRequest, RimsortSortRequest
 from rwmod.rimsort import (
     compare_modsconfig,
     generate_modsconfig,
@@ -26,10 +27,10 @@ def rimsort_generate(
 
 @router.post("/compare")
 def rimsort_compare(
-    payload: dict,
+    payload: ModsConfigRequest,
     cfg: Config = Depends(get_config),
 ):
-    xml_content = payload.get("xml", "")
+    xml_content = payload.xml
     if not xml_content.strip():
         raise HTTPException(400, "需要提供 ModsConfig.xml 内容")
     with tempfile.NamedTemporaryFile("w", suffix=".xml", delete=False, encoding="utf-8") as f:
@@ -73,6 +74,12 @@ async def rimsort_compare_file(
 def check_load_order(
     cfg: Config = Depends(get_config),
 ):
+    """Analyze the active load order.
+
+    Raises ModNotFoundError (404) / ValidationError (400) when ModsConfig.xml is
+    absent or unreadable — load_order raises rather than returning an `error`
+    key, so this endpoint no longer answers 200 with error text in the body.
+    """
     from rwmod.load_order import check_load_order as _check
     from rwmod.profile import resolve_modsconfig_path
 
@@ -82,11 +89,11 @@ def check_load_order(
 
 @router.post("/sort")
 def rimsort_sort(
-    payload: dict | None = None,
+    payload: RimsortSortRequest | None = None,
     cfg: Config = Depends(get_config),
 ):
     """Preview the optimal load order (does not write anything)."""
-    active_ids = (payload or {}).get("active_ids")
+    active_ids = payload.active_ids if payload else None
     return sort_mods(cfg.mods_dir, active_ids)
 
 

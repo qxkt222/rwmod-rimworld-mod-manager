@@ -12,8 +12,9 @@ from rwmod.config import Config
 from rwmod.deps import get_config
 from rwmod.metadata import read_mod_metadata
 from rwmod.mod_cache import get_cached_mods
+from rwmod.models.schemas import DownloadRequest, FoldersRequest
 from rwmod.routers.download import _dl_semaphore
-from rwmod.utils import read_upload_limited
+from rwmod.utils import extract_mod_id, read_upload_limited
 from rwmod.workshop import _fetch_batch_parallel, check_mod_updates
 
 router = APIRouter(prefix="/api/mods", tags=["mods"])
@@ -203,13 +204,16 @@ def export_collection(
 def mod_compatibility(
     cfg: Config = Depends(get_config),
 ):
-    from rwmod.compatibility import check_compatibility, detect_rimworld_version
+    from rwmod.version_support import check_version_support, detect_rimworld_version
 
     rw_ver = detect_rimworld_version(cfg.rimworld_dir)
     if not rw_ver:
-        return {"error": "未能检测到 RimWorld 版本", "rimworld_version": None, "groups": {}}
+        # Not an error: the request succeeded, the game version simply isn't
+        # detectable here. A 200 body carries data only — no error text — so the
+        # client decides how to present "no version known".
+        return {"rimworld_version": None, "groups": {}}
     metas = get_cached_mods(cfg.mods_dir)
-    groups = check_compatibility(metas, rw_ver)
+    groups = check_version_support(metas, rw_ver)
     return {"rimworld_version": rw_ver, "groups": groups}
 
 
@@ -303,7 +307,7 @@ def _import_local_sync(content: bytes, cfg: Config) -> dict:
 
 @router.post("/batch/delete")
 def batch_delete_mods(
-    payload: dict,
+    payload: FoldersRequest,
     cfg: Config = Depends(get_config),
 ):
     """Delete multiple mod folders. Each is backed up to backup_dir first."""
@@ -311,7 +315,7 @@ def batch_delete_mods(
 
     from rwmod.backup import backup_mod
 
-    folders: list[str] = payload.get("folders", [])
+    folders: list[str] = payload.folders
     if not folders:
         raise HTTPException(400, "需要提供要删除的 Mod 文件夹列表")
 
@@ -341,7 +345,7 @@ def batch_delete_mods(
 
 @router.post("/batch/download")
 async def batch_download_mods(
-    payload: dict,
+    payload: DownloadRequest,
     cfg: Config = Depends(get_config),
 ):
     """Download multiple mods by workshop ID (or collection URL).
@@ -350,10 +354,10 @@ async def batch_download_mods(
     login) instead of a process per mod; collection ids are detected and
     their children downloaded too.
     """
-    from rwmod.downloader import download_batch, extract_mod_id
+    from rwmod.downloader import download_batch
 
-    ids: list[str] = payload.get("ids", [])
-    force: bool = payload.get("force", False)
+    ids: list[str] = payload.ids
+    force: bool = payload.force
     parsed = [mid for raw in ids if (mid := extract_mod_id(raw))]
     if not parsed:
         raise HTTPException(400, "没有有效的 Mod ID")

@@ -85,8 +85,9 @@ disable_error_code = ["type-arg"]
 module = ["rwmod.routers.*"]
 disable_error_code = ["no-untyped-def", "no-untyped-call", "type-arg"]
 
-# defusedxml ships no type stubs; ignore_missing_imports keeps mypy green on
-# environments (e.g. fresh CI installs) that don't have types-defusedxml.
+# defusedxml ships no inline types. types-defusedxml is a dev dependency, so this
+# override is belt-and-braces for an environment that lacks the stubs (e.g. a bare
+# `pip install mypy` without the dev group) rather than load-bearing for CI.
 [[tool.mypy.overrides]]
 module = ["defusedxml.*"]
 ignore_missing_imports = true
@@ -107,9 +108,14 @@ exclude_lines = [
 [tool.bandit]
 exclude_dirs = ["tests", ".venv", "build", "dist", "node_modules"]
 # B101: assert used deliberately in tests.
-# B314/B405: xml.etree is used only to parse *local* RimWorld About.xml /
-# ModsConfig.xml files (not network-attacker-controlled); accepted trade-off
-# to avoid a defusedxml runtime dependency for a local tool.
+#
+# B314/B405 (stdlib xml.etree parse/import): defusedxml IS a runtime dependency
+# (see [project].dependencies) and xmlutil.parse_xml_root is the mandatory entry
+# point for untrusted XML. The skip stays because stdlib xml.etree is still used
+# for XML this process owns or that RimWorld itself wrote — profile.py validating
+# a modlist it just generated, and reading/applying ModsConfig.xml. Migrating
+# those three to xmlutil is outstanding work, so the blanket skip is a known
+# debt rather than an accepted trade-off.
 skips = ["B101", "B314", "B405"]
 
 [dependency-groups]
@@ -122,4 +128,8 @@ dev = [
     "mypy>=1.10",
     "bandit>=1.7",
     "pyinstaller>=6.0",
+    # Stubs for defusedxml — .pre-commit-config.yaml already pinned this for its
+    # mypy hook; without it here, CI's mypy ran against a different type surface
+    # than local. See the [[tool.mypy.overrides]] note below.
+    "types-defusedxml>=0.7",
 ]

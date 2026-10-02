@@ -1,3 +1,9 @@
+"""Shared utilities - mod ID extraction, safe filenames, and common helpers.
+
+All modules that need extract_mod_id or safe_filename must import from here
+instead of re-exporting them through downloader.py or duplicating the logic.
+"""
+
 from __future__ import annotations
 
 import re
@@ -8,12 +14,6 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from fastapi import UploadFile
-
-"""Shared utilities - mod ID extraction, safe filenames, and common helpers.
-
-All modules that need extract_mod_id or safe_filename should import from here
-instead of duplicating the logic across backup.py, profile.py, and downloader.py.
-"""
 
 __all__ = [
     "extract_mod_id",

@@ -84,8 +84,17 @@ def check(name, code):
 
 check("errors",
     "from rwmod.errors import ConfigError; e=ConfigError('test'); assert e.detail=='test'")
+# 版本漂移检查：pyproject.toml 是唯一真源。这个断言过去两次写死后过期
+# （0.4.3、0.5.0 —— 见 CHANGELOG.md:165），所以改为跨文件比对而非硬编码。
 check("version",
-    "from rwmod import __version__; assert __version__=='0.6.0', __version__")
+    "import pathlib,re\n"
+    "import rwmod\n"
+    "from rwmod import __version__\n"
+    "root=pathlib.Path(rwmod.__file__).resolve().parents[2]\n"
+    "src=(root/'pyproject.toml').read_text(encoding='utf-8')\n"
+    "q=chr(34)\n"
+    "declared=re.search(r'^version = '+q+r'([0-9.]+)'+q, src, re.M).group(1)\n"
+    "assert __version__==declared, '__init__=%s pyproject=%s' % (__version__, declared)")
 
 
 check("backup",
@@ -93,21 +102,23 @@ check("backup",
     "from pathlib import Path\n"
     "r = _backup_metadata(Path('/x/a__b__c.zip'))\n"
     "assert r == {'workshop_id':'a','folder_name':'b','timestamp':'c'}, r")
+# Offline state must reflect real call outcomes rather than a synthetic ping, so
+# assert the marking actually moves what /api/status reads.
 check("offline",
-    "from rwmod.offline import safe_fetch")
+    "from rwmod.offline import get_status,mark_offline,mark_online\n"
+    "mark_offline(); assert get_status()['online'] is False, get_status()\n"
+    "mark_online(); assert get_status()['online'] is True, get_status()")
 check("database_queue",
     "from rwmod.database import queue_upsert,queue_load_pending,queue_clear_done")
 check("schemas",
     "from rwmod.models.schemas import ConfigResponse,DownloadRequest,DownloadResultItem\n"
     "from rwmod.models.schemas import OkResponse,ErrorResponse")
-check("app_state",
-    "from rwmod.app_state import AppState")
 
 if fails:
     for f in fails:
         print(f'  ❌ {f}')
     sys.exit(1)
-print('  ✅ 全部 7 项导入通过')
+print('  ✅ 全部 6 项导入通过')
 """,
                 ],
                 "新模块导入 + 核心逻辑验证",

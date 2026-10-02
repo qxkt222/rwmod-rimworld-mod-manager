@@ -10,8 +10,8 @@ from pathlib import Path
 from rwmod.downloader import (
     _find_existing,
     _pick_folder_name,
-    extract_mod_id,
 )
+from rwmod.utils import extract_mod_id
 
 
 class TestExtractModId:

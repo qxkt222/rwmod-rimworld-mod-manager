@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import typer
 
 from rwmod.config import Config
-from rwmod.downloader import download_one, extract_mod_id
+from rwmod.downloader import download_one
+from rwmod.errors import RwmodError
+from rwmod.metadata import read_mod_metadata
 from rwmod.parser import (
     get_installed_package_ids,
     parse_collection_dir,
@@ -17,6 +18,7 @@ from rwmod.parser import (
     resolve_workshop_ids,
 )
 from rwmod.steamcmd import SteamCMD
+from rwmod.utils import extract_mod_id
 
 app = typer.Typer(help="RimWorld Mod CLI — SteamCMD-powered, zero GUI")
 
@@ -228,25 +230,19 @@ def list_mods() -> None:
     for d in sorted(cfg.mods_dir.iterdir()):
         if not d.is_dir():
             continue
-        about = d / "About" / "About.xml"
-        name = "?"
-        pkg = ""
-        if about.exists():
-            try:
-                root = ET.parse(about).getroot()
-                name = root.findtext("name", "?") or "?"
-                pkg = root.findtext("packageId", "") or ""
-            except Exception:
-                pass
-
-        pf = d / "About" / "PublishedFileId.txt"
-        wid = ""
-        if pf.exists():
-            try:
-                wid = pf.read_text(encoding="utf-8").strip()
-            except (OSError, UnicodeDecodeError):
-                wid = ""
-        entries.append((d.name, name, pkg, wid))
+        # Every directory is still listed (a non-mod shows as "?"), but the
+        # parsing now goes through the shared safe reader. This used to parse
+        # About.xml with stdlib xml.etree and take PublishedFileId.txt verbatim,
+        # so the numeric-ID guard never applied to `rwmod list` either.
+        meta = read_mod_metadata(d)
+        entries.append(
+            (
+                d.name,
+                meta.name if meta else "?",
+                meta.package_id if meta else "",
+                meta.workshop_id if meta else "",
+            )
+        )
 
     typer.echo(f"\n已安装 Mod ({len(entries)} 个):\n")
     for folder, name, pkg, wid in entries:
@@ -375,8 +371,8 @@ def backup_cleanup(
 def compat_check() -> None:
     """检查 Mod 版本兼容性."""
     cfg = Config.load()
-    from rwmod.compatibility import check_compatibility, detect_rimworld_version
     from rwmod.mod_cache import get_cached_mods
+    from rwmod.version_support import check_version_support, detect_rimworld_version
 
     rw_ver = detect_rimworld_version(cfg.rimworld_dir)
     if not rw_ver:
@@ -384,7 +380,7 @@ def compat_check() -> None:
         return
 
     metas = get_cached_mods(cfg.mods_dir)
-    groups = check_compatibility(metas, rw_ver)
+    groups = check_version_support(metas, rw_ver)
 
     typer.echo(f"\nRimWorld {rw_ver}\n")
     typer.echo(f"  ✅ 兼容:  {len(groups['compatible'])}")
@@ -409,10 +405,10 @@ def check_load_order() -> None:
     from rwmod.profile import resolve_modsconfig_path
 
     path = resolve_modsconfig_path(cfg.rimworld_dir) or (cfg.rimworld_dir / "ModsConfig.xml")
-    result = _check(path, cfg.mods_dir)
-
-    if "error" in result:
-        typer.echo(result["error"], err=True)
+    try:
+        result = _check(path, cfg.mods_dir)
+    except RwmodError as e:
+        typer.echo(e.detail, err=True)
         return
 
     typer.echo(f"\n排序分析 — {result['total_mods']} 个 Mod\n")

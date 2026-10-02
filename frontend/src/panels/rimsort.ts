@@ -1,7 +1,8 @@
 /**
  * RimSort panel — generate ModsConfig.xml, compare with installed mods.
  */
-import { fetchJSON } from "../api";
+import { api } from "../api";
+import { esc, escAttr } from "../dom";
 import { toast } from "../toast";
 import { refreshMods } from "../main";
 
@@ -16,7 +17,7 @@ async function generateConfig() {
   const btn = document.getElementById("btn-rimsort-generate") as HTMLButtonElement;
   btn.disabled = true;
   try {
-    const data = await fetchJSON<{ modsconfig_xml?: string }>("/api/rimsort/generate", { method: "POST" });
+    const data = await api.generateRimsort();
     const xml = data.modsconfig_xml;
     if (!xml) {
       // 失败时不下载假 XML
@@ -56,12 +57,10 @@ async function compareFile() {
   container.innerHTML = '<span style="color:var(--gray-text)">正在对比...</span>';
 
   try {
-    const fd = new FormData();
-    fd.append("file", file);
-    const data = await fetchJSON<any>("/api/rimsort/compare-file", { method: "POST", body: fd });
+    const data = await api.compareRimsortFile(file);
 
     if (data.error) {
-      container.innerHTML = `<span style="color:var(--red)">解析失败: ${data.error}</span>`;
+      container.innerHTML = `<span style="color:var(--red)">解析失败: ${esc(data.error)}</span>`;
       return;
     }
 
@@ -83,7 +82,7 @@ async function compareFile() {
       ${extra.length ? renderExtra(extra) : ""}
     `;
   } catch (e: any) {
-    container.innerHTML = `<span style="color:var(--red)">对比失败: ${e.message}</span>`;
+    container.innerHTML = `<span style="color:var(--red)">对比失败: ${esc(e.message)}</span>`;
   }
 }
 
@@ -93,7 +92,7 @@ function renderMissing(ids: string[], details: any[]): string {
       const d = details[i] || {};
       const wid = d.workshop_id || "";
       const dlBtn = wid
-        ? `<button class="btn btn-primary btn-sm" data-wid="${wid}">⬇ 加入队列</button>`
+        ? `<button class="btn btn-primary btn-sm" data-wid="${escAttr(wid)}">⬇ 加入队列</button>`
         : `<span style="color:var(--gray-text);font-size:11px">无法解析 Workshop ID</span>`;
 
       return /* html */ `
@@ -114,11 +113,7 @@ function renderMissing(ids: string[], details: any[]): string {
       b.addEventListener("click", async () => {
         const wid = (b as HTMLElement).dataset.wid!;
         try {
-          await fetchJSON("/api/queue/add", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ids: [wid] }),
-          });
+          await api.addToQueue([wid]);
           toast(`已加入队列: ${wid}`, "success");
         } catch (e: any) {
           toast(`失败: ${e.message}`, "error");
@@ -157,12 +152,6 @@ function setupRimsortDrop() {
   });
 }
 
-function esc(s: string): string {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
-}
-
 // ── load order check ──────────────────────────────────────────────
 
 function bindOrderCheck() {
@@ -176,12 +165,7 @@ function bindOrderCheck() {
     container.innerHTML = '<span style="color:var(--gray-text)">正在分析加载顺序...</span>';
 
     try {
-      const data = await fetchJSON<any>("/api/rimsort/check-order");
-
-      if (data.error) {
-        container.innerHTML = `<span style="color:var(--red)">${esc(data.error)}</span>`;
-        return;
-      }
+      const data = await api.checkLoadOrder();
 
       const issues = data.issues || [];
       const errCount = issues.filter((i: any) => i.severity === "error").length;
@@ -217,7 +201,7 @@ function bindOrderCheck() {
         </div>
       `;
     } catch (e: any) {
-      container.innerHTML = `<span style="color:var(--red)">检查失败: ${e.message}</span>`;
+      container.innerHTML = `<span style="color:var(--red)">检查失败: ${esc(e.message)}</span>`;
     }
     btn.textContent = "🔍 分析排序";
     (btn as HTMLButtonElement).disabled = false;

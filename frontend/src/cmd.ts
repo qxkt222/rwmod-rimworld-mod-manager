@@ -1,7 +1,13 @@
 /**
  * Ctrl+K Command Palette — keyboard-driven navigation.
  * Uses a lazy-registry pattern to avoid circular imports from main.ts.
+ *
+ * Shortcut labels are looked up from PANEL_SHORTCUTS (panel-registry.ts), the
+ * same map main.ts's keydown handler dispatches on — so every `Ctrl+N` shown
+ * here is a `Ctrl+N` that actually works, and a renamed/removed panel can
+ * never leave a stale label behind.
  */
+import { panelShortcut, type PanelName } from "./panel-registry";
 
 interface CmdItem {
   label: string;
@@ -11,21 +17,24 @@ interface CmdItem {
 }
 
 /** Navigate via the hash router so the URL stays in sync. */
-function _makePanelAction(panel: string): () => void {
+function _makePanelAction(panel: PanelName): () => void {
   return () => {
     import("./router").then(({ navigate }) => navigate(panel));
   };
 }
 
 const COMMANDS: CmdItem[] = [
-  { label: "下载 Mod", ico: "📥", action: _makePanelAction("download"), shortcut: "Ctrl+1" },
-  { label: "下载合集", ico: "📦", action: _makePanelAction("collection"), shortcut: "Ctrl+2" },
-  { label: "导入列表", ico: "📋", action: _makePanelAction("import"), shortcut: "Ctrl+3" },
-  { label: "已安装 Mods", ico: "📊", action: _makePanelAction("mods"), shortcut: "Ctrl+4" },
-  { label: "搜索 Workshop", ico: "🔍", action: _makePanelAction("search"), shortcut: "Ctrl+5" },
-  { label: "下载队列", ico: "📋", action: _makePanelAction("queue"), shortcut: "Ctrl+6" },
-  { label: "RimSort", ico: "📐", action: _makePanelAction("rimsort"), shortcut: "Ctrl+7" },
-  { label: "配置", ico: "⚙", action: _makePanelAction("config"), shortcut: "Ctrl+8" },
+  { label: "下载 Mod", ico: "📥", action: _makePanelAction("download"), shortcut: panelShortcut("download") },
+  { label: "下载合集", ico: "📦", action: _makePanelAction("collection"), shortcut: panelShortcut("collection") },
+  { label: "导入列表", ico: "📋", action: _makePanelAction("import"), shortcut: panelShortcut("import") },
+  { label: "已安装 Mods", ico: "📊", action: _makePanelAction("mods"), shortcut: panelShortcut("mods") },
+  { label: "搜索 Workshop", ico: "🔍", action: _makePanelAction("search"), shortcut: panelShortcut("search") },
+  { label: "下载队列", ico: "📋", action: _makePanelAction("queue"), shortcut: panelShortcut("queue") },
+  { label: "RimSort", ico: "📐", action: _makePanelAction("rimsort"), shortcut: panelShortcut("rimsort") },
+  // Ctrl+8 is the last panel in the derived shortcut range (profiles); the
+  // remaining panels stay reachable here without a key badge.
+  { label: "配置档案", ico: "💾", action: _makePanelAction("profiles"), shortcut: panelShortcut("profiles") },
+  { label: "配置", ico: "⚙", action: _makePanelAction("config") },
   { label: "导出 Mod 列表", ico: "📤", action: () => document.getElementById("btn-export")?.click() },
   { label: "切换深色模式", ico: "🌙", action: () => document.getElementById("btn-dark")?.click() },
   { label: "刷新 Mod 列表", ico: "🔄", action: () => document.getElementById("btn-refresh")?.click() },

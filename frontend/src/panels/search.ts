@@ -1,19 +1,9 @@
 /**
  * Search panel — query Steam Workshop, add results to queue.
  */
-import { fetchJSON } from "../api";
+import { api, type SearchHit } from "../api";
+import { esc, escAttr } from "../dom";
 import { toast } from "../toast";
-
-interface SearchHit {
-  id: string;
-  title: string;
-  author: string;
-  description: string;
-  preview_url: string;
-  rating: string;
-  subscribers: string;
-  installed: boolean;
-}
 
 export function initSearchPanel() {
   const input = document.getElementById("search-input") as HTMLInputElement | null;
@@ -34,7 +24,7 @@ async function doSearch() {
   container.innerHTML = '<span style="color:var(--gray-text)">搜索中...</span>';
 
   try {
-    const data = await fetchJSON<{ results?: SearchHit[] }>(`/api/search?q=${encodeURIComponent(q)}`);
+    const data = await api.search(q);
     const results: SearchHit[] = data.results || [];
 
     if (!results.length) {
@@ -50,12 +40,12 @@ async function doSearch() {
           <span class="search-hit-title">${esc(r.title)}</span>
           ${r.installed ? '<span style="color:var(--green);font-size:11px;font-weight:600">✓ 已安装</span>' : ""}
           <span class="search-hit-author">by ${esc(r.author)}</span>
-          ${r.rating ? `<span class="search-hit-rating">⭐ ${r.rating}</span>` : ""}
-          ${r.subscribers ? `<span class="search-hit-subs">${r.subscribers} 订阅</span>` : ""}
+          ${r.rating ? `<span class="search-hit-rating">⭐ ${esc(r.rating)}</span>` : ""}
+          ${r.subscribers ? `<span class="search-hit-subs">${esc(r.subscribers)} 订阅</span>` : ""}
         </div>
         ${r.description ? `<div class="search-hit-desc">${esc(r.description)}</div>` : ""}
         <div style="margin-top:6px">
-          <button class="btn btn-primary btn-sm" data-id="${r.id}">+ 加入队列</button>
+          <button class="btn btn-primary btn-sm" data-id="${escAttr(r.id)}">+ 加入队列</button>
         </div>
       </div>`,
       )
@@ -65,11 +55,7 @@ async function doSearch() {
       btn.addEventListener("click", async () => {
         const id = (btn as HTMLElement).dataset.id!;
         try {
-          await fetchJSON("/api/queue/add", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ids: [id] }),
-          });
+          await api.addToQueue([id]);
           toast(`已加入队列: ${id}`, "success");
         } catch (e: any) {
           toast(`加入失败: ${e.message}`, "error");
@@ -77,12 +63,6 @@ async function doSearch() {
       });
     });
   } catch (e: any) {
-    container.innerHTML = `<span style="color:var(--red)">搜索失败: ${e.message}</span>`;
+    container.innerHTML = `<span style="color:var(--red)">搜索失败: ${esc(e.message)}</span>`;
   }
-}
-
-function esc(s: string): string {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
 }

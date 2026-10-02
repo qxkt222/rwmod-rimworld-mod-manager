@@ -4,8 +4,9 @@ from fastapi import APIRouter, Depends
 
 from rwmod.config import Config
 from rwmod.deps import get_config, get_queue
-from rwmod.downloader import extract_mod_id
+from rwmod.models.schemas import ModIdsRequest, QueueStartRequest
 from rwmod.queue import DownloadQueue
+from rwmod.utils import extract_mod_id
 
 router = APIRouter(prefix="/api", tags=["queue"])
 
@@ -19,10 +20,10 @@ def get_queue_state(
 
 @router.post("/queue/add")
 def queue_add(
-    payload: dict,
+    payload: ModIdsRequest,
     queue: DownloadQueue = Depends(get_queue),
 ):
-    ids: list[str] = payload.get("ids", [])
+    ids: list[str] = payload.ids
     parsed = [mid for raw in ids if (mid := extract_mod_id(raw))]
     items = queue.add(parsed)
     return {"added": len(items), "items": [{"id": i.id, "status": i.status} for i in items]}
@@ -30,12 +31,11 @@ def queue_add(
 
 @router.post("/queue/start")
 async def queue_start(
-    payload: dict | None = None,
+    payload: QueueStartRequest | None = None,
     cfg: Config = Depends(get_config),
     queue: DownloadQueue = Depends(get_queue),
 ):
-    body = payload or {}
-    force: bool = body.get("force", False)
+    force: bool = payload.force if payload else False
     cfg.validate()
     await queue.start(cfg, force=force)
     return {"ok": True}

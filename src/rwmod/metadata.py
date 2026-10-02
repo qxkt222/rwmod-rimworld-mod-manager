@@ -8,7 +8,13 @@ from rwmod.xmlutil import parse_xml_root
 
 # Safe XML parser: rejects entity-expansion / external-entity (XXE) attacks.
 
-__all__ = ["read_mod_metadata", "ModMeta"]
+__all__ = [
+    "read_mod_metadata",
+    "ModMeta",
+    "installed_mod_metas",
+    "installed_package_ids",
+    "package_id_to_workshop_id",
+]
 
 
 class ModMeta:
@@ -71,3 +77,37 @@ def read_mod_metadata(mod_dir: Path) -> ModMeta | None:
     return ModMeta(
         folder=mod_dir.name, name=name, package_id=pkg, workshop_id=wid, supported_versions=versions
     )
+
+
+def installed_mod_metas(mods_dir: Path) -> list[ModMeta]:
+    """Read metadata for every valid mod in mods_dir, in directory-name order.
+
+    A missing mods_dir yields [] instead of raising: every caller treats "no
+    mods" and "no mods_dir" the same way, and three of them used to crash here.
+
+    Order is directory name, which callers that emit a load order rely on.
+    """
+    if not mods_dir.is_dir():
+        return []
+    metas: list[ModMeta] = []
+    for d in sorted(mods_dir.iterdir()):
+        meta = read_mod_metadata(d)
+        if meta is not None and meta.package_id:
+            metas.append(meta)
+    return metas
+
+
+def installed_package_ids(mods_dir: Path) -> set[str]:
+    """packageId of every installed mod."""
+    return {m.package_id for m in installed_mod_metas(mods_dir)}
+
+
+def package_id_to_workshop_id(mods_dir: Path) -> dict[str, str]:
+    """Map packageId → workshop ID for mods that declare both.
+
+    Built on read_mod_metadata, so the "numeric workshop IDs only" guard applies
+    to every caller. Three hand-rolled copies of this map used to exist and only
+    one of them checked the ID; sharing the reader is what keeps the guard from
+    drifting away again.
+    """
+    return {m.package_id: m.workshop_id for m in installed_mod_metas(mods_dir) if m.workshop_id}

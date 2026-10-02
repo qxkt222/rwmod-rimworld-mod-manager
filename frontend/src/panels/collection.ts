@@ -3,7 +3,8 @@
  * Uses the SSE download stream so per-batch progress is shown live instead
  * of one line followed by a long silent wait.
  */
-import { api, fetchJSON } from "../api";
+import { api } from "../api";
+import { esc, fmtBytes } from "../dom";
 import { setStatus, refreshMods } from "../main";
 
 const EVENT_COLORS: Record<string, string> = {
@@ -46,15 +47,6 @@ function logLine(log: HTMLElement, text: string, event: string) {
 let totalCount = 0;      // mods to download (from backend 'total')
 let doneCount = 0;       // ok + warn + skip so far
 let current: Record<string, { percent: number; downloaded: number; total: number; ts: number }> = {};
-
-function fmtBytes(n: number): string {
-  if (!n || n <= 0 || !isFinite(n)) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  let i = 0;
-  let v = n;
-  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
-  return `${v >= 100 ? v.toFixed(0) : v.toFixed(1)} ${units[i]}`;
-}
 
 function renderProgress() {
   const box = document.getElementById("collection-progress");
@@ -161,15 +153,7 @@ async function previewCollection() {
   log.innerHTML = '<span style="color:#7aa2f7">正在获取合集预览...</span>\n';
 
   try {
-    const d = await fetchJSON<{
-      error?: string;
-      collection_id?: string;
-      total?: number;
-      installed_count?: number;
-      new_count?: number;
-      failed_count?: number;
-    }>(`/api/collection/preview/${encodeURIComponent(cid)}`);
-    if (d.error) { log.innerHTML = `<span style="color:#f7768e">${esc(d.error)}</span>`; return; }
+    const d = await api.previewCollection(cid);
     log.innerHTML =
       `<span style="color:#9ece6a">合集 ${esc(String(d.collection_id ?? cid))}: ${d.total} 个 Mod</span>\n` +
       `<span style="color:#9ece6a">  🟢 已安装 ${d.installed_count}</span>\n` +
@@ -177,11 +161,5 @@ async function previewCollection() {
       (d.failed_count ? `<span style="color:#e0af68">  🟡 之前失败 ${d.failed_count}</span>\n` : "") +
       `<span style="color:var(--gray-text)">点击"下载合集"开始下载</span>\n`;
     log.scrollTop = log.scrollHeight;
-  } catch (e: any) { log.innerHTML = `<span style="color:#f7768e">预览失败: ${e.message}</span>`; }
-}
-
-function esc(s: string): string {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
+  } catch (e: any) { log.innerHTML = `<span style="color:#f7768e">预览失败: ${esc(e.message)}</span>`; }
 }

@@ -74,15 +74,19 @@
 ## 🚀 快速开始
 
 ```bash
-# 安装依赖
+# 安装 Python 依赖
 uv sync
-cd frontend && bun install && bun run build && cd ..
-# 或使用 npm：cd frontend && npm install && npm run build && cd ..
+
+# 构建前端（必需一步）——static/ 是构建产物、不随仓库分发，
+# 缺少它时首页会返回 503 并提示「前端未构建」
+cd frontend && npm install && npm run build && cd ..
+# 或使用 bun：cd frontend && bun install && bun run build && cd ..
 #（bun.lock / package.json 二者皆可，Docker 构建使用 npm）
+# 也可以用仓库脚本：python tools/build_frontend.py
 
 # 启动服务
 uv run uvicorn rwmod.server:app --host 0.0.0.0 --port 8000
-# 或直接运行
+# 或直接运行（会先自动构建前端）
 ./start.bat
 ```
 

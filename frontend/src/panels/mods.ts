@@ -3,11 +3,10 @@
  * Shows health status badges: 🟢 maintained / 🟡 stale / 🔴 abandoned / ⚫ removed
  * Shows compatibility badges: ✅ compatible / ❌ incompatible / ❓ unknown
  */
-import { fetchJSON, type ModEntry } from "../api";
+import { api, type ExportCollectionResult } from "../api";
+import { esc, escAttr } from "../dom";
 import { refreshMods } from "../main";
 import { toast } from "../toast";
-
-let _onClick: ((mod: ModEntry) => void) | null = null;
 
 const HEALTH_LABELS: Record<string, string> = {
   maintained: "🟢 活跃",
@@ -17,25 +16,10 @@ const HEALTH_LABELS: Record<string, string> = {
   unknown: "⚪ 未知",
 };
 
-function esc(s: string): string {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
-}
-
-function escAttr(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
-export function initModsPanel(mods: ModEntry[], onClick: (mod: ModEntry) => void) {
-  _onClick = onClick;
+export function initModsPanel() {
   loadHealth();
   loadCompatibility();
   bindExportCollection();
-}
-
-export function onModClick(mod: ModEntry) {
-  _onClick?.(mod);
 }
 
 // Exported so main.ts can re-apply badges after rendering mod list
@@ -46,7 +30,7 @@ export function refreshBadges() {
 
 async function loadHealth() {
   try {
-    const data = await fetchJSON<{ mods?: { folder: string; status: string }[] }>("/api/mods/health");
+    const data = await api.getModHealth();
     const healthMap: Record<string, string> = {};
     for (const m of data.mods || []) {
       healthMap[m.folder] = m.status;
@@ -71,15 +55,7 @@ async function loadHealth() {
 
 async function loadCompatibility() {
   try {
-    const data = await fetchJSON<{
-      error?: string;
-      rimworld_version?: string;
-      groups?: {
-        incompatible?: { folder: string }[];
-        unknown?: { folder: string }[];
-      };
-    }>("/api/mods/compatibility");
-    if (data.error) return;
+    const data = await api.getModCompatibility();
 
     const incompat: Set<string> = new Set(
       (data.groups?.incompatible || []).map((m) => m.folder),
@@ -135,7 +111,7 @@ function bindExportCollection() {
     btn.textContent = "⏳ 生成中...";
     (btn as HTMLButtonElement).disabled = true;
     try {
-      const data = await fetchJSON<{ ids?: string[]; total?: number; mods?: any[]; markdown?: string }>("/api/mods/export-collection");
+      const data = await api.exportCollection();
       showCollectionExport(data);
     } catch (e: any) {
       toast(`导出失败: ${e.message}`, "error");
@@ -145,7 +121,7 @@ function bindExportCollection() {
   });
 }
 
-function showCollectionExport(data: any) {
+function showCollectionExport(data: ExportCollectionResult) {
   const container = document.getElementById("mod-list")!;
   const ids = data.ids || [];
   const idsText = ids.join(" ");
@@ -165,10 +141,10 @@ function showCollectionExport(data: any) {
         ${esc(idsText)}
       </div>
       <div style="margin-top:8px;font-size:11px;max-height:300px;overflow-y:auto">
-        ${data.mods?.map((m: any) => /* html */ `
+        ${data.mods?.map((m) => /* html */ `
           <div style="padding:2px 0">
             <a href="${escAttr(m.url)}" target="_blank" style="color:var(--blue)">${esc(m.name)}</a>
-            <span style="color:var(--gray-text);margin-left:4px">${m.workshop_id}</span>
+            <span style="color:var(--gray-text);margin-left:4px">${esc(m.workshop_id)}</span>
           </div>
         `).join("") || ""}
       </div>

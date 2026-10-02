@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 
@@ -20,6 +21,21 @@ class TestConfigEndpoint:
         data = resp.json()
         assert "steamcmd_path" in data
         assert "mods_dir" in data
+
+    def test_config_exposes_exactly_the_documented_keys(self, client: TestClient):
+        """ConfigResponse pins the shape in both directions: a key that goes
+        missing breaks the panel, and a new one is a contract change."""
+        resp = client.get("/api/config")
+        assert resp.status_code == 200
+        assert set(resp.json()) == {
+            "steamcmd_path",
+            "mods_dir",
+            "rimworld_dir",
+            "backup_dir",
+            "has_steam_api_key",
+            "steamcmd_exists",
+            "mods_dir_exists",
+        }
 
     def test_update_config(self, client: TestClient, tmp_path):
         resp = client.post("/api/config", json={"mods_dir": str(tmp_path / "OtherMods")})
@@ -61,8 +77,9 @@ class TestModsEndpoint:
         resp = client.get("/api/mods/compatibility")
         assert resp.status_code == 200
         data = resp.json()
-        # May return error if no RimWorld install, but should be valid JSON
-        assert "rimworld_version" in data or "error" in data
+        # A 200 body carries data only — "no RimWorld install" is a degraded
+        # success, not an error. An `error` key here means the contract regressed.
+        assert set(data) == {"rimworld_version", "groups"}, data
 
     def test_health_empty(self, client: TestClient):
         resp = client.get("/api/mods/health")
@@ -141,11 +158,12 @@ class TestRimsortEndpoint:
         assert resp.status_code == 200
         assert "modsconfig_xml" in resp.json()
 
-    def test_check_order(self, client: TestClient):
+    def test_check_order_without_modsconfig(self, client: TestClient):
+        """An isolated home has no ModsConfig.xml, so this is a 404 — not a 200
+        body carrying error text."""
         resp = client.get("/api/rimsort/check-order")
-        assert resp.status_code == 200
-        # May return error if no ModsConfig.xml, but should be valid JSON
-        assert isinstance(resp.json(), dict)
+        assert resp.status_code == 404
+        assert resp.json()["error"] == "ModNotFoundError"
 
 
 class TestBackupsEndpoint:
@@ -166,16 +184,66 @@ class TestProfilesEndpoint:
         assert resp.status_code == 400
 
 
+class TestSavesEndpoint:
+    def test_missing_save_returns_404(self, client: TestClient):
+        """A missing save fails via HTTP status, not a 200 body carrying `error`."""
+        resp = client.get("/api/saves/does-not-exist")
+        assert resp.status_code == 404
+        assert resp.json()["error"] == "ModNotFoundError"
+        assert resp.json()["detail"]
+
+
 class TestWorkshopEndpoint:
     def test_search_no_query(self, client: TestClient):
         resp = client.get("/api/search?q=")
         assert resp.status_code == 200
         assert resp.json()["results"] == []
 
+    @pytest.mark.network
     def test_search(self, client: TestClient):
+        """Hits the live Steam Workshop API — excluded by `-m "not network"`."""
         resp = client.get("/api/search?q=harmony")
         assert resp.status_code == 200
         assert "results" in resp.json()
+
+    def test_search_result_shape_is_pinned(self, client: TestClient):
+        """Search hits must expose exactly the modelled fields.
+
+        They used to be ModSearchResult.__dict__, so any field added to that
+        dataclass for internal reasons would have leaked into the API silently.
+        """
+        from unittest.mock import patch
+
+        from rwmod.workshop import ModSearchResult
+
+        hit = ModSearchResult(id="1", title="T", author="A")
+        with patch("rwmod.routers.workshop.search_workshop", return_value=[hit]):
+            resp = client.get("/api/search?q=harmony")
+
+        assert resp.status_code == 200
+        results = resp.json()["results"]
+        assert len(results) == 1
+        assert set(results[0]) == {
+            "id",
+            "title",
+            "author",
+            "description",
+            "preview_url",
+            "rating",
+            "subscribers",
+            "installed",
+        }
+
+    def test_collection_preview_missing_returns_404(self, client: TestClient):
+        """An unfetchable collection fails via HTTP status, not a 200 body."""
+        from unittest.mock import patch
+
+        from rwmod.routers import workshop as ws_router
+
+        with patch.object(ws_router, "fetch_collection_children", return_value=[]):
+            resp = client.get("/api/collection/preview/123456")
+        assert resp.status_code == 404
+        assert resp.json()["error"] == "ModNotFoundError"
 
 
 class TestErrorHandling:
@@ -184,10 +252,25 @@ class TestErrorHandling:
         assert resp.status_code == 404
 
     def test_error_response_format(self, client: TestClient):
-        """Global error handler should return structured JSON."""
+        """Bad input answers with the one failure shape, never a bare `detail`.
+
+        This endpoint raises HTTPException, so `error` is the generic marker that
+        the site has not migrated to errors.py yet — the shape is what matters.
+        """
         resp = client.post("/api/download", json={"ids": []})
-        # Should be 400 or have error detail
-        assert resp.status_code in (200, 400, 422)
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "HTTPError"
+        assert isinstance(resp.json()["detail"], str)
+        assert resp.json()["detail"]
+
+    def test_body_validation_uses_the_standard_shape(self, client: TestClient):
+        """A non-object body is FastAPI's own validation path; its default body is
+        {"detail": [...]}, a shape nothing else uses. It must be normalised."""
+        resp = client.post("/api/queue/add", json=[1, 2, 3])
+        assert resp.status_code == 422
+        body = resp.json()
+        assert body["error"] == "ValidationError"
+        assert isinstance(body["detail"], str)
 
 
 class TestDownloadAPIWithPatchedDownloader:
@@ -236,6 +319,28 @@ class TestConfigApiKeyMasking:
         data = resp.json()
         assert "steam_api_key" not in data
         assert "has_steam_api_key" in data
+
+
+class TestOpenAPIContract:
+    def test_documented_422_matches_what_the_handler_sends(self):
+        """FastAPI documents its default HTTPValidationError body for 422 while
+        validation_error_handler answers {error, detail}. /api/docs must not
+        describe a body the server never sends."""
+        from rwmod.server import app
+
+        spec = app.openapi()
+        assert set(spec["components"]["schemas"]["ErrorResponse"]["properties"]) == {
+            "error",
+            "detail",
+        }
+
+        documented = {
+            op["responses"]["422"]["content"]["application/json"]["schema"].get("$ref")
+            for operations in spec["paths"].values()
+            for op in operations.values()
+            if isinstance(op, dict) and "content" in op.get("responses", {}).get("422", {})
+        }
+        assert documented == {"#/components/schemas/ErrorResponse"}
 
 
 class TestBackupTraversalAPI:

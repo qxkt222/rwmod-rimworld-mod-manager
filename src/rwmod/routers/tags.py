@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
+from rwmod.models.schemas import TagRequest
 from rwmod.tags import (
     add_tag,
     get_mods_by_tag,
@@ -37,10 +38,10 @@ def api_get_mod_tags(mod_folder: str):
 @router.post("/tags/{mod_folder}")
 def api_add_tag(
     mod_folder: str,
-    payload: dict,
+    payload: TagRequest,
 ):
     """Add a tag to a mod."""
-    tag = payload.get("tag", "").strip()
+    tag = payload.tag.strip()
     if not tag:
         raise HTTPException(400, "Tag is required")
     ok = add_tag(mod_folder, tag)

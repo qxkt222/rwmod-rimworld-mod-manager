@@ -10,6 +10,8 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
+from rwmod.offline import mark_offline, mark_online
+
 __all__ = [
     "ModSearchResult",
     "search_workshop",
@@ -25,6 +27,49 @@ __all__ = [
 # Without this, each urllib.request.urlopen() does a fresh TCP+TLS handshake.
 _shared_opener = urllib.request.build_opener(urllib.request.HTTPHandler())
 _MAX_WORKERS = 4  # parallel batch requests to Steam API
+
+_PUBLISHED_FILE_DETAILS_URL = (
+    "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/"
+)
+
+
+def _request_json(
+    url: str,
+    *,
+    form: dict[str, str] | None = None,
+    timeout: int = 15,
+) -> dict | None:
+    """Make one Steam API call and parse its JSON body; None on any failure.
+
+    Every Steam JSON call goes through here so two things live in one place:
+    the request shape (UA, form encoding, keep-alive opener) and the
+    connectivity bookkeeping that ``/api/status`` reports. Callers only decide
+    what an empty result means for them.
+    """
+    headers = {"User-Agent": "rwmod/1.0"}
+    data = None
+    if form is not None:
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
+        data = urllib.parse.urlencode(form).encode()
+
+    try:
+        req = urllib.request.Request(url, data=data, headers=headers)
+        with _shared_opener.open(req, timeout=timeout) as resp:
+            payload = json.loads(resp.read())
+    except Exception:
+        mark_offline()
+        return None
+
+    mark_online()
+    return payload if isinstance(payload, dict) else None
+
+
+def _published_file_details_form(mod_ids: list[str]) -> dict[str, str]:
+    """Build the GetPublishedFileDetails POST body for a batch of ids."""
+    form = {"itemcount": str(len(mod_ids))}
+    for i, mid in enumerate(mod_ids):
+        form[f"publishedfileids[{i}]"] = mid
+    return form
 
 
 @dataclass
@@ -51,11 +96,8 @@ def search_workshop(query: str, page: int = 1, count: int = 20) -> list[ModSearc
         f"&return_vote_data=1&return_previews=1&return_children=0"
     )
 
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "rwmod/1.0"})
-        with _shared_opener.open(req, timeout=15) as resp:
-            data = json.loads(resp.read())
-    except Exception:
+    data = _request_json(url)
+    if data is None:
         return []
 
     results: list[ModSearchResult] = []
@@ -95,21 +137,12 @@ def _get_collection_details(collection_id: str, api_key: str = "anonymous") -> d
         "https://api.steampowered.com/ISteamRemoteStorage/GetCollectionDetails/v1/"
         f"?key={api_key}&format=json"
     )
-    body = urllib.parse.urlencode(
-        {"collectioncount": 1, "publishedfileids[0]": collection_id}
-    ).encode()
-    try:
-        req = urllib.request.Request(
-            url,
-            data=body,
-            headers={
-                "User-Agent": "rwmod/1.0",
-                "Content-Type": "application/x-www-form-urlencoded",
-            },
-        )
-        with _shared_opener.open(req, timeout=20) as resp:
-            data = json.loads(resp.read())
-    except Exception:
+    data = _request_json(
+        url,
+        form={"collectioncount": "1", "publishedfileids[0]": collection_id},
+        timeout=20,
+    )
+    if data is None:
         return None
 
     response = data.get("response", {})
@@ -276,24 +309,8 @@ def fetch_item_dependencies(mod_ids: list[str]) -> dict[str, list[str]]:
     if not mod_ids:
         return {}
 
-    url = "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/"
-    form = {"itemcount": str(len(mod_ids))}
-    for i, mid in enumerate(mod_ids):
-        form[f"publishedfileids[{i}]"] = mid
-
-    body = urllib.parse.urlencode(form).encode()
-    try:
-        req = urllib.request.Request(
-            url,
-            data=body,
-            headers={
-                "User-Agent": "rwmod/1.0",
-                "Content-Type": "application/x-www-form-urlencoded",
-            },
-        )
-        with _shared_opener.open(req, timeout=15) as resp:
-            data = json.loads(resp.read())
-    except Exception:
+    data = _request_json(_PUBLISHED_FILE_DETAILS_URL, form=_published_file_details_form(mod_ids))
+    if data is None:
         return {}
 
     result: dict[str, list[str]] = {}
@@ -309,24 +326,8 @@ def fetch_item_dependencies(mod_ids: list[str]) -> dict[str, list[str]]:
 def _fetch_batch(mod_ids: list[str]) -> dict[str, dict]:
     if not mod_ids:
         return {}
-    url = "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/"
-    form_fields = {"itemcount": str(len(mod_ids))}
-    for i, wid in enumerate(mod_ids):
-        form_fields[f"publishedfileids[{i}]"] = wid
-    body = urllib.parse.urlencode(form_fields).encode()
-
-    try:
-        req = urllib.request.Request(
-            url,
-            data=body,
-            headers={
-                "User-Agent": "rwmod/1.0",
-                "Content-Type": "application/x-www-form-urlencoded",
-            },
-        )
-        with _shared_opener.open(req, timeout=15) as resp:
-            data = json.loads(resp.read())
-    except Exception:
+    data = _request_json(_PUBLISHED_FILE_DETAILS_URL, form=_published_file_details_form(mod_ids))
+    if data is None:
         return {}
 
     result: dict[str, dict] = {}
