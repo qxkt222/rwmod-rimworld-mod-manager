@@ -40,6 +40,29 @@ export const PANEL_ALIASES: Readonly<Record<string, PanelName>> = {
   updates: "queue",
 };
 
+/**
+ * Panel shortcuts: Ctrl+1..Ctrl+8 open the panels in nav order, skipping
+ * DEFAULT_PANEL (dashboard is where you already land, so it needs no key).
+ *
+ * Derived from PANEL_NAMES on purpose — a hand-written shortcut list is one
+ * more place for panel names to drift out of sync, which is the exact bug the
+ * registry was introduced to kill. Display (cmd.ts) and handling (main.ts)
+ * both read this one map, so "shown but not implemented" is impossible.
+ */
+export const PANEL_SHORTCUTS: ReadonlyMap<string, PanelName> = new Map(
+  PANEL_NAMES.filter((name) => name !== DEFAULT_PANEL)
+    .slice(0, 8)
+    .map((name, i) => [`Ctrl+${i + 1}`, name] as const),
+);
+
+/** The shortcut that opens `panel`, or undefined when it has none. */
+export function panelShortcut(panel: PanelName): string | undefined {
+  for (const [shortcut, name] of PANEL_SHORTCUTS) {
+    if (name === panel) return shortcut;
+  }
+  return undefined;
+}
+
 const PANEL_NAME_SET: ReadonlySet<string> = new Set(PANEL_NAMES);
 
 /** Resolve a raw hash/nav name to a canonical panel, or null when unknown. */

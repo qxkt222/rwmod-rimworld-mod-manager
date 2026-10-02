@@ -9,8 +9,8 @@ import "./style.css";
 import { api, type ModEntry, type QueueItem } from "./api";
 import { esc } from "./dom";
 import { renderLayout } from "./layout";
-import { DEFAULT_PANEL, resolvePanel, type PanelName } from "./panel-registry";
-import { initRouter } from "./router";
+import { DEFAULT_PANEL, PANEL_SHORTCUTS, resolvePanel, type PanelName } from "./panel-registry";
+import { initRouter, navigate } from "./router";
 import { connectWS, type WSMessage } from "./ws";
 import { initDashboardPanel, stopQueuePolling } from "./panels/dashboard";
 import { toast } from "./toast";
@@ -198,11 +198,31 @@ function onWSMessage(msg: WSMessage): void {
 }
 
 // ── keyboard shortcuts ─────────────────────────────────────────
+/** 事件目标是否正在输入（文本域/输入框/下拉/可编辑元素）——是则不拦截按键。 */
+function isTypingTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el || typeof el.tagName !== "string") return false;
+  if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT") return true;
+  return el.isContentEditable === true;
+}
+
 document.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === "k") {
     e.preventDefault();
     import("./cmd").then(({ openCmdPalette }) => openCmdPalette());
+    return;
   }
+
+  // Ctrl+1..Ctrl+8 — panel shortcuts. The list lives in PANEL_SHORTCUTS
+  // (derived from PANEL_NAMES), the same map cmd.ts renders badges from.
+  // While the user is typing we must not intercept; otherwise preventDefault
+  // is required because browsers bind Ctrl+digit to "switch to tab N" and
+  // only skip it when the page consumes the event.
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+  const panel = PANEL_SHORTCUTS.get(`Ctrl+${e.key}`);
+  if (!panel || isTypingTarget(e.target)) return;
+  e.preventDefault();
+  navigate(panel);
 });
 
 // ── toolbar buttons ────────────────────────────────────────────
