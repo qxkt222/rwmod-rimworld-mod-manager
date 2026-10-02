@@ -2,6 +2,8 @@
 
 from fastapi import APIRouter
 
+from rwmod.models.schemas import LocaleRequest
+
 router = APIRouter(prefix="/api", tags=["status"])
 
 
@@ -22,11 +24,11 @@ def get_locale_api():
 
 
 @router.post("/locale")
-def set_locale_api(payload: dict):
+def set_locale_api(payload: LocaleRequest):
     """Set the current locale (zh-CN or en)."""
     from rwmod.i18n import set_locale
 
-    locale = payload.get("locale", "zh-CN")
+    locale = payload.locale
     set_locale(locale)
     return {"ok": True, "locale": locale}
 

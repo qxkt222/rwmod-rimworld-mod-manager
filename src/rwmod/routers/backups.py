@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 
 from rwmod.config import Config
 from rwmod.deps import get_config
+from rwmod.models.schemas import BackupCleanupRequest, BackupRestoreRequest
 
 router = APIRouter(prefix="/api", tags=["backups"])
 
@@ -24,18 +25,17 @@ def list_backups(
 @router.post("/backups/{workshop_id}/restore")
 def restore_backup(
     workshop_id: str,
-    payload: dict | None = None,
+    payload: BackupRestoreRequest | None = None,
     cfg: Config = Depends(get_config),
 ):
     from rwmod.backup import restore_mod
 
-    body = payload or {}
-    filename = body.get("filename")
+    filename = payload.filename if payload else None
     return restore_mod(
         cfg.mods_dir,
         workshop_id,
         cfg.backup_dir,
-        backup_filename=filename if isinstance(filename, str) and filename else None,
+        backup_filename=filename or None,
     )
 
 
@@ -51,11 +51,10 @@ def delete_backup(
 
 @router.post("/backups/cleanup")
 def cleanup_backups(
-    payload: dict | None = None,
+    payload: BackupCleanupRequest | None = None,
     cfg: Config = Depends(get_config),
 ):
     from rwmod.backup import cleanup_backups
 
-    body = payload or {}
-    keep: int = body.get("keep", 5)
+    keep: int = payload.keep if payload else 5
     return {"ok": True, "deleted": cleanup_backups(cfg.backup_dir, keep_per_mod=keep)}

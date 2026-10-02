@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from rwmod.config import Config
 from rwmod.deps import get_config
+from rwmod.models.schemas import ConfigResponse, ConfigUpdateRequest
 
 router = APIRouter(prefix="/api", tags=["config"])
 
@@ -74,7 +75,7 @@ def _validate_steamcmd_path(raw: str) -> Path:
     return p
 
 
-@router.get("/config")
+@router.get("/config", response_model=ConfigResponse)
 def get_config_route(
     cfg: Config = Depends(get_config),
 ):
@@ -92,18 +93,21 @@ def get_config_route(
 
 @router.post("/config")
 def update_config(
-    payload: dict,
+    payload: ConfigUpdateRequest,
     cfg: Config = Depends(get_config),
 ):
-    if "steamcmd_path" in payload:
-        cfg.steamcmd_path = _validate_steamcmd_path(str(payload["steamcmd_path"]))
-    if "mods_dir" in payload:
-        cfg.mods_dir = _validate_dir_path(str(payload["mods_dir"]), "mods_dir")
-    if "rimworld_dir" in payload:
-        cfg.rimworld_dir = _validate_dir_path(str(payload["rimworld_dir"]), "rimworld_dir")
-    if "backup_dir" in payload:
-        cfg.backup_dir = _validate_dir_path(str(payload["backup_dir"]), "backup_dir")
-    if "steam_api_key" in payload:
-        cfg.steam_api_key = str(payload["steam_api_key"])
+    # model_fields_set, not truthiness: "key omitted" must stay distinguishable
+    # from "key sent as an empty string", which the old `in payload` check gave us.
+    sent = payload.model_fields_set
+    if "steamcmd_path" in sent:
+        cfg.steamcmd_path = _validate_steamcmd_path(payload.steamcmd_path or "")
+    if "mods_dir" in sent:
+        cfg.mods_dir = _validate_dir_path(payload.mods_dir or "", "mods_dir")
+    if "rimworld_dir" in sent:
+        cfg.rimworld_dir = _validate_dir_path(payload.rimworld_dir or "", "rimworld_dir")
+    if "backup_dir" in sent:
+        cfg.backup_dir = _validate_dir_path(payload.backup_dir or "", "backup_dir")
+    if "steam_api_key" in sent:
+        cfg.steam_api_key = payload.steam_api_key or ""
     cfg.save()
     return {"ok": True}

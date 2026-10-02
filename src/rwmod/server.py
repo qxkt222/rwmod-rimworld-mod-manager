@@ -19,6 +19,7 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -27,6 +28,7 @@ from rwmod.database import close_db, init_db
 from rwmod.deps import get_autoupdate
 from rwmod.errors import RwmodError
 from rwmod.logger import get_log, init_logging
+from rwmod.models.schemas import ErrorResponse
 from rwmod.queue import get_queue
 
 # ── routers ────────────────────────────────────────────────────────
@@ -103,6 +105,38 @@ app = FastAPI(
     docs_url="/api/docs",
     openapi_url="/api/openapi.json",
 )
+
+
+def _custom_openapi() -> dict:
+    """Generate the schema, then make the documented 422 match reality.
+
+    FastAPI documents every 422 as its default ``HTTPValidationError``
+    (``{"detail": [...]}``), but validation_error_handler answers
+    ``{error, detail: str}`` like every other failure. Left alone, /api/docs
+    would describe a body the server no longer sends.
+    """
+    if app.openapi_schema:
+        return app.openapi_schema
+
+    schema = get_openapi(title=app.title, version=app.version, routes=app.routes)
+    error_schema = ErrorResponse.model_json_schema()
+    error_schema.pop("$defs", None)  # no nested models to hoist
+    schema.setdefault("components", {}).setdefault("schemas", {})["ErrorResponse"] = error_schema
+    ref = {"$ref": "#/components/schemas/ErrorResponse"}
+
+    for operations in schema.get("paths", {}).values():
+        for operation in operations.values():
+            if not isinstance(operation, dict):
+                continue
+            documented = operation.get("responses", {}).get("422")
+            if isinstance(documented, dict) and "content" in documented:
+                documented["content"]["application/json"]["schema"] = ref
+
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = _custom_openapi  # type: ignore[method-assign]  # documented FastAPI pattern
 
 # ── middleware ─────────────────────────────────────────────────────
 app.add_middleware(GZipMiddleware, minimum_size=500)

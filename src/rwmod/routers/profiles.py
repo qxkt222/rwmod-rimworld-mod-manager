@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from rwmod.config import Config
 from rwmod.deps import get_config
+from rwmod.models.schemas import ProfileSaveRequest
 
 router = APIRouter(prefix="/api", tags=["profiles"])
 
@@ -25,10 +26,10 @@ def list_profiles(
 
 @router.post("/profiles/save")
 def save_profile(
-    payload: dict,
+    payload: ProfileSaveRequest,
     cfg: Config = Depends(get_config),
 ):
-    name: str = payload.get("name", "").strip()
+    name: str = payload.name.strip()
     if not name:
         raise HTTPException(400, "需要提供 profile 名称")
     from rwmod.profile import resolve_modsconfig_path

@@ -10,6 +10,7 @@ from starlette.background import BackgroundTask
 
 from rwmod.config import Config
 from rwmod.deps import get_config
+from rwmod.models.schemas import TransferExportRequest
 from rwmod.transfer import export_bundle, import_bundle
 
 router = APIRouter(prefix="/api/transfer", tags=["transfer"])
@@ -41,7 +42,7 @@ def _save_upload(file: UploadFile, path: Path, max_bytes: int) -> None:
 
 @router.post("/export")
 def api_export(
-    payload: dict | None = None,
+    payload: TransferExportRequest | None = None,
     cfg: Config = Depends(get_config),
 ):
     """Export profiles, tags, config & backups into a downloadable .rwmod file.
@@ -50,9 +51,8 @@ def api_export(
     the Steam API key is a credential. Opt in explicitly for machine-to-machine
     migration.
     """
-    body = payload or {}
-    include_backups = body.get("include_backups", True)
-    include_secrets = bool(body.get("include_secrets", False))
+    include_backups = payload.include_backups if payload else True
+    include_secrets = payload.include_secrets if payload else False
     ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
 
     # NamedTemporaryFile gives a unique name (two exports in the same second

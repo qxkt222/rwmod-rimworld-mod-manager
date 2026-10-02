@@ -7,6 +7,7 @@ from rwmod.database import get_download_history
 from rwmod.deps import get_config
 from rwmod.errors import ModNotFoundError, WorkshopError
 from rwmod.mod_cache import get_cached_mods
+from rwmod.models.schemas import ModIdsRequest, SearchResponse
 from rwmod.utils import extract_mod_id
 from rwmod.workshop import (
     fetch_collection_children,
@@ -17,7 +18,7 @@ from rwmod.workshop import (
 router = APIRouter(prefix="/api", tags=["workshop"])
 
 
-@router.get("/search")
+@router.get("/search", response_model=SearchResponse)
 def search(
     q: str = "",
     page: int = 1,
@@ -34,11 +35,22 @@ def search(
         for m in get_cached_mods(cfg.mods_dir):
             if m.workshop_id:
                 installed_ids.add(m.workshop_id)
-    enriched = []
-    for r in results:
-        d = r.__dict__
-        d["installed"] = r.id in installed_ids
-        enriched.append(d)
+    # Built field by field on purpose: `r.__dict__` would publish every field of
+    # ModSearchResult, so a field added for internal reasons would silently become
+    # part of the API. SearchResponse pins the same list on the way out.
+    enriched = [
+        {
+            "id": r.id,
+            "title": r.title,
+            "author": r.author,
+            "description": r.description,
+            "preview_url": r.preview_url,
+            "rating": r.rating,
+            "subscribers": r.subscribers,
+            "installed": r.id in installed_ids,
+        }
+        for r in results
+    ]
     return {"results": enriched}
 
 
@@ -102,12 +114,12 @@ def collection_preview(
 
 @router.post("/mods/dependencies")
 def mod_dependencies(
-    payload: dict,
+    payload: ModIdsRequest,
     cfg: Config = Depends(get_config),
 ):
     from rwmod.workshop import fetch_item_dependencies
 
-    ids: list[str] = payload.get("ids", [])
+    ids: list[str] = payload.ids
     if not ids:
         return {"deps": {}}
     raw_deps = fetch_item_dependencies(ids)

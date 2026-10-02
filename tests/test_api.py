@@ -22,6 +22,21 @@ class TestConfigEndpoint:
         assert "steamcmd_path" in data
         assert "mods_dir" in data
 
+    def test_config_exposes_exactly_the_documented_keys(self, client: TestClient):
+        """ConfigResponse pins the shape in both directions: a key that goes
+        missing breaks the panel, and a new one is a contract change."""
+        resp = client.get("/api/config")
+        assert resp.status_code == 200
+        assert set(resp.json()) == {
+            "steamcmd_path",
+            "mods_dir",
+            "rimworld_dir",
+            "backup_dir",
+            "has_steam_api_key",
+            "steamcmd_exists",
+            "mods_dir_exists",
+        }
+
     def test_update_config(self, client: TestClient, tmp_path):
         resp = client.post("/api/config", json={"mods_dir": str(tmp_path / "OtherMods")})
         assert resp.status_code == 200
@@ -191,6 +206,34 @@ class TestWorkshopEndpoint:
         assert resp.status_code == 200
         assert "results" in resp.json()
 
+    def test_search_result_shape_is_pinned(self, client: TestClient):
+        """Search hits must expose exactly the modelled fields.
+
+        They used to be ModSearchResult.__dict__, so any field added to that
+        dataclass for internal reasons would have leaked into the API silently.
+        """
+        from unittest.mock import patch
+
+        from rwmod.workshop import ModSearchResult
+
+        hit = ModSearchResult(id="1", title="T", author="A")
+        with patch("rwmod.routers.workshop.search_workshop", return_value=[hit]):
+            resp = client.get("/api/search?q=harmony")
+
+        assert resp.status_code == 200
+        results = resp.json()["results"]
+        assert len(results) == 1
+        assert set(results[0]) == {
+            "id",
+            "title",
+            "author",
+            "description",
+            "preview_url",
+            "rating",
+            "subscribers",
+            "installed",
+        }
+
     def test_collection_preview_missing_returns_404(self, client: TestClient):
         """An unfetchable collection fails via HTTP status, not a 200 body."""
         from unittest.mock import patch
@@ -276,6 +319,28 @@ class TestConfigApiKeyMasking:
         data = resp.json()
         assert "steam_api_key" not in data
         assert "has_steam_api_key" in data
+
+
+class TestOpenAPIContract:
+    def test_documented_422_matches_what_the_handler_sends(self):
+        """FastAPI documents its default HTTPValidationError body for 422 while
+        validation_error_handler answers {error, detail}. /api/docs must not
+        describe a body the server never sends."""
+        from rwmod.server import app
+
+        spec = app.openapi()
+        assert set(spec["components"]["schemas"]["ErrorResponse"]["properties"]) == {
+            "error",
+            "detail",
+        }
+
+        documented = {
+            op["responses"]["422"]["content"]["application/json"]["schema"].get("$ref")
+            for operations in spec["paths"].values()
+            for op in operations.values()
+            if isinstance(op, dict) and "content" in op.get("responses", {}).get("422", {})
+        }
+        assert documented == {"#/components/schemas/ErrorResponse"}
 
 
 class TestBackupTraversalAPI:

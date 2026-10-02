@@ -19,6 +19,7 @@ from rwmod.downloader import (
     download_one,
 )
 from rwmod.logger import get_log
+from rwmod.models.schemas import CollectionImportRequest, DownloadRequest
 from rwmod.parser import (
     get_installed_package_ids,
     parse_modlist_file,
@@ -124,11 +125,11 @@ async def _read_modlist(file: UploadFile) -> str:
 
 @router.post("/download")
 async def download_mods(
-    payload: dict,
+    payload: DownloadRequest,
     cfg: Config = Depends(get_config),
 ):
-    ids: list[str] = payload.get("ids", [])
-    force: bool = payload.get("force", False)
+    ids: list[str] = payload.ids
+    force: bool = payload.force
     parsed = [mid for raw in ids if (mid := extract_mod_id(raw))]
     if not parsed:
         raise HTTPException(400, "没有有效的 Mod ID")
@@ -334,12 +335,12 @@ async def import_file(
 
 @router.post("/import/collection")
 async def import_collection_api(
-    payload: dict,
+    payload: CollectionImportRequest,
     cfg: Config = Depends(get_config),
 ):
-    raw_id = payload.get("collection_id", "")
+    raw_id = payload.collection_id
     collection_id = extract_mod_id(raw_id)
-    force: bool = payload.get("force", False)
+    force: bool = payload.force
     if not collection_id:
         raise HTTPException(400, f"无效的合集 ID: {raw_id}")
     cfg.validate()
