@@ -1,10 +1,10 @@
-"""Compatibility check router — missing dependencies & conflicts."""
+"""Mod conflict / dependency check router (HTTP surface: /api/compat)."""
 
 from fastapi import APIRouter, Depends
 
-from rwmod.compat import check_compatibility
 from rwmod.config import Config
 from rwmod.deps import get_config
+from rwmod.mod_conflicts import find_mod_conflicts
 
 router = APIRouter(prefix="/api/compat", tags=["compat"])
 
@@ -14,7 +14,7 @@ def compat_check(
     cfg: Config = Depends(get_config),
 ):
     """Check installed mods for missing dependencies and conflicts."""
-    result = check_compatibility(cfg.mods_dir)
+    result = find_mod_conflicts(cfg.mods_dir)
 
     # Resolve missing dependency packageIds to workshop IDs where possible,
     # so the frontend can offer a one-click download.

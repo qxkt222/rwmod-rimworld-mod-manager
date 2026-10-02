@@ -370,8 +370,8 @@ def backup_cleanup(
 def compat_check() -> None:
     """检查 Mod 版本兼容性."""
     cfg = Config.load()
-    from rwmod.compatibility import check_compatibility, detect_rimworld_version
     from rwmod.mod_cache import get_cached_mods
+    from rwmod.version_support import check_version_support, detect_rimworld_version
 
     rw_ver = detect_rimworld_version(cfg.rimworld_dir)
     if not rw_ver:
@@ -379,7 +379,7 @@ def compat_check() -> None:
         return
 
     metas = get_cached_mods(cfg.mods_dir)
-    groups = check_compatibility(metas, rw_ver)
+    groups = check_version_support(metas, rw_ver)
 
     typer.echo(f"\nRimWorld {rw_ver}\n")
     typer.echo(f"  ✅ 兼容:  {len(groups['compatible'])}")

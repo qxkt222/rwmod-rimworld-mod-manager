@@ -203,7 +203,7 @@ def export_collection(
 def mod_compatibility(
     cfg: Config = Depends(get_config),
 ):
-    from rwmod.compatibility import check_compatibility, detect_rimworld_version
+    from rwmod.version_support import check_version_support, detect_rimworld_version
 
     rw_ver = detect_rimworld_version(cfg.rimworld_dir)
     if not rw_ver:
@@ -212,7 +212,7 @@ def mod_compatibility(
         # client decides how to present "no version known".
         return {"rimworld_version": None, "groups": {}}
     metas = get_cached_mods(cfg.mods_dir)
-    groups = check_compatibility(metas, rw_ver)
+    groups = check_version_support(metas, rw_ver)
     return {"rimworld_version": rw_ver, "groups": groups}
 
 

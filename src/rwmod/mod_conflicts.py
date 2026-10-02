@@ -1,11 +1,13 @@
-"""Mod compatibility analysis — dependency & conflict detection.
+"""Mod conflict analysis — missing dependencies & declared incompatibilities.
 
 Scans every installed mod's About.xml for:
 1. <modDependencies> — required mods that may be missing (or not enabled).
 2. <incompatibleWith> — mods that must not be enabled together.
 
-This complements load_order.py (which checks ordering rules) by providing
-a per-mod dependency/conflict graph based on the mods' own metadata.
+This is the *mod-level* view. For "does this mod support my RimWorld version",
+see version_support.py. The two modules were called compat.py and
+compatibility.py, whose names differed by six characters while exporting the
+same function name — renamed so call sites are readable on their own.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ from rwmod.xmlutil import parse_xml_root
 
 _log = logging.getLogger(__name__)
 
-__all__ = ["check_compatibility", "scan_mod_metadata"]
+__all__ = ["find_mod_conflicts", "scan_mod_metadata"]
 
 
 def scan_mod_metadata(mods_dir: Path) -> dict[str, dict]:
@@ -64,7 +66,7 @@ def scan_mod_metadata(mods_dir: Path) -> dict[str, dict]:
     return result
 
 
-def check_compatibility(mods_dir: Path, active_ids: list[str] | None = None) -> dict:
+def find_mod_conflicts(mods_dir: Path, active_ids: list[str] | None = None) -> dict:
     """Analyze installed mods for missing dependencies and conflicts.
 
     Args:
