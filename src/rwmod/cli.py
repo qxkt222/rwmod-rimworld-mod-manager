@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import typer
 
 from rwmod.config import Config
 from rwmod.downloader import download_one
+from rwmod.metadata import read_mod_metadata
 from rwmod.parser import (
     get_installed_package_ids,
     parse_collection_dir,
@@ -229,25 +229,19 @@ def list_mods() -> None:
     for d in sorted(cfg.mods_dir.iterdir()):
         if not d.is_dir():
             continue
-        about = d / "About" / "About.xml"
-        name = "?"
-        pkg = ""
-        if about.exists():
-            try:
-                root = ET.parse(about).getroot()
-                name = root.findtext("name", "?") or "?"
-                pkg = root.findtext("packageId", "") or ""
-            except Exception:
-                pass
-
-        pf = d / "About" / "PublishedFileId.txt"
-        wid = ""
-        if pf.exists():
-            try:
-                wid = pf.read_text(encoding="utf-8").strip()
-            except (OSError, UnicodeDecodeError):
-                wid = ""
-        entries.append((d.name, name, pkg, wid))
+        # Every directory is still listed (a non-mod shows as "?"), but the
+        # parsing now goes through the shared safe reader. This used to parse
+        # About.xml with stdlib xml.etree and take PublishedFileId.txt verbatim,
+        # so the numeric-ID guard never applied to `rwmod list` either.
+        meta = read_mod_metadata(d)
+        entries.append(
+            (
+                d.name,
+                meta.name if meta else "?",
+                meta.package_id if meta else "",
+                meta.workshop_id if meta else "",
+            )
+        )
 
     typer.echo(f"\n已安装 Mod ({len(entries)} 个):\n")
     for folder, name, pkg, wid in entries:

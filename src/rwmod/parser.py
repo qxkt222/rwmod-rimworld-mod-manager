@@ -8,6 +8,7 @@ import re
 import struct
 from pathlib import Path
 
+from rwmod.metadata import installed_package_ids, package_id_to_workshop_id
 from rwmod.xmlutil import parse_xml_root
 
 # Safe XML parser: rejects entity expansion / external entity (XXE) attacks.
@@ -143,39 +144,14 @@ def parse_mods_config(config_xml: Path) -> list[str]:
 
 def get_installed_package_ids(mods_dir: Path) -> set[str]:
     """Collect packageId from every mod folder's About.xml."""
-    result: set[str] = set()
-    if not mods_dir.exists():
-        return result
-    for d in mods_dir.iterdir():
-        about = d / "About" / "About.xml"
-        if about.exists():
-            try:
-                pkg = parse_xml_root(about).findtext("packageId", "")
-                if pkg:
-                    result.add(pkg)
-            except Exception as e:  # noqa: BLE001 — malformed or entity-laden XML
-                _log.debug("跳过损坏 About.xml %s: %s", d.name, e)
-    return result
+    return installed_package_ids(mods_dir)
 
 
 def resolve_workshop_ids(package_ids: list[str], mods_dir: Path) -> tuple[list[str], list[str]]:
     """Map packageIds → workshop IDs using installed mods as a lookup.
     Returns (known_ids, unknown_package_ids).
     """
-    pkg_to_wid: dict[str, str] = {}
-    for d in mods_dir.iterdir():
-        pf = d / "About" / "PublishedFileId.txt"
-        about = d / "About" / "About.xml"
-        if pf.exists() and about.exists():
-            try:
-                pkg = parse_xml_root(about).findtext("packageId", "")
-                wid = pf.read_text(encoding="utf-8").strip()
-                # Only numeric IDs ever reach SteamCMD — a crafted
-                # PublishedFileId.txt must not inject command tokens.
-                if pkg and wid.isdigit():
-                    pkg_to_wid[pkg] = wid
-            except Exception as e:  # noqa: BLE001 — malformed or entity-laden XML
-                _log.debug("跳过 %s: %s", d.name, e)
+    pkg_to_wid = package_id_to_workshop_id(mods_dir)
 
     known: list[str] = []
     unknown: list[str] = []

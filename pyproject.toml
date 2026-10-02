@@ -111,10 +111,10 @@ exclude_dirs = ["tests", ".venv", "build", "dist", "node_modules"]
 # B314/B405 (stdlib xml.etree parse/import): defusedxml IS a runtime dependency
 # (see [project].dependencies) and xmlutil.parse_xml_root is the mandatory entry
 # point for untrusted XML. The skip stays because stdlib xml.etree is still used
-# for XML this process owns or that RimWorld itself wrote — the CLI's About.xml
-# listing, profile.py validating a modlist it just generated, and reading/applying
-# ModsConfig.xml. Migrating those four to xmlutil is outstanding work, so the
-# blanket skip is a known debt rather than an accepted trade-off.
+# for XML this process owns or that RimWorld itself wrote — profile.py validating
+# a modlist it just generated, and reading/applying ModsConfig.xml. Migrating
+# those three to xmlutil is outstanding work, so the blanket skip is a known
+# debt rather than an accepted trade-off.
 skips = ["B101", "B314", "B405"]
 
 [dependency-groups]

@@ -6,6 +6,11 @@ import xml.etree.ElementTree as ET
 from collections import deque
 from pathlib import Path
 
+from rwmod.metadata import (
+    installed_mod_metas,
+    installed_package_ids,
+    package_id_to_workshop_id,
+)
 from rwmod.xmlutil import parse_xml_root
 
 # Safe XML parser: rejects entity-expansion / external-entity (XXE) attacks.
@@ -35,19 +40,10 @@ def generate_modsconfig(mods_dir: Path, output_path: Path | None = None) -> str:
 
     active_mods = ET.SubElement(root, "activeMods")
 
-    # Collect packageIds from installed mods
-    package_ids: list[str] = []
-    for d in sorted(mods_dir.iterdir()):
-        if not d.is_dir():
-            continue
-        about = d / "About" / "About.xml"
-        if about.exists():
-            try:
-                pid = parse_xml_root(about).findtext("packageId", "")
-                if pid:
-                    package_ids.append(pid)
-            except Exception:
-                pass
+    # Collect packageIds from installed mods. installed_mod_metas yields
+    # directory-name order, which is the load order this generator has always
+    # emitted — do not rebuild this as a set.
+    package_ids = [m.package_id for m in installed_mod_metas(mods_dir)]
 
     for pid in package_ids:
         ET.SubElement(active_mods, "li").text = pid
@@ -97,17 +93,7 @@ def compare_modsconfig(modsconfig_path: Path, mods_dir: Path) -> dict:
         return config_data
 
     config_ids = set(config_data["active_mods"])
-    installed_ids: set[str] = set()
-
-    for d in mods_dir.iterdir():
-        about = d / "About" / "About.xml"
-        if about.exists():
-            try:
-                pid = parse_xml_root(about).findtext("packageId", "")
-                if pid:
-                    installed_ids.add(pid)
-            except Exception:
-                pass
+    installed_ids = installed_package_ids(mods_dir)
 
     # Core is RimWorld's built-in mod — it lives in the game's Data/Core
     # folder, not in mods_dir, so it must never be reported as missing.
@@ -139,18 +125,7 @@ def resolve_missing_workshop_ids(missing_package_ids: list[str], mods_dir: Path)
     """
 
     # Build packageId → workshopId map from ALL About.xml files
-    pkg_to_wid: dict[str, str] = {}
-    for d in mods_dir.iterdir():
-        pf = d / "About" / "PublishedFileId.txt"
-        about = d / "About" / "About.xml"
-        if pf.exists() and about.exists():
-            try:
-                pid = parse_xml_root(about).findtext("packageId", "")
-                wid = pf.read_text(encoding="utf-8").strip()
-                if pid and wid:
-                    pkg_to_wid[pid] = wid
-            except Exception:
-                pass
+    pkg_to_wid = package_id_to_workshop_id(mods_dir)
 
     results: list[dict] = []
     for pid in missing_package_ids:
