@@ -29,7 +29,7 @@ async function loadDashboard(): Promise<void> {
           <div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12px">
             <span>${a.status === "success" ? "✅" : "❌"}</span>
             <span style="font-weight:600">${esc(a.mod_name || a.workshop_id)}</span>
-            <span style="color:var(--gray-text);margin-left:auto">${a.created_at || ""}</span>
+            <span style="color:var(--gray-text);margin-left:auto">${esc(a.created_at || "")}</span>
           </div>
         `).join("");
     }

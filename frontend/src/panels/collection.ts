@@ -161,5 +161,5 @@ async function previewCollection() {
       (d.failed_count ? `<span style="color:#e0af68">  🟡 之前失败 ${d.failed_count}</span>\n` : "") +
       `<span style="color:var(--gray-text)">点击"下载合集"开始下载</span>\n`;
     log.scrollTop = log.scrollHeight;
-  } catch (e: any) { log.innerHTML = `<span style="color:#f7768e">预览失败: ${e.message}</span>`; }
+  } catch (e: any) { log.innerHTML = `<span style="color:#f7768e">预览失败: ${esc(e.message)}</span>`; }
 }

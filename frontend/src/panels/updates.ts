@@ -3,7 +3,7 @@
  * Supports one-click "Update All" via POST /api/auto-update/run.
  */
 import { api, type UpdateItem } from "../api";
-import { esc } from "../dom";
+import { esc, escAttr } from "../dom";
 import { toast } from "../toast";
 
 export function initUpdatePanel() {
@@ -31,7 +31,7 @@ async function checkUpdates() {
     allBtn.style.display = "";
     renderUpdateList(updates, container);
   } catch (e: any) {
-    container.innerHTML = `<span style="color:var(--red)">检查失败: ${e.message}</span>`;
+    container.innerHTML = `<span style="color:var(--red)">检查失败: ${esc(e.message)}</span>`;
   }
   btn.disabled = false;
 }
@@ -54,7 +54,7 @@ function renderUpdateList(updates: UpdateItem[], container: HTMLElement) {
         <div class="mod-meta">
           <span>${esc(u.folder)}</span>
           <span>Workshop ${esc(u.workshop_id)}</span>
-          ${u.time_updated ? `<span>更新于 ${new Date(u.time_updated * 1000).toLocaleDateString("zh-CN")}</span>` : ""}
+          ${u.time_updated ? `<span>更新于 ${esc(new Date(u.time_updated * 1000).toLocaleDateString("zh-CN"))}</span>` : ""}
         </div>
         ${hasDesc ? /* html */ `
         <div class="changelog-block" style="margin-top:8px;font-size:12px;color:var(--gray-text);line-height:1.5">
@@ -70,7 +70,7 @@ function renderUpdateList(updates: UpdateItem[], container: HTMLElement) {
           </button>` : ""}
         </div>` : ""}
       </div>
-      <button class="btn btn-primary btn-sm" data-id="${u.workshop_id}" style="flex-shrink:0">⬇ 更新</button>
+      <button class="btn btn-primary btn-sm" data-id="${escAttr(u.workshop_id)}" style="flex-shrink:0">⬇ 更新</button>
     </div>`;
       },
     )
@@ -133,7 +133,7 @@ async function updateAll() {
       `<span style="color:#9ece6a">✅ 已加入 ${data.queued} 个 Mod 到下载队列，自动开始下载</span>\n` +
       `<span style="color:var(--gray-text)">切换到 📋 队列 面板查看进度</span>`;
   } catch (e: any) {
-    container.innerHTML = `<span style="color:#f7768e">全部更新失败: ${e.message}</span>`;
+    container.innerHTML = `<span style="color:#f7768e">全部更新失败: ${esc(e.message)}</span>`;
     toast(`更新失败: ${e.message}`, "error");
   }
   allBtn.disabled = false;

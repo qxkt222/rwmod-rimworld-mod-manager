@@ -29,7 +29,7 @@ async function refreshBackups() {
 
     renderBackupList(data.backups, container);
   } catch (e: any) {
-    container.innerHTML = `<span style="color:var(--red)">加载失败: ${e.message}</span>`;
+    container.innerHTML = `<span style="color:var(--red)">加载失败: ${esc(e.message)}</span>`;
   }
 }
 
@@ -50,9 +50,9 @@ function renderBackupList(backups: BackupEntry[], container: HTMLElement) {
         <div class="mod-info">
           <div class="mod-name">${esc(latest.folder_name)}</div>
           <div class="mod-meta">
-            <span>ID: ${wid}</span>
+            <span>ID: ${esc(wid)}</span>
             <span>${items.length} 个版本</span>
-            <span>最新: ${ts}</span>
+            <span>最新: ${esc(ts)}</span>
             <span>${latest.size_mb} MB</span>
           </div>
         </div>
@@ -64,7 +64,7 @@ function renderBackupList(backups: BackupEntry[], container: HTMLElement) {
       <div class="backup-versions" id="versions-${escAttr(wid)}" style="display:none;padding:0 16px 12px">
         ${items.map((b, i) => /* html */ `
           <div class="queue-item" style="padding:4px 8px;font-size:11px">
-            <span style="color:var(--gray-text)">${formatTs(b.timestamp)}</span>
+            <span style="color:var(--gray-text)">${esc(formatTs(b.timestamp))}</span>
             <span>${b.size_mb} MB</span>
             <span style="margin-left:auto;display:flex;gap:4px">
               <button class="btn btn-ghost btn-sm" data-restore-id="${escAttr(b.filename)}">↩</button>

@@ -2,7 +2,7 @@
  * Search panel — query Steam Workshop, add results to queue.
  */
 import { api, type SearchHit } from "../api";
-import { esc } from "../dom";
+import { esc, escAttr } from "../dom";
 import { toast } from "../toast";
 
 export function initSearchPanel() {
@@ -40,12 +40,12 @@ async function doSearch() {
           <span class="search-hit-title">${esc(r.title)}</span>
           ${r.installed ? '<span style="color:var(--green);font-size:11px;font-weight:600">✓ 已安装</span>' : ""}
           <span class="search-hit-author">by ${esc(r.author)}</span>
-          ${r.rating ? `<span class="search-hit-rating">⭐ ${r.rating}</span>` : ""}
-          ${r.subscribers ? `<span class="search-hit-subs">${r.subscribers} 订阅</span>` : ""}
+          ${r.rating ? `<span class="search-hit-rating">⭐ ${esc(r.rating)}</span>` : ""}
+          ${r.subscribers ? `<span class="search-hit-subs">${esc(r.subscribers)} 订阅</span>` : ""}
         </div>
         ${r.description ? `<div class="search-hit-desc">${esc(r.description)}</div>` : ""}
         <div style="margin-top:6px">
-          <button class="btn btn-primary btn-sm" data-id="${r.id}">+ 加入队列</button>
+          <button class="btn btn-primary btn-sm" data-id="${escAttr(r.id)}">+ 加入队列</button>
         </div>
       </div>`,
       )
@@ -63,6 +63,6 @@ async function doSearch() {
       });
     });
   } catch (e: any) {
-    container.innerHTML = `<span style="color:var(--red)">搜索失败: ${e.message}</span>`;
+    container.innerHTML = `<span style="color:var(--red)">搜索失败: ${esc(e.message)}</span>`;
   }
 }

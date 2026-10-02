@@ -91,11 +91,11 @@ async function checkSteamCMD() {
   try {
     const data = await api.checkSteamcmd();
     if (data.ok) {
-      el.innerHTML = '<span style="color:var(--green)">✅ ' + data.msg + '</span>';
+      el.innerHTML = '<span style="color:var(--green)">✅ ' + esc(data.msg || "检测通过") + '</span>';
     } else {
-      el.innerHTML = '<span style="color:var(--red)">❌ ' + (data.msg || "检测失败") + '</span>';
+      el.innerHTML = '<span style="color:var(--red)">❌ ' + esc(data.msg || "检测失败") + '</span>';
     }
   } catch (e: any) {
-    el.innerHTML = '<span style="color:var(--red)">❌ 检测失败: ' + e.message + '</span>';
+    el.innerHTML = '<span style="color:var(--red)">❌ 检测失败: ' + esc(e.message) + '</span>';
   }
 }

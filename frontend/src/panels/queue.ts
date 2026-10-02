@@ -2,7 +2,7 @@
  * Queue panel — manage download queue, view progress bars.
  */
 import { api, type QueueItem } from "../api";
-import { esc, fmtBytes } from "../dom";
+import { esc, escAttr, fmtBytes } from "../dom";
 import { addWSListener, connectWS } from "../ws";
 import { refreshMods, setStatus } from "../main";
 
@@ -88,7 +88,7 @@ function render() {
       <span class="q-id">${esc(i.id)}</span>
       <span class="q-name">${esc(i.name || "")}</span>
       <span class="q-progress">${esc(i.msg || i.status)}${detailBits ? ` <span class="q-speed">${esc(detailBits)}</span>` : ""}</span>
-      ${i.status === "pending" ? `<button class="btn btn-ghost btn-sm" data-remove="${esc(i.id)}">✕</button>` : ""}
+      ${i.status === "pending" ? `<button class="btn btn-ghost btn-sm" data-remove="${escAttr(i.id)}">✕</button>` : ""}
     </div>
     ${downloading ? `<div class="queue-bar"><div class="queue-bar-inner" style="width:${pct}%"></div></div>
     <div class="queue-meta">${pct}%${detailBits ? ` — ${esc(detailBits)}` : ""}</div>` : ""}`;

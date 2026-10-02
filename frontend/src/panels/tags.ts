@@ -1,5 +1,5 @@
 import { api } from '../api';
-import { esc } from '../dom';
+import { esc, escAttr } from '../dom';
 import { toast } from '../toast';
 
 export function initTagsPanel() {
@@ -16,7 +16,7 @@ async function loadTags() {
       return;
     }
     el.innerHTML = data.tags.map((t) => (
-      '<div class=tag-row data-tag="' + esc(t.tag) + '">' +
+      '<div class=tag-row data-tag="' + escAttr(t.tag) + '">' +
       '<span class=tag>' + esc(t.tag) + '</span>' +
       '<span>' + t.count + ' mods</span>' +
       '</div>'

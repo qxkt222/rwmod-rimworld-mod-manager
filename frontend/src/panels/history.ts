@@ -37,8 +37,8 @@ async function loadHistory() {
         <div class="mod-info">
           <div class="mod-name">Workshop ${esc(h.workshop_id)} ${h.mod_name ? `— ${esc(h.mod_name)}` : ""}</div>
           <div class="mod-meta">
-            <span>${h.status}</span>
-            <span>${h.created_at}</span>
+            <span>${esc(h.status)}</span>
+            <span>${esc(h.created_at)}</span>
             ${h.msg ? `<span>${esc(h.msg)}</span>` : ""}
           </div>
         </div>

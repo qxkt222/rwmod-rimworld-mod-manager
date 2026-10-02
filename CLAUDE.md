@@ -24,6 +24,11 @@ Invariants that are invisible from the code layout and expensive to rediscover:
 - **Version and dependencies have one source: `pyproject.toml`.** `run_tests.py`
   asserts `rwmod.__version__` matches it, and the Dockerfile derives its dependency
   list from it — so neither needs a hand-kept second copy.
+- **HTML strings must escape every interpolated value: `esc()` in text position,
+  `escAttr()` in attribute position (`href`/`src`/`data-*` included) — never a bare
+  `${dataValue}`.** `esc()` leaves quotes intact, so in an attribute it lets the value
+  break out; `escAttr()` in text only over-escapes. Both live in `frontend/src/dom.ts`;
+  numbers, literals and internal ids (not user/server data) are exempt.
 - **Shared state is injected through the module-level singletons in `deps.py`**
   (config, queue, autoupdate). New shared state belongs there. `app_state.py` claimed
   that job while never being consumed; it was deleted rather than left as a decoy.

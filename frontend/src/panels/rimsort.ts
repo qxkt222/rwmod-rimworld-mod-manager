@@ -2,7 +2,7 @@
  * RimSort panel — generate ModsConfig.xml, compare with installed mods.
  */
 import { api } from "../api";
-import { esc } from "../dom";
+import { esc, escAttr } from "../dom";
 import { toast } from "../toast";
 import { refreshMods } from "../main";
 
@@ -60,7 +60,7 @@ async function compareFile() {
     const data = await api.compareRimsortFile(file);
 
     if (data.error) {
-      container.innerHTML = `<span style="color:var(--red)">解析失败: ${data.error}</span>`;
+      container.innerHTML = `<span style="color:var(--red)">解析失败: ${esc(data.error)}</span>`;
       return;
     }
 
@@ -82,7 +82,7 @@ async function compareFile() {
       ${extra.length ? renderExtra(extra) : ""}
     `;
   } catch (e: any) {
-    container.innerHTML = `<span style="color:var(--red)">对比失败: ${e.message}</span>`;
+    container.innerHTML = `<span style="color:var(--red)">对比失败: ${esc(e.message)}</span>`;
   }
 }
 
@@ -92,7 +92,7 @@ function renderMissing(ids: string[], details: any[]): string {
       const d = details[i] || {};
       const wid = d.workshop_id || "";
       const dlBtn = wid
-        ? `<button class="btn btn-primary btn-sm" data-wid="${wid}">⬇ 加入队列</button>`
+        ? `<button class="btn btn-primary btn-sm" data-wid="${escAttr(wid)}">⬇ 加入队列</button>`
         : `<span style="color:var(--gray-text);font-size:11px">无法解析 Workshop ID</span>`;
 
       return /* html */ `
@@ -201,7 +201,7 @@ function bindOrderCheck() {
         </div>
       `;
     } catch (e: any) {
-      container.innerHTML = `<span style="color:var(--red)">检查失败: ${e.message}</span>`;
+      container.innerHTML = `<span style="color:var(--red)">检查失败: ${esc(e.message)}</span>`;
     }
     btn.textContent = "🔍 分析排序";
     (btn as HTMLButtonElement).disabled = false;

@@ -64,13 +64,13 @@ async function previewDeps(raw: string) {
           <div class="dep-item" style="font-size:11px;padding:2px 0 2px 12px">
             <span style="color:var(--green)">✓</span>
             <span>${esc(d.name)}</span>
-            <span style="color:var(--gray-text);font-size:10px;margin-left:4px">${d.id}</span>
+            <span style="color:var(--gray-text);font-size:10px;margin-left:4px">${esc(d.id)}</span>
           </div>`).join("")}
         ${missing.map((d: any) => /* html */ `
           <div class="dep-item" style="font-size:11px;padding:2px 0 2px 12px">
             <span style="color:var(--yellow)">⚠</span>
             <span>${esc(d.name)}</span>
-            <span style="color:var(--gray-text);font-size:10px;margin-left:4px">${d.id}</span>
+            <span style="color:var(--gray-text);font-size:10px;margin-left:4px">${esc(d.id)}</span>
             <span style="color:var(--red);font-size:10px">未安装</span>
           </div>`).join("")}
       `);

@@ -144,7 +144,7 @@ function showCollectionExport(data: ExportCollectionResult) {
         ${data.mods?.map((m) => /* html */ `
           <div style="padding:2px 0">
             <a href="${escAttr(m.url)}" target="_blank" style="color:var(--blue)">${esc(m.name)}</a>
-            <span style="color:var(--gray-text);margin-left:4px">${m.workshop_id}</span>
+            <span style="color:var(--gray-text);margin-left:4px">${esc(m.workshop_id)}</span>
           </div>
         `).join("") || ""}
       </div>

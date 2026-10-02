@@ -69,7 +69,7 @@ async function refreshProfiles() {
 
     renderProfileList(data.profiles, container);
   } catch (e: any) {
-    container.innerHTML = `<span style="color:var(--red)">加载失败: ${e.message}</span>`;
+    container.innerHTML = `<span style="color:var(--red)">加载失败: ${esc(e.message)}</span>`;
   }
 }
 
@@ -83,7 +83,7 @@ function renderProfileList(profiles: ProfileEntry[], container: HTMLElement) {
           <div class="mod-name">${esc(p.name)}</div>
           <div class="mod-meta">
             <span>${p.mod_count} 个 Mod</span>
-            <span>${ts}</span>
+            <span>${esc(ts)}</span>
             <span>${p.size_kb} KB</span>
           </div>
         </div>
