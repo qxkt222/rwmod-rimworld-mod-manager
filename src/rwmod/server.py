@@ -76,10 +76,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     au = get_autoupdate()
     await au.start_background()
     set_gauge("steam_online", True)
-    # Seed app state (future: migrate singletons here)
-    from rwmod.app_state import AppState
-
-    app.state.rwmod = AppState()
 
     # Push real-time queue snapshots to all connected WebSocket clients.
     get_queue().on_update(broadcast_queue_update)

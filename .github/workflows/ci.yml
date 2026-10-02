@@ -17,7 +17,7 @@ jobs:
       - uses: astral-sh/setup-uv@v3
         with:
           python-version: "3.13"
-      - run: uv sync --all-extras
+      - run: uv sync
       - run: uv pip install ruff
       - run: uv run ruff check src/ tests/ tools/
       - run: uv run ruff format --check src/ tests/ tools/
@@ -31,7 +31,7 @@ jobs:
       - uses: astral-sh/setup-uv@v3
         with:
           python-version: "3.13"
-      - run: uv sync --all-extras
+      - run: uv sync
       - run: uv pip install mypy pydantic fastapi
       - run: uv run mypy src/rwmod/
 
@@ -44,9 +44,12 @@ jobs:
       - uses: astral-sh/setup-uv@v3
         with:
           python-version: "3.13"
-      - run: uv sync --all-extras
+      - run: uv sync
       - run: uv pip install pytest pytest-cov httpx fastapi
-      - run: uv run pytest -m "not network" --cov=rwmod --cov-report=xml --cov-report=term-missing
+      # --cov-fail-under stops a new module from landing with no tests at all.
+      # Baseline when this was added: 57% (267 tests). Raise it as coverage
+      # improves; do not lower it to make a red build go away.
+      - run: uv run pytest -m "not network" --cov=rwmod --cov-report=xml --cov-report=term-missing --cov-fail-under=55
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
@@ -61,7 +64,7 @@ jobs:
       - uses: astral-sh/setup-uv@v3
         with:
           python-version: "3.13"
-      - run: uv sync --all-extras
+      - run: uv sync
       - run: uv pip install bandit pip-audit
       # -ll = medium+ severity only (matches local gate); must pass.
       - run: uv run bandit -c pyproject.toml -r src/ -ll
@@ -78,13 +81,15 @@ jobs:
       - uses: astral-sh/setup-uv@v3
         with:
           python-version: "3.13"
-      - run: uv sync --all-extras
+      - run: uv sync
       - run: uv pip install radon
-      - name: Cyclomatic complexity check
+      # Report-only, and named to say so. Grade-C functions exist today
+      # (downloader.py / queue.py), so gating on them would just be noise — but
+      # the old name ("...check" plus an echo that always exited 0) read as a
+      # gate that could not fail. If this should gate, pick a threshold first.
+      - name: Cyclomatic complexity report (informational, never fails)
         run: |
-          uv run radon cc src/rwmod -s -n C || {
-            echo "::warning::Complex functions detected (grade C or worse)"
-          }
+          uv run radon cc src/rwmod -s -n C || true
 
   # ── Frontend Check ──────────────────────────────────────────────
   frontend:
@@ -107,4 +112,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build Docker image
-        run: docker build -t rwmod:ci . || true
+        run: docker build -t rwmod:ci .
+      # A successful build says nothing about whether the image can *run*. The
+      # image previously shipped un-importable (no PYTHONPATH for the src
+      # layout) and that was invisible to `docker build` — the `|| true` here
+      # meant CI could not report it either. Run the import for real.
+      - name: Smoke-test that the image can import the app
+        run: docker run --rm rwmod:ci python -c "import rwmod.server; print('import ok')"

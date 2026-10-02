@@ -5,8 +5,8 @@ from fastapi import APIRouter, Depends
 from rwmod.config import Config
 from rwmod.database import get_download_history
 from rwmod.deps import get_config
-from rwmod.downloader import extract_mod_id
 from rwmod.mod_cache import get_cached_mods
+from rwmod.utils import extract_mod_id
 from rwmod.workshop import (
     fetch_collection_children,
     fetch_item_details,

@@ -13,7 +13,7 @@ from rwmod.deps import get_config
 from rwmod.metadata import read_mod_metadata
 from rwmod.mod_cache import get_cached_mods
 from rwmod.routers.download import _dl_semaphore
-from rwmod.utils import read_upload_limited
+from rwmod.utils import extract_mod_id, read_upload_limited
 from rwmod.workshop import _fetch_batch_parallel, check_mod_updates
 
 router = APIRouter(prefix="/api/mods", tags=["mods"])
@@ -350,7 +350,7 @@ async def batch_download_mods(
     login) instead of a process per mod; collection ids are detected and
     their children downloaded too.
     """
-    from rwmod.downloader import download_batch, extract_mod_id
+    from rwmod.downloader import download_batch
 
     ids: list[str] = payload.get("ids", [])
     force: bool = payload.get("force", False)

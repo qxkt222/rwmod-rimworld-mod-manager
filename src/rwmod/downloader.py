@@ -14,13 +14,12 @@ from pathlib import Path
 from rwmod.config import Config
 from rwmod.database import find_local_mods_by_workshop_id, find_local_mods_by_workshop_ids
 from rwmod.steamcmd import DownloadResult, ErrorKind, SteamCMD
-from rwmod.utils import extract_mod_id, safe_filename
+from rwmod.utils import safe_filename
 from rwmod.xmlutil import parse_about_field
 
 __all__ = [
     "download_one",
     "download_batch",
-    "extract_mod_id",
     "_find_existing",
     "_pick_folder_name",
 ]

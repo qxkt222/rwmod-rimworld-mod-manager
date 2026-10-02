@@ -14,10 +14,14 @@ RUN npx vite build --outDir /app/static
 # ── Stage 2: Python dependencies ────────────────────────────
 FROM python:3.13-slim AS python-deps
 WORKDIR /app
+# Dependencies are derived from pyproject.toml — the single source of truth —
+# instead of being re-listed by hand. The previous hand-written list had
+# silently drifted and omitted `defusedxml`, which made the image die at
+# startup with ModuleNotFoundError. Adding a dependency must never again
+# require a matching edit here.
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir --prefix=/install \
-    "typer>=0.25" "fastapi>=0.100" "uvicorn[standard]>=0.30" \
-    "python-multipart>=0.0.9" "websockets>=14"
+RUN DEPS=$(python -c 'import tomllib;print(" ".join(tomllib.load(open("pyproject.toml","rb"))["project"]["dependencies"]))') \
+    && pip install --no-cache-dir --prefix=/install $DEPS
 
 # ── Stage 3: Runtime ────────────────────────────────────────
 FROM python:3.13-slim
@@ -30,9 +34,14 @@ RUN groupadd -r rwmod -g 1001 && \
 # Copy Python deps from builder
 COPY --from=python-deps /install /usr/local
 
-# Copy source
+# Copy source. The package must stay at /app/src/rwmod: utils.bundle_root()
+# resolves bundled static/ and steamcmd/ by walking three parents up from
+# rwmod/utils.py, which lands on /app only in this exact layout. Installing the
+# package into site-packages instead would make bundle_root() resolve to
+# /usr/local/lib/python3.13 and the static mount would 404.
 COPY pyproject.toml ./
 COPY src/ ./src/
+ENV PYTHONPATH=/app/src
 
 # Copy frontend build
 COPY --from=frontend-builder /app/static ./static/

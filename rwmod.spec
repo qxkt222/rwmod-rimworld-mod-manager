@@ -23,7 +23,6 @@ a = Analysis(
         'uvicorn.lifespan.on',
         'uvicorn.lifespan.off',
         # Core modules
-        'rwmod.app_state',
         'rwmod.autoupdate',
         'rwmod.backup',
         'rwmod.cache_db',

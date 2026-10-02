@@ -8,7 +8,7 @@ from pathlib import Path
 import typer
 
 from rwmod.config import Config
-from rwmod.downloader import download_one, extract_mod_id
+from rwmod.downloader import download_one
 from rwmod.parser import (
     get_installed_package_ids,
     parse_collection_dir,
@@ -17,6 +17,7 @@ from rwmod.parser import (
     resolve_workshop_ids,
 )
 from rwmod.steamcmd import SteamCMD
+from rwmod.utils import extract_mod_id
 
 app = typer.Typer(help="RimWorld Mod CLI — SteamCMD-powered, zero GUI")
 

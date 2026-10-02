@@ -17,7 +17,6 @@ from rwmod.downloader import (
     _find_existing,
     download_batch,
     download_one,
-    extract_mod_id,
 )
 from rwmod.logger import get_log
 from rwmod.parser import (
@@ -26,7 +25,7 @@ from rwmod.parser import (
     parse_mods_config,
     resolve_workshop_ids,
 )
-from rwmod.utils import read_upload_limited
+from rwmod.utils import extract_mod_id, read_upload_limited
 from rwmod.workshop import fetch_collection_children, is_collection
 
 router = APIRouter(prefix="/api", tags=["download"])

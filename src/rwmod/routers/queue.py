@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends
 
 from rwmod.config import Config
 from rwmod.deps import get_config, get_queue
-from rwmod.downloader import extract_mod_id
 from rwmod.queue import DownloadQueue
+from rwmod.utils import extract_mod_id
 
 router = APIRouter(prefix="/api", tags=["queue"])
 
