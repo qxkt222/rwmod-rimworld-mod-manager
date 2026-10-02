@@ -122,5 +122,9 @@ jobs:
       # image previously shipped un-importable (no PYTHONPATH for the src
       # layout) and that was invisible to `docker build` — the `|| true` here
       # meant CI could not report it either. Run the import for real.
+      #
+      # --entrypoint is required: the image's ENTRYPOINT is `python -m uvicorn`,
+      # so a trailing `python -c ...` gets appended to it and uvicorn rejects
+      # `-c` ("No such option"). Without the override this step tests nothing.
       - name: Smoke-test that the image can import the app
-        run: docker run --rm rwmod:ci python -c "import rwmod.server; print('import ok')"
+        run: docker run --rm --entrypoint python rwmod:ci -c "import rwmod.server; print('import ok')"

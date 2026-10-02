@@ -43,6 +43,14 @@ def cli_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     mods = tmp_path / "Mods"
     mods.mkdir()
     (tmp_path / "RimWorld").mkdir()
+    # `rwmod download` calls cfg.validate(), which requires steamcmd to exist.
+    # Creating it is not optional bookkeeping: Config._load_no_cache falls back
+    # to the *bundled* steamcmd when the configured path is missing, so without
+    # this file the test passes only on a machine that happens to have a
+    # steamcmd/ checkout and fails on a clean one (CI). conftest's client
+    # fixture creates the same file for the same reason.
+    (tmp_path / "steamcmd").mkdir()
+    (tmp_path / "steamcmd" / "steamcmd.exe").touch()
     cfg_mod.Config(
         steamcmd_path=tmp_path / "steamcmd" / "steamcmd.exe",
         mods_dir=mods,
