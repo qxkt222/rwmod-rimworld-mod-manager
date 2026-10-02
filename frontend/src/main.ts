@@ -7,6 +7,7 @@
  */
 import "./style.css";
 import { api, type ModEntry, type ConfigData } from "./api";
+import { esc } from "./dom";
 import { initRouter } from "./router";
 import { connectWS, type WSMessage } from "./ws";
 import { initDashboardPanel, stopQueuePolling } from "./panels/dashboard";
@@ -542,12 +543,6 @@ function renderModList(modList: ModEntry[]) {
 
   // After rendering, re-apply health and compatibility badges
   import('./panels/mods').then(m => m.refreshBadges()).catch(() => {});
-}
-
-function esc(s: string): string {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
 }
 
 // ── keyboard shortcuts ─────────────────────────────────────────

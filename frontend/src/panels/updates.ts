@@ -3,6 +3,7 @@
  * Supports one-click "Update All" via POST /api/auto-update/run.
  */
 import { fetchJSON } from "../api";
+import { esc } from "../dom";
 import { toast } from "../toast";
 
 interface UpdateItem {
@@ -153,10 +154,4 @@ async function updateAll() {
   }
   allBtn.disabled = false;
   allBtn.textContent = "⬇ 全部更新";
-}
-
-function esc(s: string): string {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
 }

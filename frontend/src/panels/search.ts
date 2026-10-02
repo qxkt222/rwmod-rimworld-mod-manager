@@ -2,6 +2,7 @@
  * Search panel — query Steam Workshop, add results to queue.
  */
 import { fetchJSON } from "../api";
+import { esc } from "../dom";
 import { toast } from "../toast";
 
 interface SearchHit {
@@ -79,10 +80,4 @@ async function doSearch() {
   } catch (e: any) {
     container.innerHTML = `<span style="color:var(--red)">搜索失败: ${e.message}</span>`;
   }
-}
-
-function esc(s: string): string {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
 }

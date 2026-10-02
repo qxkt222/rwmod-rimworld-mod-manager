@@ -2,6 +2,7 @@
  * Queue panel — manage download queue, view progress bars.
  */
 import { fetchJSON } from "../api";
+import { esc, fmtBytes } from "../dom";
 import { connectWS } from "../ws";
 import { refreshMods, setStatus } from "../main";
 
@@ -64,18 +65,6 @@ async function clearQueue() {
   refreshState();
 }
 
-function fmtBytes(n: number): string {
-  if (!n || n <= 0 || !isFinite(n)) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  let i = 0;
-  let v = n;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return `${v >= 100 ? v.toFixed(0) : v.toFixed(1)} ${units[i]}`;
-}
-
 function fmtSpeed(bps: number): string {
   if (!bps || bps <= 0 || !isFinite(bps)) return "";
   return `${fmtBytes(bps)}/s`;
@@ -126,10 +115,4 @@ function render() {
       refreshState();
     });
   });
-}
-
-function esc(s: string): string {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
 }

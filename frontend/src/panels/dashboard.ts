@@ -2,6 +2,7 @@
  * Dashboard panel — stats, recent activity, quick actions including 一键更新.
  */
 import { fetchJSON } from "../api";
+import { esc, setText } from "../dom";
 import { toast } from "../toast";
 
 interface DashboardData {
@@ -132,17 +133,6 @@ export function stopQueuePolling(): void {
 
 // ── helpers ───────────────────────────────────────────────────────
 
-function setText(id: string, text: string): void {
-  const el = document.getElementById(id);
-  if (el) el.textContent = text;
-}
-
 function formatSize(mb: number): string {
   return mb < 1024 ? `${mb} MB` : `${(mb / 1024).toFixed(1)} GB`;
-}
-
-function esc(s: string): string {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
 }

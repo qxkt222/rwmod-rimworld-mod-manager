@@ -3,6 +3,7 @@
  * Backups are created automatically when updating mods with force=true.
  */
 import { fetchJSON } from "../api";
+import { esc, formatTs } from "../dom";
 import { toast } from "../toast";
 
 interface BackupEntry {
@@ -167,18 +168,4 @@ async function cleanupBackups() {
   } catch (e: any) {
     toast(`清理失败: ${e.message}`, "error");
   }
-}
-
-function formatTs(iso: string): string {
-  try {
-    return new Date(iso).toLocaleString("zh-CN");
-  } catch {
-    return iso;
-  }
-}
-
-function esc(s: string): string {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
 }

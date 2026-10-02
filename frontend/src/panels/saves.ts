@@ -1,4 +1,5 @@
 import { fetchJSON } from "../api";
+import { esc } from "../dom";
 import { toast } from "../toast";
 
 export function initSavesPanel() {
@@ -44,10 +45,4 @@ async function uploadSave() {
   } catch (e: any) {
     toast('Upload failed: ' + e.message, 'error');
   }
-}
-
-function esc(s: string): string {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
 }

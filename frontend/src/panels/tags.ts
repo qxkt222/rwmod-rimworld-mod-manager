@@ -1,4 +1,5 @@
 import { fetchJSON } from '../api';
+import { esc } from '../dom';
 import { toast } from '../toast';
 
 export function initTagsPanel() {
@@ -33,10 +34,4 @@ async function loadTags() {
   } catch (e: any) {
     el.innerHTML = '<div>Error: ' + esc(e.message) + '</div>';
   }
-}
-
-function esc(s: string): string {
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
 }

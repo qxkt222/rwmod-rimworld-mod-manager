@@ -4,6 +4,7 @@
  * Shows compatibility badges: ✅ compatible / ❌ incompatible / ❓ unknown
  */
 import { fetchJSON, type ModEntry } from "../api";
+import { esc, escAttr } from "../dom";
 import { refreshMods } from "../main";
 import { toast } from "../toast";
 
@@ -16,16 +17,6 @@ const HEALTH_LABELS: Record<string, string> = {
   removed: "⚫ 下架",
   unknown: "⚪ 未知",
 };
-
-function esc(s: string): string {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
-}
-
-function escAttr(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
 
 export function initModsPanel(mods: ModEntry[], onClick: (mod: ModEntry) => void) {
   _onClick = onClick;

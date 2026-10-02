@@ -2,6 +2,7 @@
  * RimSort panel — generate ModsConfig.xml, compare with installed mods.
  */
 import { fetchJSON } from "../api";
+import { esc } from "../dom";
 import { toast } from "../toast";
 import { refreshMods } from "../main";
 
@@ -155,12 +156,6 @@ function setupRimsortDrop() {
       compareFile();
     }
   });
-}
-
-function esc(s: string): string {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
 }
 
 // ── load order check ──────────────────────────────────────────────

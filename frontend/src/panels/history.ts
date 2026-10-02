@@ -2,6 +2,7 @@
  * History panel — download history and stats.
  */
 import { fetchJSON } from "../api";
+import { esc } from "../dom";
 import { toast } from "../toast";
 
 interface HistoryItem {
@@ -106,10 +107,4 @@ async function loadAutoStatus() {
     const data = await fetchJSON<{ running: boolean }>("/api/auto-update/status");
     document.getElementById("auto-update-status")!.textContent = data.running ? "⏳ 检查中..." : "就绪";
   } catch {}
-}
-
-function esc(s: string): string {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
 }

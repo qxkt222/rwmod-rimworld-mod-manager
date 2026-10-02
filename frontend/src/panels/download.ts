@@ -2,6 +2,7 @@
  * Download panel — mod ID input, force toggle, SSE log, dependency preview.
  */
 import { api, fetchJSON, type SSEEvent } from "../api";
+import { esc, fmtBytes } from "../dom";
 import { setStatus, refreshMods } from "../main";
 
 let activeController: AbortController | null = null;
@@ -102,15 +103,6 @@ async function previewDeps(raw: string) {
 function clearDepPreview() {
   const container = document.getElementById("dep-preview");
   if (container) container.innerHTML = "";
-}
-
-function fmtBytes(n: number): string {
-  if (!n || n <= 0 || !isFinite(n)) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  let i = 0;
-  let v = n;
-  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
-  return `${v >= 100 ? v.toFixed(0) : v.toFixed(1)} ${units[i]}`;
 }
 
 // Live per-mod progress from SSE 'progress' events → top progress bar.
@@ -224,10 +216,4 @@ export function renderLog(msg: string, cls = "") {
   const style = cls ? ` style="${classes[cls] || ""}"` : "";
   log.innerHTML += `<span${style}>${esc(msg)}</span>\n`;
   log.scrollTop = log.scrollHeight;
-}
-
-function esc(s: string): string {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
 }

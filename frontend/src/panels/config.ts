@@ -2,6 +2,7 @@
  * Config panel — view and edit rwmod settings.
  */
 import { api, fetchJSON } from "../api";
+import { esc } from "../dom";
 import { toast } from "../toast";
 
 export function initConfigPanel() {
@@ -97,10 +98,4 @@ async function checkSteamCMD() {
   } catch (e: any) {
     el.innerHTML = '<span style="color:var(--red)">❌ 检测失败: ' + e.message + '</span>';
   }
-}
-
-function esc(s: string): string {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
 }

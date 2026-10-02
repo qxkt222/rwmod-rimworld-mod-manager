@@ -4,6 +4,7 @@
  * of one line followed by a long silent wait.
  */
 import { api, fetchJSON } from "../api";
+import { esc, fmtBytes } from "../dom";
 import { setStatus, refreshMods } from "../main";
 
 const EVENT_COLORS: Record<string, string> = {
@@ -46,15 +47,6 @@ function logLine(log: HTMLElement, text: string, event: string) {
 let totalCount = 0;      // mods to download (from backend 'total')
 let doneCount = 0;       // ok + warn + skip so far
 let current: Record<string, { percent: number; downloaded: number; total: number; ts: number }> = {};
-
-function fmtBytes(n: number): string {
-  if (!n || n <= 0 || !isFinite(n)) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  let i = 0;
-  let v = n;
-  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
-  return `${v >= 100 ? v.toFixed(0) : v.toFixed(1)} ${units[i]}`;
-}
 
 function renderProgress() {
   const box = document.getElementById("collection-progress");
@@ -176,10 +168,4 @@ async function previewCollection() {
       `<span style="color:var(--gray-text)">点击"下载合集"开始下载</span>\n`;
     log.scrollTop = log.scrollHeight;
   } catch (e: any) { log.innerHTML = `<span style="color:#f7768e">预览失败: ${e.message}</span>`; }
-}
-
-function esc(s: string): string {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
 }
