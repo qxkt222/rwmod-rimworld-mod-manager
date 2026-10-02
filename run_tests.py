@@ -102,8 +102,12 @@ check("backup",
     "from pathlib import Path\n"
     "r = _backup_metadata(Path('/x/a__b__c.zip'))\n"
     "assert r == {'workshop_id':'a','folder_name':'b','timestamp':'c'}, r")
+# Offline state must reflect real call outcomes rather than a synthetic ping, so
+# assert the marking actually moves what /api/status reads.
 check("offline",
-    "from rwmod.offline import safe_fetch")
+    "from rwmod.offline import get_status,mark_offline,mark_online\n"
+    "mark_offline(); assert get_status()['online'] is False, get_status()\n"
+    "mark_online(); assert get_status()['online'] is True, get_status()")
 check("database_queue",
     "from rwmod.database import queue_upsert,queue_load_pending,queue_clear_done")
 check("schemas",

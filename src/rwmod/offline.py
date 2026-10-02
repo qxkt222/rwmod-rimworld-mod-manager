@@ -1,53 +1,34 @@
-"""Offline mode — graceful degradation when Steam API is unreachable.
+"""Offline tracking — records whether Steam/Workshop calls actually succeeded.
 
-When Steam API is down or network is unavailable, rwmod falls back to
-locally cached data instead of showing errors. Status is tracked so
-the UI can display connectivity state.
+State is driven by observed outcomes: the network layer calls ``mark_online`` /
+``mark_offline`` around real requests (see ``workshop._request_json``), so what
+the UI reads reflects what actually happened.
+
+This replaced a synthetic reachability ping that nothing ever called: the ping
+existed, was wired to nothing, and ``/api/status`` therefore reported "online"
+forever. Outcome tracking cannot rot that way, and because ``get_status`` does
+no I/O it stays cheap to poll and testable without network access.
 """
 
 from __future__ import annotations
 
-import json
-import logging
 import time
-import urllib.request
-from collections.abc import Callable
-from typing import Any
 
-_log = logging.getLogger(__name__)
+__all__ = ["get_status", "mark_offline", "mark_online"]
 
 # ── connectivity state ─────────────────────────────────────────────
-
+# Starts optimistic: nothing has failed yet, and a fresh install should not
+# claim to be offline before it has made a single request.
 _last_check_time: float = 0
 _is_online: bool = True
-_check_interval: float = 30  # seconds between connectivity checks
-
-
-def is_online(force: bool = False) -> bool:
-    """Check if Steam API is reachable.
-
-    Caches the result for _check_interval seconds to avoid
-    hammering the API on every request.
-    """
-    global _last_check_time, _is_online
-
-    now = time.monotonic()
-    if not force and (now - _last_check_time) < _check_interval:
-        return _is_online
-
-    _last_check_time = now
-    _is_online = _ping_steam()
-    if not _is_online:
-        _log.warning("Steam API 不可达——进入离线模式")
-    return _is_online
 
 
 def get_status() -> dict:
-    """Return current connectivity status for API reporting.
+    """Return the last observed connectivity state (no I/O).
 
     ``last_check`` is a real epoch timestamp (seconds) so the frontend can
     display an absolute "last checked at" time. ``last_check_ago_sec`` is the
-    seconds elapsed since the last check.
+    seconds elapsed since that observation.
     """
     if not _last_check_time:
         return {"online": _is_online, "last_check": 0, "last_check_ago_sec": 0}
@@ -59,7 +40,7 @@ def get_status() -> dict:
 
 
 def _epoch_last_check() -> float:
-    """Return the wall-clock time of the last connectivity check (0 if never)."""
+    """Return the wall-clock time of the last observation (0 if never)."""
     if not _last_check_time:
         return 0.0
     # _last_check_time is a monotonic timestamp; convert to epoch for display.
@@ -67,62 +48,14 @@ def _epoch_last_check() -> float:
 
 
 def mark_offline() -> None:
-    """Force offline mode (used when an API call fails)."""
+    """Record that a Steam request failed to reach the network."""
     global _is_online, _last_check_time
     _is_online = False
     _last_check_time = time.monotonic()
 
 
 def mark_online() -> None:
-    """Force online mode (used when a retry succeeds)."""
+    """Record that a Steam request succeeded."""
     global _is_online, _last_check_time
     _is_online = True
     _last_check_time = time.monotonic()
-
-
-# ── graceful fallback helpers ──────────────────────────────────────
-
-
-def safe_fetch(fetch_fn: Callable[..., Any], *args: object, **kwargs: object) -> Any:
-    """Wrap a Steam API fetch function with offline fallback.
-
-    If the API call fails, marks offline and returns empty/default.
-    On success, marks online.
-
-    Usage:
-        result = safe_fetch(fetch_item_details, mod_ids)
-    """
-    try:
-        result = fetch_fn(*args, **kwargs)
-        mark_online()
-        return result
-    except Exception as e:
-        _log.debug("API 调用失败（离线模式）: %s", e)
-        mark_offline()
-        # Return appropriate empty value based on expected return type
-        return _get_default(fetch_fn)
-
-
-def _get_default(fn: Callable[..., Any]) -> dict | list:
-    """Return appropriate empty value for known fetch functions."""
-    name = getattr(fn, "__name__", "")
-    if "dependencies" in name or "details" in name or "batch" in name:
-        return {}
-    if "search" in name or "children" in name or "collection" in name:
-        return []
-    return {}
-
-
-# ── internal ───────────────────────────────────────────────────────
-
-
-def _ping_steam(timeout: float = 5.0) -> bool:
-    """Lightweight ping to Steam API to check connectivity."""
-    url = "https://api.steampowered.com/ISteamWebAPIUtil/GetServerInfo/v1/"
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "rwmod/1.0"})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310 — HTTPS-only Steam URL
-            data = json.loads(resp.read())
-            return "response" in data
-    except Exception:
-        return False

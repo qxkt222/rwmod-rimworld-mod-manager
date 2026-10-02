@@ -15,7 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from rwmod.config import Config
-from rwmod.downloader import BATCH_SIZE, _find_existing, download_batch, download_one
+from rwmod.downloader import BATCH_SIZE, _find_existing, download_batch
 
 __all__ = ["DownloadQueue", "get_queue", "MAX_CONCURRENT"]
 
@@ -368,72 +368,6 @@ class DownloadQueue:
             # Re-queue collection children / missing dependencies.
             if extra:
                 self.add(extra)
-
-    async def _download_one(self, config: Config, item: QueueItem, force: bool) -> None:
-        async with self._semaphore:
-            # Item was removed (cancelled) while this task waited for a slot
-            with self._items_lock:
-                cancelled = item.id in self._cancelled
-            if cancelled:
-                with self._items_lock:
-                    self._cancelled.discard(item.id)
-                return
-
-            item.status = "downloading"
-            item.progress = 0.1
-            item.msg = "检查中..."
-            self._persist(item)
-            await self._notify()
-
-            # Check already installed
-            existing = _find_existing(config.mods_dir, item.id)
-            if existing and not force:
-                item.status = "done"
-                item.progress = 1.0
-                item.name = existing.name
-                item.msg = "已安装"
-                self._persist(item)
-                await self._notify()
-                return
-
-            if existing and force:
-                item.name = existing.name
-                item.msg = "覆盖中..."
-                self._persist(item)
-                await self._notify()
-
-            # Delegate to the unified download_one (blocking — runs in thread)
-            item.msg = "下载中..."
-            self._persist(item)
-            await self._notify()
-
-            ok = await asyncio.to_thread(download_one, config, item.id, force=force)
-
-            # Cancelled while the download was in flight — keep cancelled state
-            with self._items_lock:
-                cancelled = item.id in self._cancelled
-                if cancelled:
-                    self._cancelled.discard(item.id)
-            if cancelled:
-                item.status = "cancelled"
-                item.msg = "已取消"
-                self._persist(item)
-                await self._notify()
-                return
-
-            if ok:
-                final = _find_existing(config.mods_dir, item.id)
-                item.status = "done"
-                item.progress = 1.0
-                item.name = final.name if final else item.id
-                item.msg = "完成"
-            else:
-                item.status = "failed"
-                item.progress = 0
-                item.msg = "下载失败（含 Skymods 备用源）"
-
-            self._persist(item)
-            await self._notify()
 
     # ── persistence helpers ──────────────────────────────────────
 

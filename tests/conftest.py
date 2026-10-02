@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,20 @@ from fastapi.testclient import TestClient
 
 from rwmod.config import Config
 from rwmod.database import close_db
+
+
+@pytest.fixture(autouse=True)
+def _reset_offline_state() -> Iterator[None]:
+    """Connectivity state is process-global and is written by real request
+    outcomes, so a test that makes a fetch fail would otherwise leave the next
+    test believing Steam is unreachable."""
+    import rwmod.offline as offline_mod
+
+    offline_mod._is_online = True
+    offline_mod._last_check_time = 0
+    yield
+    offline_mod._is_online = True
+    offline_mod._last_check_time = 0
 
 
 @pytest.fixture
