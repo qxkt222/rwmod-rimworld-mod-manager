@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 
@@ -61,8 +62,9 @@ class TestModsEndpoint:
         resp = client.get("/api/mods/compatibility")
         assert resp.status_code == 200
         data = resp.json()
-        # May return error if no RimWorld install, but should be valid JSON
-        assert "rimworld_version" in data or "error" in data
+        # A 200 body carries data only — "no RimWorld install" is a degraded
+        # success, not an error. An `error` key here means the contract regressed.
+        assert set(data) == {"rimworld_version", "groups"}, data
 
     def test_health_empty(self, client: TestClient):
         resp = client.get("/api/mods/health")
@@ -166,16 +168,38 @@ class TestProfilesEndpoint:
         assert resp.status_code == 400
 
 
+class TestSavesEndpoint:
+    def test_missing_save_returns_404(self, client: TestClient):
+        """A missing save fails via HTTP status, not a 200 body carrying `error`."""
+        resp = client.get("/api/saves/does-not-exist")
+        assert resp.status_code == 404
+        assert resp.json()["error"] == "ModNotFoundError"
+        assert resp.json()["detail"]
+
+
 class TestWorkshopEndpoint:
     def test_search_no_query(self, client: TestClient):
         resp = client.get("/api/search?q=")
         assert resp.status_code == 200
         assert resp.json()["results"] == []
 
+    @pytest.mark.network
     def test_search(self, client: TestClient):
+        """Hits the live Steam Workshop API — excluded by `-m "not network"`."""
         resp = client.get("/api/search?q=harmony")
         assert resp.status_code == 200
         assert "results" in resp.json()
+
+    def test_collection_preview_missing_returns_404(self, client: TestClient):
+        """An unfetchable collection fails via HTTP status, not a 200 body."""
+        from unittest.mock import patch
+
+        from rwmod.routers import workshop as ws_router
+
+        with patch.object(ws_router, "fetch_collection_children", return_value=[]):
+            resp = client.get("/api/collection/preview/123456")
+        assert resp.status_code == 404
+        assert resp.json()["error"] == "ModNotFoundError"
 
 
 class TestErrorHandling:

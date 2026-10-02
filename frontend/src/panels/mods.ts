@@ -72,14 +72,12 @@ async function loadHealth() {
 async function loadCompatibility() {
   try {
     const data = await fetchJSON<{
-      error?: string;
-      rimworld_version?: string;
+      rimworld_version?: string | null;
       groups?: {
         incompatible?: { folder: string }[];
         unknown?: { folder: string }[];
       };
     }>("/api/mods/compatibility");
-    if (data.error) return;
 
     const incompat: Set<string> = new Set(
       (data.groups?.incompatible || []).map((m) => m.folder),

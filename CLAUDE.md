@@ -28,7 +28,12 @@ Invariants that are invisible from the code layout and expensive to rediscover:
   (config, queue, autoupdate). New shared state belongs there. `app_state.py` claimed
   that job while never being consumed; it was deleted rather than left as a decoy.
 - **Untrusted XML goes through `xmlutil.parse_xml_root`.** Stdlib `xml.etree` is
-  reserved for XML this process generated or that RimWorld wrote; the four remaining
-  call sites are tracked as debt in the `[tool.bandit]` comment in `pyproject.toml`.
+  reserved for XML this process generated or that RimWorld wrote; the remaining call
+  sites are tracked as debt in the `[tool.bandit]` comment in `pyproject.toml`.
+- **Failure contract.** An endpoint that fails to do its job raises an `errors.py`
+  exception: the status code carries the failure and the body is `{error, detail}`.
+  A 200 body carries data only — an `{"error": ...}` key inside a 200 is a contract
+  regression, not a warning channel. The exception is a *probe*, whose job is to
+  report a verdict: `/api/steamcmd/check` legitimately returns `{ok: false, msg}`.
 - **`python run_tests.py` is the local gate** — import smoke, ruff, ruff format,
   pytest, mypy strict and bandit in one shot.

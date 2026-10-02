@@ -162,14 +162,12 @@ async function previewCollection() {
 
   try {
     const d = await fetchJSON<{
-      error?: string;
       collection_id?: string;
       total?: number;
       installed_count?: number;
       new_count?: number;
       failed_count?: number;
     }>(`/api/collection/preview/${encodeURIComponent(cid)}`);
-    if (d.error) { log.innerHTML = `<span style="color:#f7768e">${esc(d.error)}</span>`; return; }
     log.innerHTML =
       `<span style="color:#9ece6a">合集 ${esc(String(d.collection_id ?? cid))}: ${d.total} 个 Mod</span>\n` +
       `<span style="color:#9ece6a">  🟢 已安装 ${d.installed_count}</span>\n` +

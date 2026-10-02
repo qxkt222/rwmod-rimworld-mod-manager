@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends
 from rwmod.config import Config
 from rwmod.database import get_download_history
 from rwmod.deps import get_config
+from rwmod.errors import ModNotFoundError, WorkshopError
 from rwmod.mod_cache import get_cached_mods
 from rwmod.utils import extract_mod_id
 from rwmod.workshop import (
@@ -61,9 +62,9 @@ def collection_preview(
     try:
         mod_ids = fetch_collection_children(cid)
     except Exception as e:
-        return {"error": f"获取合集失败: {e}"}
+        raise WorkshopError(f"获取合集失败: {e}") from e
     if not mod_ids:
-        return {"error": "未能获取合集内容"}
+        raise ModNotFoundError("未能获取合集内容")
 
     # Build the installed workshop-id → folder map with a single metadata scan
     # (avoid re-scanning mods_dir once per child — 593 children × full scan).

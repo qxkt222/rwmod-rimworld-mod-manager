@@ -207,7 +207,10 @@ def mod_compatibility(
 
     rw_ver = detect_rimworld_version(cfg.rimworld_dir)
     if not rw_ver:
-        return {"error": "未能检测到 RimWorld 版本", "rimworld_version": None, "groups": {}}
+        # Not an error: the request succeeded, the game version simply isn't
+        # detectable here. A 200 body carries data only — no error text — so the
+        # client decides how to present "no version known".
+        return {"rimworld_version": None, "groups": {}}
     metas = get_cached_mods(cfg.mods_dir)
     groups = check_compatibility(metas, rw_ver)
     return {"rimworld_version": rw_ver, "groups": groups}

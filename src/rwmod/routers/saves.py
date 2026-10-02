@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile
 
 from rwmod.config import Config
 from rwmod.deps import get_config
+from rwmod.errors import ModNotFoundError
 from rwmod.parser import get_installed_package_ids
 from rwmod.save_parser import analyze_save, find_save_files, parse_save_mods
 
@@ -42,7 +43,7 @@ def save_detail(
     saves = find_save_files(cfg.rimworld_dir)
     target = next((sp for sp in saves if sp.stem == save_name or sp.name == save_name), None)
     if target is None:
-        return {"error": f"Save not found: {save_name}"}
+        raise ModNotFoundError(f"Save not found: {save_name}")
     installed = get_installed_package_ids(cfg.mods_dir)
     return analyze_save(target, installed)
 
