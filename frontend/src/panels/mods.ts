@@ -3,12 +3,10 @@
  * Shows health status badges: 🟢 maintained / 🟡 stale / 🔴 abandoned / ⚫ removed
  * Shows compatibility badges: ✅ compatible / ❌ incompatible / ❓ unknown
  */
-import { api, type ExportCollectionResult, type ModEntry } from "../api";
+import { api, type ExportCollectionResult } from "../api";
 import { esc, escAttr } from "../dom";
 import { refreshMods } from "../main";
 import { toast } from "../toast";
-
-let _onClick: ((mod: ModEntry) => void) | null = null;
 
 const HEALTH_LABELS: Record<string, string> = {
   maintained: "🟢 活跃",
@@ -18,15 +16,10 @@ const HEALTH_LABELS: Record<string, string> = {
   unknown: "⚪ 未知",
 };
 
-export function initModsPanel(mods: ModEntry[], onClick: (mod: ModEntry) => void) {
-  _onClick = onClick;
+export function initModsPanel() {
   loadHealth();
   loadCompatibility();
   bindExportCollection();
-}
-
-export function onModClick(mod: ModEntry) {
-  _onClick?.(mod);
 }
 
 // Exported so main.ts can re-apply badges after rendering mod list
