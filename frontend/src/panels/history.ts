@@ -7,7 +7,7 @@ import { toast } from "../toast";
 
 export function initHistoryPanel() {
   document.getElementById("btn-history-refresh")?.addEventListener("click", loadHistory);
-  document.getElementById("btn-history-clear")?.addEventListener("click", clearHistory);
+  document.getElementById("btn-clear-history")?.addEventListener("click", clearHistory);
   document.getElementById("btn-auto-update")?.addEventListener("click", runAutoUpdate);
   loadHistory();
   loadStats();

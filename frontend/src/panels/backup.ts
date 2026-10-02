@@ -3,7 +3,7 @@
  * Backups are created automatically when updating mods with force=true.
  */
 import { api, type BackupEntry } from "../api";
-import { esc, formatTs } from "../dom";
+import { esc, escAttr, formatTs } from "../dom";
 import { toast } from "../toast";
 
 export function initBackupPanel() {
@@ -57,18 +57,18 @@ function renderBackupList(backups: BackupEntry[], container: HTMLElement) {
           </div>
         </div>
         <div style="display:flex;gap:4px;align-items:center">
-          <button class="btn btn-primary btn-sm" data-restore="${wid}">↩ 回滚</button>
-          <button class="btn btn-ghost btn-sm" data-versions="${wid}">📋 ${items.length}版</button>
+          <button class="btn btn-primary btn-sm" data-restore="${escAttr(wid)}">↩ 回滚</button>
+          <button class="btn btn-ghost btn-sm" data-versions="${escAttr(wid)}">📋 ${items.length}版</button>
         </div>
       </div>
-      <div class="backup-versions" id="versions-${wid}" style="display:none;padding:0 16px 12px">
+      <div class="backup-versions" id="versions-${escAttr(wid)}" style="display:none;padding:0 16px 12px">
         ${items.map((b, i) => /* html */ `
           <div class="queue-item" style="padding:4px 8px;font-size:11px">
             <span style="color:var(--gray-text)">${formatTs(b.timestamp)}</span>
             <span>${b.size_mb} MB</span>
             <span style="margin-left:auto;display:flex;gap:4px">
-              <button class="btn btn-ghost btn-sm" data-restore-id="${b.filename}">↩</button>
-              <button class="btn btn-ghost btn-sm" data-delete="${b.filename}">✕</button>
+              <button class="btn btn-ghost btn-sm" data-restore-id="${escAttr(b.filename)}">↩</button>
+              <button class="btn btn-ghost btn-sm" data-delete="${escAttr(b.filename)}">✕</button>
             </span>
           </div>
         `).join("")}

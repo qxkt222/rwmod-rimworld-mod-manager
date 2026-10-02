@@ -167,11 +167,6 @@ function bindOrderCheck() {
     try {
       const data = await api.checkLoadOrder();
 
-      if (data.error) {
-        container.innerHTML = `<span style="color:var(--red)">${esc(data.error)}</span>`;
-        return;
-      }
-
       const issues = data.issues || [];
       const errCount = issues.filter((i: any) => i.severity === "error").length;
       const warnCount = issues.filter((i: any) => i.severity === "warn").length;

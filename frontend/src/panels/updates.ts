@@ -6,8 +6,6 @@ import { api, type UpdateItem } from "../api";
 import { esc } from "../dom";
 import { toast } from "../toast";
 
-let _lastUpdateItems: UpdateItem[] = [];
-
 export function initUpdatePanel() {
   document.getElementById("btn-check-updates")?.addEventListener("click", checkUpdates);
   document.getElementById("btn-update-all")?.addEventListener("click", updateAll);
@@ -24,7 +22,6 @@ async function checkUpdates() {
   try {
     const data = await api.checkUpdates();
     const updates: UpdateItem[] = data.updates || [];
-    _lastUpdateItems = updates;
 
     if (!updates.length) {
       container.innerHTML = '<span style="color:var(--green)">✅ 所有 Mod 均为最新版本</span>';

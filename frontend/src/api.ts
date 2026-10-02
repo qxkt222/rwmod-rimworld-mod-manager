@@ -180,8 +180,6 @@ export interface RimsortCompareResult {
 }
 
 export interface LoadOrderResult {
-  /** Legacy failure field still tolerated by the UI. */
-  error?: string;
   total_mods?: number;
   issues?: { severity: string; message: string }[];
   load_order?: string[];

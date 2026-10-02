@@ -113,19 +113,23 @@ function startPolling(): void {
   if (pollTimer) return;
   console.log("[WS] REST 轮询兜底已启动（每 5s 查询 /api/queue）");
   const tick = async () => {
-    // 尝试恢复 WS：成功连接后 onopen 会停止轮询
-    const sock = connectWS();
-    if (sock && sock.readyState === WebSocket.OPEN) {
-      stopPolling();
-      return;
-    }
     try {
+      // 尝试恢复 WS：成功连接后 onopen 会停止轮询
+      const sock = connectWS();
+      if (sock && sock.readyState === WebSocket.OPEN) {
+        stopPolling();
+        return;
+      }
       const data = await api.getQueue();
       emit({ type: "queue_update", items: data.items });
-    } catch { /* 网络错误 — 继续轮询 */ }
+    } catch { /* 网络错误/构造失败 — 继续轮询 */ }
   };
-  tick();
+  // 必须先占位 pollTimer 再跑首次 tick：tick 会调用 connectWS()，当 WebSocket
+  // 构造失败时 connectWS 的 catch 又会进入 startPolling()。若此时 pollTimer
+  // 尚未赋值，重入保护失效 → tick 同步递归到栈溢出，且每层回退时各创建一个
+  // setInterval（实测单次调用泄漏 2600+ 个定时器）。先赋值即杜绝该路径。
   pollTimer = setInterval(tick, POLL_INTERVAL_MS);
+  void tick();
 }
 
 function stopPolling(): void {
