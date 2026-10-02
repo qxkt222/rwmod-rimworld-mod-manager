@@ -2,16 +2,9 @@
  * Profile panel — save/restore ModsConfig.xml snapshots.
  * RimWorld players can switch between mod sets with one click.
  */
-import { api, fetchJSON } from "../api";
+import { api, type ProfileEntry } from "../api";
 import { esc, escAttr, formatTs } from "../dom";
 import { toast } from "../toast";
-
-interface ProfileEntry {
-  name: string;
-  mod_count: number;
-  saved_at: string;
-  size_kb: number;
-}
 
 export function initProfilePanel() {
   document.getElementById("btn-profile-save")?.addEventListener("click", saveProfile);
@@ -60,7 +53,7 @@ async function refreshProfiles() {
   container.innerHTML = '<span style="color:var(--gray-text)">加载中...</span>';
 
   try {
-    const data = await fetchJSON<{ profiles?: ProfileEntry[]; modsconfig_path?: string | null }>("/api/profiles");
+    const data = await api.listProfiles();
 
     const pathEl = document.getElementById("profile-modsconfig-path");
     if (pathEl) {
@@ -108,10 +101,7 @@ function renderProfileList(profiles: ProfileEntry[], container: HTMLElement) {
       const name = (btn as HTMLElement).dataset.restore!;
       if (!confirm(`切换到 profile "${name}"？当前 ModsConfig.xml 将被覆盖（会自动备份）。`)) return;
       try {
-        const data = await fetchJSON<{ ok?: boolean; msg?: string; mod_count?: number }>(
-          `/api/profiles/${encodeURIComponent(name)}/restore`,
-          { method: "POST" },
-        );
+        const data = await api.restoreProfile(name);
         if (data.ok) {
           toast(`已启用: ${name}（${data.mod_count} 个 Mod）`, "success");
         } else {
@@ -129,7 +119,7 @@ function renderProfileList(profiles: ProfileEntry[], container: HTMLElement) {
       const name = (btn as HTMLElement).dataset.delete!;
       if (!confirm(`删除 profile "${name}"？`)) return;
       try {
-        await fetchJSON(`/api/profiles/${encodeURIComponent(name)}`, { method: "DELETE" });
+        await api.deleteProfile(name);
         toast("已删除", "success");
         refreshProfiles();
       } catch (e: any) {
@@ -144,11 +134,7 @@ async function saveProfile() {
   if (!name?.trim()) return;
 
   try {
-    const data = await fetchJSON<{ ok?: boolean; msg?: string }>("/api/profiles/save", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: name.trim() }),
-    });
+    const data = await api.saveProfile(name.trim());
     if (data.ok) {
       toast(data.msg || "已保存", "success");
       refreshProfiles();

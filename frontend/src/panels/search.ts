@@ -1,20 +1,9 @@
 /**
  * Search panel — query Steam Workshop, add results to queue.
  */
-import { fetchJSON } from "../api";
+import { api, type SearchHit } from "../api";
 import { esc } from "../dom";
 import { toast } from "../toast";
-
-interface SearchHit {
-  id: string;
-  title: string;
-  author: string;
-  description: string;
-  preview_url: string;
-  rating: string;
-  subscribers: string;
-  installed: boolean;
-}
 
 export function initSearchPanel() {
   const input = document.getElementById("search-input") as HTMLInputElement | null;
@@ -35,7 +24,7 @@ async function doSearch() {
   container.innerHTML = '<span style="color:var(--gray-text)">搜索中...</span>';
 
   try {
-    const data = await fetchJSON<{ results?: SearchHit[] }>(`/api/search?q=${encodeURIComponent(q)}`);
+    const data = await api.search(q);
     const results: SearchHit[] = data.results || [];
 
     if (!results.length) {
@@ -66,11 +55,7 @@ async function doSearch() {
       btn.addEventListener("click", async () => {
         const id = (btn as HTMLElement).dataset.id!;
         try {
-          await fetchJSON("/api/queue/add", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ids: [id] }),
-          });
+          await api.addToQueue([id]);
           toast(`已加入队列: ${id}`, "success");
         } catch (e: any) {
           toast(`加入失败: ${e.message}`, "error");

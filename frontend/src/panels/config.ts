@@ -1,7 +1,7 @@
 /**
  * Config panel — view and edit rwmod settings.
  */
-import { api, fetchJSON } from "../api";
+import { api } from "../api";
 import { esc } from "../dom";
 import { toast } from "../toast";
 
@@ -89,7 +89,7 @@ async function checkSteamCMD() {
   if (!el) return;
   el.innerHTML = '<span style="color:var(--gray-text)">⏳ 检测中...</span>';
   try {
-    const data = await fetchJSON<{ ok?: boolean; msg?: string }>("/api/steamcmd/check");
+    const data = await api.checkSteamcmd();
     if (data.ok) {
       el.innerHTML = '<span style="color:var(--green)">✅ ' + data.msg + '</span>';
     } else {

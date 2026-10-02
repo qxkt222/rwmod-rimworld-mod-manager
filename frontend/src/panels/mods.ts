@@ -3,7 +3,7 @@
  * Shows health status badges: 🟢 maintained / 🟡 stale / 🔴 abandoned / ⚫ removed
  * Shows compatibility badges: ✅ compatible / ❌ incompatible / ❓ unknown
  */
-import { fetchJSON, type ModEntry } from "../api";
+import { api, type ExportCollectionResult, type ModEntry } from "../api";
 import { esc, escAttr } from "../dom";
 import { refreshMods } from "../main";
 import { toast } from "../toast";
@@ -37,7 +37,7 @@ export function refreshBadges() {
 
 async function loadHealth() {
   try {
-    const data = await fetchJSON<{ mods?: { folder: string; status: string }[] }>("/api/mods/health");
+    const data = await api.getModHealth();
     const healthMap: Record<string, string> = {};
     for (const m of data.mods || []) {
       healthMap[m.folder] = m.status;
@@ -62,13 +62,7 @@ async function loadHealth() {
 
 async function loadCompatibility() {
   try {
-    const data = await fetchJSON<{
-      rimworld_version?: string | null;
-      groups?: {
-        incompatible?: { folder: string }[];
-        unknown?: { folder: string }[];
-      };
-    }>("/api/mods/compatibility");
+    const data = await api.getModCompatibility();
 
     const incompat: Set<string> = new Set(
       (data.groups?.incompatible || []).map((m) => m.folder),
@@ -124,7 +118,7 @@ function bindExportCollection() {
     btn.textContent = "⏳ 生成中...";
     (btn as HTMLButtonElement).disabled = true;
     try {
-      const data = await fetchJSON<{ ids?: string[]; total?: number; mods?: any[]; markdown?: string }>("/api/mods/export-collection");
+      const data = await api.exportCollection();
       showCollectionExport(data);
     } catch (e: any) {
       toast(`导出失败: ${e.message}`, "error");
@@ -134,7 +128,7 @@ function bindExportCollection() {
   });
 }
 
-function showCollectionExport(data: any) {
+function showCollectionExport(data: ExportCollectionResult) {
   const container = document.getElementById("mod-list")!;
   const ids = data.ids || [];
   const idsText = ids.join(" ");
@@ -154,7 +148,7 @@ function showCollectionExport(data: any) {
         ${esc(idsText)}
       </div>
       <div style="margin-top:8px;font-size:11px;max-height:300px;overflow-y:auto">
-        ${data.mods?.map((m: any) => /* html */ `
+        ${data.mods?.map((m) => /* html */ `
           <div style="padding:2px 0">
             <a href="${escAttr(m.url)}" target="_blank" style="color:var(--blue)">${esc(m.name)}</a>
             <span style="color:var(--gray-text);margin-left:4px">${m.workshop_id}</span>

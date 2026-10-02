@@ -3,7 +3,7 @@
  * Uses the SSE download stream so per-batch progress is shown live instead
  * of one line followed by a long silent wait.
  */
-import { api, fetchJSON } from "../api";
+import { api } from "../api";
 import { esc, fmtBytes } from "../dom";
 import { setStatus, refreshMods } from "../main";
 
@@ -153,13 +153,7 @@ async function previewCollection() {
   log.innerHTML = '<span style="color:#7aa2f7">正在获取合集预览...</span>\n';
 
   try {
-    const d = await fetchJSON<{
-      collection_id?: string;
-      total?: number;
-      installed_count?: number;
-      new_count?: number;
-      failed_count?: number;
-    }>(`/api/collection/preview/${encodeURIComponent(cid)}`);
+    const d = await api.previewCollection(cid);
     log.innerHTML =
       `<span style="color:#9ece6a">合集 ${esc(String(d.collection_id ?? cid))}: ${d.total} 个 Mod</span>\n` +
       `<span style="color:#9ece6a">  🟢 已安装 ${d.installed_count}</span>\n` +

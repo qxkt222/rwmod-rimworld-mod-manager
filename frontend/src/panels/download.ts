@@ -1,7 +1,7 @@
 /**
  * Download panel — mod ID input, force toggle, SSE log, dependency preview.
  */
-import { api, fetchJSON, type SSEEvent } from "../api";
+import { api, type SSEEvent } from "../api";
 import { esc, fmtBytes } from "../dom";
 import { setStatus, refreshMods } from "../main";
 
@@ -41,11 +41,7 @@ async function previewDeps(raw: string) {
   container.innerHTML = '<span style="font-size:11px;color:var(--gray-text)">查询依赖中...</span>';
 
   try {
-    const data = await fetchJSON<{ deps?: Record<string, any[]> }>("/api/mods/dependencies", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ids }),
-    });
+    const data = await api.getModDependencies(ids);
     const deps = data.deps || {};
 
     let totalInstalled = 0;

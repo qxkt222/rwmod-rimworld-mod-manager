@@ -1,4 +1,4 @@
-import { fetchJSON } from "../api";
+import { api } from "../api";
 import { esc } from "../dom";
 import { toast } from "../toast";
 
@@ -13,12 +13,12 @@ async function scanSaves() {
   if (!el) return;
   el.innerHTML = '<div style="padding:16px;color:var(--gray-text)">Scanning...</div>';
   try {
-    const data = await fetchJSON<{ saves?: any[] }>("/api/saves");
+    const data = await api.listSaves();
     if (!data.saves?.length) {
       el.innerHTML = '<div style="padding:16px;text-align:center;color:var(--gray-text)">No save files found</div>';
       return;
     }
-    el.innerHTML = data.saves.map((s: any) => {
+    el.innerHTML = data.saves.map((s) => {
       const status = s.loadable ? '<span style="color:green">Ready</span>'
         : '<span style="color:orange">Missing ' + s.missing_count + ' mods</span>';
       return '<div style="padding:8px;border-bottom:1px solid var(--border)">'
@@ -36,10 +36,8 @@ async function uploadSave() {
   const input = document.getElementById("saves-file-upload") as HTMLInputElement;
   const file = input.files?.[0];
   if (!file) return;
-  const fd = new FormData();
-  fd.append("file", file);
   try {
-    const data = await fetchJSON<{ filename?: string; mod_count?: number }>("/api/saves/analyze", { method: "POST", body: fd });
+    const data = await api.analyzeSave(file);
     toast('Found ' + data.mod_count + ' mods in ' + data.filename, 'success');
     scanSaves();
   } catch (e: any) {

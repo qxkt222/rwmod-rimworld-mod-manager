@@ -2,6 +2,7 @@
  * WebSocket client for real-time download progress.
  * Falls back to SSE via api.downloadStream if WS unavailable.
  */
+import { api } from "./api";
 
 export interface WSMessage {
   type: string;
@@ -85,9 +86,7 @@ function startPolling(onMessage: WSCallback): void {
       return;
     }
     try {
-      const resp = await fetch("/api/queue");
-      if (!resp.ok) return;
-      const data = await resp.json();
+      const data = await api.getQueue();
       const msg: WSMessage = { type: "queue_update", items: data.items };
       onMessage(msg);
       for (const fn of listeners) fn(msg);

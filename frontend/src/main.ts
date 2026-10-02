@@ -561,8 +561,7 @@ document.getElementById("btn-dark")?.addEventListener("click", () => {
 
 document.getElementById("btn-export")?.addEventListener("click", async () => {
   try {
-    const resp = await fetch("/api/mods/export");
-    const data = await resp.json();
+    const data = await api.exportMods();
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -605,9 +604,8 @@ document.getElementById("btn-export")?.addEventListener("click", async () => {
 
 
 function pollOnlineStatus() {
-  fetch("/api/status")
-    .then(r => r.json())
-    .then((d: any) => {
+  api.getStatus()
+    .then((d) => {
       const el = document.getElementById("online-indicator");
       if (el) {
         el.textContent = d.online ? "🟢" : "🔴";

@@ -1,18 +1,9 @@
 /**
  * Dashboard panel — stats, recent activity, quick actions including 一键更新.
  */
-import { fetchJSON } from "../api";
+import { api, type DashboardData, type QueueItem } from "../api";
 import { esc, setText } from "../dom";
 import { toast } from "../toast";
-
-interface DashboardData {
-  mods_count: number;
-  updates_pending: number;
-  disk_usage_mb: number;
-  recent_activity: { workshop_id: string; mod_name: string; status: string; created_at: string }[];
-}
-
-interface QueueSnapshot { id: string; name: string; status: string; progress: number; msg: string }
 
 let queuePollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -23,7 +14,7 @@ export function initDashboardPanel(): void {
 
 async function loadDashboard(): Promise<void> {
   try {
-    const d = await fetchJSON<DashboardData>("/api/dashboard");
+    const d = await api.getDashboard();
 
     setText("db-mods-count", String(d.mods_count));
     setText("db-updates-count", String(d.updates_pending));
@@ -57,7 +48,7 @@ function bindAutoUpdate(): void {
     btn.textContent = "⏳ 检查更新中...";
 
     try {
-      const data = await fetchJSON<any>("/api/auto-update/run", { method: "POST" });
+      const data = await api.runAutoUpdate();
 
       if (data.ok === false) {
         // 已在运行：显示后端给出的提示，避免 undefined
@@ -93,7 +84,7 @@ function pollQueueProgress(btn: HTMLButtonElement, original: string | null): voi
   stopQueuePolling();
   queuePollTimer = setInterval(async () => {
     try {
-      const data = await fetchJSON<{ items: QueueSnapshot[] }>("/api/queue");
+      const data = await api.getQueue();
       const items = data.items || [];
 
       const active = items.filter(i => i.status === "pending" || i.status === "downloading");

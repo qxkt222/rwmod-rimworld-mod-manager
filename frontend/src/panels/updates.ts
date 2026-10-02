@@ -2,18 +2,9 @@
  * Update check panel — compare local mod timestamps with Steam Workshop.
  * Supports one-click "Update All" via POST /api/auto-update/run.
  */
-import { fetchJSON } from "../api";
+import { api, type UpdateItem } from "../api";
 import { esc } from "../dom";
 import { toast } from "../toast";
-
-interface UpdateItem {
-  workshop_id: string;
-  name: string;
-  folder: string;
-  remote_title: string;
-  time_updated: number;
-  file_description: string;
-}
 
 let _lastUpdateItems: UpdateItem[] = [];
 
@@ -31,7 +22,7 @@ async function checkUpdates() {
   container.innerHTML = '<span style="color:var(--gray-text)">正在检查更新...</span>';
 
   try {
-    const data = await fetchJSON<{ updates?: UpdateItem[] }>("/api/mods/check-updates");
+    const data = await api.checkUpdates();
     const updates: UpdateItem[] = data.updates || [];
     _lastUpdateItems = updates;
 
@@ -110,11 +101,7 @@ function renderUpdateList(updates: UpdateItem[], container: HTMLElement) {
     b.addEventListener("click", async () => {
       const id = (b as HTMLElement).dataset.id!;
       try {
-        await fetchJSON("/api/queue/add", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ids: [id] }),
-        });
+        await api.addToQueue([id]);
         toast(`已加入队列: ${id}`, "success");
       } catch (e: any) {
         toast(`失败: ${e.message}`, "error");
@@ -131,7 +118,7 @@ async function updateAll() {
   container.innerHTML = '<span style="color:#7aa2f7">正在全部加入队列并开始下载...</span>';
 
   try {
-    const data = await fetchJSON<{ ok?: boolean; msg?: string; checked?: number; outdated?: number; queued?: number }>("/api/auto-update/run", { method: "POST" });
+    const data = await api.runAutoUpdate();
     if (data.ok === false) {
       // 已在运行：显示后端提示，避免 undefined
       const msg = data.msg || "更新检查已在运行中";

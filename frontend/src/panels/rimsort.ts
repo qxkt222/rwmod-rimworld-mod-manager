@@ -1,7 +1,7 @@
 /**
  * RimSort panel — generate ModsConfig.xml, compare with installed mods.
  */
-import { fetchJSON } from "../api";
+import { api } from "../api";
 import { esc } from "../dom";
 import { toast } from "../toast";
 import { refreshMods } from "../main";
@@ -17,7 +17,7 @@ async function generateConfig() {
   const btn = document.getElementById("btn-rimsort-generate") as HTMLButtonElement;
   btn.disabled = true;
   try {
-    const data = await fetchJSON<{ modsconfig_xml?: string }>("/api/rimsort/generate", { method: "POST" });
+    const data = await api.generateRimsort();
     const xml = data.modsconfig_xml;
     if (!xml) {
       // 失败时不下载假 XML
@@ -57,9 +57,7 @@ async function compareFile() {
   container.innerHTML = '<span style="color:var(--gray-text)">正在对比...</span>';
 
   try {
-    const fd = new FormData();
-    fd.append("file", file);
-    const data = await fetchJSON<any>("/api/rimsort/compare-file", { method: "POST", body: fd });
+    const data = await api.compareRimsortFile(file);
 
     if (data.error) {
       container.innerHTML = `<span style="color:var(--red)">解析失败: ${data.error}</span>`;
@@ -115,11 +113,7 @@ function renderMissing(ids: string[], details: any[]): string {
       b.addEventListener("click", async () => {
         const wid = (b as HTMLElement).dataset.wid!;
         try {
-          await fetchJSON("/api/queue/add", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ids: [wid] }),
-          });
+          await api.addToQueue([wid]);
           toast(`已加入队列: ${wid}`, "success");
         } catch (e: any) {
           toast(`失败: ${e.message}`, "error");
@@ -171,7 +165,7 @@ function bindOrderCheck() {
     container.innerHTML = '<span style="color:var(--gray-text)">正在分析加载顺序...</span>';
 
     try {
-      const data = await fetchJSON<any>("/api/rimsort/check-order");
+      const data = await api.checkLoadOrder();
 
       if (data.error) {
         container.innerHTML = `<span style="color:var(--red)">${esc(data.error)}</span>`;

@@ -1,21 +1,10 @@
 /**
  * Queue panel — manage download queue, view progress bars.
  */
-import { fetchJSON } from "../api";
+import { api, type QueueItem } from "../api";
 import { esc, fmtBytes } from "../dom";
 import { connectWS } from "../ws";
 import { refreshMods, setStatus } from "../main";
-
-interface QueueItem {
-  id: string;
-  name: string;
-  status: string;
-  progress: number;
-  msg: string;
-  downloaded?: number;
-  total?: number;
-  speed_bps?: number;
-}
 
 let items: QueueItem[] = [];
 
@@ -39,7 +28,7 @@ export function initQueuePanel() {
 
 async function refreshState() {
   try {
-    const data = await fetchJSON<{ items: QueueItem[] }>("/api/queue");
+    const data = await api.getQueue();
     items = data.items || [];
     render();
   } catch {}
@@ -50,7 +39,7 @@ async function startQueue() {
   btn.disabled = true;
   setStatus("blue", "正在处理队列...");
   try {
-    await fetchJSON("/api/queue/start", { method: "POST" });
+    await api.startQueue();
     await refreshMods();
     setStatus("green", "队列完成");
   } catch {
@@ -61,7 +50,7 @@ async function startQueue() {
 }
 
 async function clearQueue() {
-  await fetchJSON("/api/queue/clear", { method: "POST" });
+  await api.clearQueue();
   refreshState();
 }
 
@@ -111,7 +100,7 @@ function render() {
   container.querySelectorAll("[data-remove]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const id = (btn as HTMLElement).dataset.remove!;
-      await fetchJSON(`/api/queue/${id}`, { method: "DELETE" });
+      await api.removeQueueItem(id);
       refreshState();
     });
   });
