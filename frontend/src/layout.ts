@@ -27,6 +27,7 @@ export function renderLayout(): void {
     <button class="tab" data-panel="saves">Saves</button>
     <button class="tab" data-panel="tags">Tags</button>
     <button class="tab" data-panel="config">⚙ 配置</button>
+    <button class="tab" data-panel="settings">🛠 Mod 设置</button>
   </div>
   <div class="spacer"></div>
   <div class="nav-actions">
@@ -56,6 +57,7 @@ export function renderLayout(): void {
     <div class="side-item" data-panel="saves"><span class="ico">Saves</span></div>
     <div class="side-item" data-panel="tags"><span class="ico">Tags</span></div>
     <div class="side-item" data-panel="config"><span class="ico">⚙</span>配置</div>
+    <div class="side-item" data-panel="settings"><span class="ico">🛠</span>Mod 设置</div>
   </aside>
 
   <div id="workspace">
@@ -174,6 +176,12 @@ export function renderLayout(): void {
             <button class="btn btn-ghost btn-sm" id="btn-export-collection">📤 导出合集</button>
             <span style="font-weight:400;font-size:12px;color:var(--gray-text)" id="mod-count-label"></span>
           </div>
+        </div>
+        <div class="mods-toolbar" style="display:flex;gap:6px;align-items:center;padding:6px 16px;border-bottom:1px solid var(--border)">
+          <label class="check-label" style="margin:0"><input type="checkbox" id="mods-only-active" /> 仅看已启用</label>
+          <button class="btn btn-ghost btn-sm" id="btn-mods-select-all">全选</button>
+          <button class="btn btn-primary btn-sm" id="btn-mods-enable">✅ 启用</button>
+          <button class="btn btn-ghost btn-sm" id="btn-mods-disable">⛔ 禁用</button>
         </div>
         <div id="mod-list" style="font-size:12px;color:var(--gray-text)">加载中...</div>
       </div>
@@ -370,6 +378,36 @@ export function renderLayout(): void {
           <input type="checkbox" id="export-include-secrets" /> 包含 Steam API 密钥（仅限自己迁移用，打包分享时勿勾选）
         </label>
         <div id="transfer-status" style="margin-top:8px;font-size:12px"></div>
+      </div>
+    </div>
+
+    <div class="panel" id="panel-settings">
+      <div class="card" id="mod-settings-card">
+        <div class="card-header" style="display:flex;justify-content:space-between">
+          <span>🛠 Mod 设置文件（Config/Mod_*.xml）</span>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-ghost btn-sm" id="btn-mod-settings-refresh">🔄 刷新</button>
+            <button class="btn btn-primary btn-sm" id="btn-mod-settings-backup-all">💾 备份全部</button>
+          </div>
+        </div>
+        <div id="mod-settings-status" style="font-size:11px;color:var(--gray-text);padding:4px 16px"></div>
+        <div id="mod-settings-editor" style="display:none;padding:8px 16px;border-top:1px solid var(--border)">
+          <div id="mod-settings-editor-title" style="font-size:12px;font-weight:600;margin-bottom:6px"></div>
+          <textarea id="mod-settings-xml" spellcheck="false" style="width:100%;height:260px;font-family:monospace;font-size:12px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px"></textarea>
+          <label class="check-label" style="margin-top:8px">
+            <input type="checkbox" id="mod-settings-ack" /> 我已关闭 RimWorld（写入前必须确认）
+          </label>
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button class="btn btn-primary" id="btn-mod-settings-save">💾 保存</button>
+            <button class="btn btn-ghost" id="btn-mod-settings-restore-latest">↩️ 恢复最近备份</button>
+            <button class="btn btn-ghost" id="btn-mod-settings-close">✕ 关闭</button>
+          </div>
+        </div>
+        <div id="mod-settings-list" style="font-size:12px;color:var(--gray-text)">加载中...</div>
+        <div style="font-size:12px;color:var(--gray-text);padding:8px 16px;border-top:1px solid var(--border)">
+          <div style="font-weight:600;margin-bottom:4px">🗂 设置备份</div>
+          <div id="mod-settings-backups">加载中...</div>
+        </div>
       </div>
     </div>
   </div>

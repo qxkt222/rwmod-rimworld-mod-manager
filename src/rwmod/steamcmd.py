@@ -33,17 +33,47 @@ _log = logging.getLogger(__name__)
 _live_procs: dict[str, subprocess.Popen] = {}
 _live_guard = threading.Lock()
 
+# Batches that cancel_download() killed (the Popen objects themselves — held
+# by identity, not id(), so a garbage-collected mock cannot alias a new
+# process). The batch needs this to tell "the process died because the user
+# cancelled" from a real failure and report CANCELLED instead of re-downloading
+# every item. Guarded by _live_guard; entries are consumed and removed by
+# workshop_download_many. The cap only matters for tests that register a mock
+# in _live_procs directly and never run a batch.
+_cancelled_procs: set[object] = set()
+_CANCELLED_PROCS_MAX = 64
+
+# ── global run lock (P1-3) ─────────────────────────────────────────
+# SteamCMD installations are not concurrency-safe: every process shares
+# logs/workshop_log.txt, appcache/, depotcache/, steamapps/ and the anonymous
+# login state. One module-level lock serializes every run (queue batches,
+# SSE/direct downloads, the mods router) so only one child process exists at a
+# time. It is deliberately a plain Lock, not a Semaphore: keeping the public
+# MAX_CONCURRENT semantics untouched while making the actual execution serial.
+_run_lock = threading.Lock()
+
 
 def cancel_download(mod_id: str) -> bool:
     """Kill the in-flight SteamCMD subprocess for ``mod_id``, if any.
 
-    Returns True if a process was found and terminated.
+    Returns True if a process was found and the termination signal was
+    delivered. If signal delivery fails, ``kill()`` is still attempted as a
+    fallback; the return value stays False so a caller can tell that the
+    process-group path (which also stops SteamCMD's download children) did
+    not work.
     """
     with _live_guard:
         proc = _live_procs.get(mod_id)
         if proc is None:
             return False
+        # Mark the whole batch as user-cancelled before killing it, so
+        # workshop_download_many reports CANCELLED (not UNKNOWN) for the
+        # unfinished ids and keeps finished siblings installable.
+        if len(_cancelled_procs) >= _CANCELLED_PROCS_MAX:
+            _cancelled_procs.clear()
+        _cancelled_procs.add(proc)
     _log.info("终止 SteamCMD 进程（mod %s, pid %s）", mod_id, proc.pid)
+    signaled = False
     try:
         if os.name == "nt":
             # CTRL_BREAK_EVENT reaches the whole process group on Windows;
@@ -57,6 +87,12 @@ def cancel_download(mod_id: str) -> bool:
                 proc.terminate()
         else:
             proc.terminate()
+        signaled = True
+    except (OSError, subprocess.SubprocessError) as e:
+        # Delivery failed (no console / access denied / already gone) — fall
+        # through to kill() instead of leaving the process running.
+        _log.warning("发送取消信号失败，降级为 kill（mod %s）: %s", mod_id, e)
+    try:
         proc.kill()  # belt and braces — CTRL_BREAK is advisory on some setups
     except (OSError, subprocess.SubprocessError):
         with _live_guard:
@@ -64,7 +100,7 @@ def cancel_download(mod_id: str) -> bool:
         return False
     with _live_guard:
         _live_procs.pop(mod_id, None)
-    return True
+    return signaled
 
 
 def active_download_count() -> int:
@@ -87,10 +123,18 @@ class ErrorKind:
     ACCESS_DENIED = "access_denied"  # private/hidden mod
     NO_MATCH = "no_match"  # wrong game AppID
     TIMEOUT = "timeout"
+    # SteamCMD itself cannot run here (e.g. its directory contains non-ASCII
+    # characters). Nothing about the mod is wrong — retrying is pointless.
+    ENVIRONMENT = "environment"
+    # The user cancelled an in-flight batch. The process was killed, so the
+    # unfinished items must be re-queued (or failed after the retry budget),
+    # not retried immediately. Deliberately NOT in NON_RETRYABLE: callers
+    # handle it explicitly instead of logging it as a permanent failure.
+    CANCELLED = "cancelled"
     UNKNOWN = "unknown"
 
     # Errors that will NEVER succeed on retry → skip retry + Skymods
-    NON_RETRYABLE = {FAILURE, FILE_NOT_FOUND, ACCESS_DENIED, NO_MATCH}
+    NON_RETRYABLE = {FAILURE, FILE_NOT_FOUND, ACCESS_DENIED, NO_MATCH, ENVIRONMENT}
 
     _HUMAN: dict[str, str] = {
         OK: "下载成功",
@@ -99,6 +143,8 @@ class ErrorKind:
         ACCESS_DENIED: "Mod 为私密/隐藏状态，无法匿名下载",
         NO_MATCH: "不是 RimWorld 的 Mod（属于其他游戏）",
         TIMEOUT: "SteamCMD 超时无响应",
+        ENVIRONMENT: "SteamCMD 运行环境不可用（路径含非 ASCII 字符等）",
+        CANCELLED: "下载已取消（同批其他项被取消）",
         UNKNOWN: "未知错误",
     }
 
@@ -116,6 +162,10 @@ class DownloadResult:
     error_kind: str = ErrorKind.UNKNOWN
     error_detail: str = ""
     output_lines: list[str] = field(default_factory=list)
+    # True when SteamCMD had already printed "Success. Downloaded item <id>"
+    # before the batch was killed. Lets a cancelled batch install the items
+    # that actually finished and re-queue only the unfinished ones.
+    completed: bool = False
 
 
 # Progress callback signature: (mod_id, percent, downloaded_bytes, total_bytes).
@@ -141,6 +191,7 @@ class _ProgressReader(threading.Thread):
         r"Update state \(0x[0-9a-fA-F]+\) downloading, progress: ([\d.]+) \((\d+) / (\d+)\)"
     )
     _ITEM_START_RE = re.compile(r"Downloading item (\d+)")
+    _ITEM_SUCCESS_RE = re.compile(r"Success\. Downloaded item (\d+)")
     _ITEM_END_RE = re.compile(r"Success\. Downloaded item (\d+)|Download item (\d+) result")
 
     def __init__(
@@ -155,6 +206,9 @@ class _ProgressReader(threading.Thread):
         self._cb = progress_cb
         self.lines: list[str] = []
         self.current_id: str | None = None
+        # Items SteamCMD reported as fully downloaded. Read by
+        # workshop_download_many when a batch is cancelled mid-flight.
+        self.completed: set[str] = set()
 
     def run(self) -> None:
         if self._fh is None:
@@ -173,6 +227,11 @@ class _ProgressReader(threading.Thread):
         if m and m.group(1) in self._mod_ids:
             self.current_id = m.group(1)
             return
+        success = self._ITEM_SUCCESS_RE.search(line)
+        if success and success.group(1) in self._mod_ids:
+            # Remember this even if the batch is killed moments later: the
+            # content is already on disk and can be installed.
+            self.completed.add(success.group(1))
         if self._ITEM_END_RE.search(line):
             self.current_id = None
             return
@@ -208,6 +267,43 @@ class SteamCMD:
     def workshop_content_dir(self) -> Path:
         """Directory where SteamCMD stores downloaded workshop content."""
         return self.steam_dir / "steamapps" / "workshop" / "content" / self.STEAM_APP_ID
+
+    # Output markers SteamCMD prints when it cannot run from its own path.
+    # The message is localized (Chinese on a zh-CN Windows install), so match
+    # both the English and the Chinese form.
+    _ENV_OUTPUT_MARKERS = ("incompatible path", "非 ascii", "非ascii")
+
+    @staticmethod
+    def _has_non_ascii_path(path: Path) -> bool:
+        return any(ord(ch) > 127 for ch in str(path))
+
+    def environment_error(self) -> str | None:
+        """Return a human-readable detail when SteamCMD cannot run here.
+
+        SteamCMD on Windows refuses to start when its own directory contains
+        non-ASCII characters — it exits within a second, writes no
+        workshop_log lines, and the old code then reported the misleading
+        "SteamCMD 返回成功但未找到下载内容" for every item. Detecting it up
+        front turns that into one actionable message.
+        """
+        if os.name == "nt" and self._has_non_ascii_path(self.steam_dir):
+            return (
+                f"SteamCMD 无法从含非 ASCII 字符的路径运行：{self.steam_dir}。"
+                "请把 SteamCMD 移到纯英文路径（例如 D:\\steamcmd），"
+                "并在设置中更新 steamcmd 路径。"
+            )
+        return None
+
+    def _fatal_environment_error(self, lines: list[str]) -> str | None:
+        """Detect the same failure from a run's output (path escaped the
+        pre-check, e.g. a non-ASCII cwd symlink)."""
+        joined = "\n".join(lines).lower()
+        if any(marker in joined for marker in self._ENV_OUTPUT_MARKERS):
+            return (
+                f"SteamCMD 无法从路径 {self.steam_dir} 运行（路径含非 ASCII 字符）。"
+                "请把 SteamCMD 移到纯英文路径，并在设置中更新 steamcmd 路径。"
+            )
+        return None
 
     def _log_offset(self) -> int:
         """Snapshot of workshop_log.txt size *before* this run.
@@ -272,98 +368,170 @@ class SteamCMD:
         if not valid:
             return results
 
+        # A non-ASCII SteamCMD path makes SteamCMD exit before it downloads
+        # anything. Reject up front with the real reason instead of letting
+        # every item fail later as "success but no content".
+        env_error = self.environment_error()
+        if env_error is not None:
+            return {
+                mid: DownloadResult(
+                    success=False,
+                    mod_id=mid,
+                    error_kind=ErrorKind.ENVIRONMENT,
+                    error_detail=env_error,
+                )
+                for mid in valid
+            }
+
         cmd = [self.exe, "+login", "anonymous"]
         for mid in valid:
             cmd += ["+workshop_download_item", self.STEAM_APP_ID, mid]
         cmd += ["+quit"]
-        log_offset = self._log_offset()
 
-        # Total timeout scales with batch size (each item gets the 10-min
-        # budget of the single-item path) but is capped so a giant batch can
-        # never pin a worker for hours.
-        timeout_secs = min(
-            40 * 60,
-            max(self._TIMEOUT_MINUTES * 60, 5 * 60 * len(valid)),
-        )
-
-        try:
-            proc = subprocess.Popen(  # nosec B603 — command list is fixed, no shell, no user input
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                bufsize=1,  # line-buffered — progress lines arrive promptly
-                cwd=str(self.steam_dir),
-            )
-        except OSError as e:
-            return {
-                mid: DownloadResult(
-                    success=False,
-                    mod_id=mid,
-                    error_kind=ErrorKind.UNKNOWN,
-                    error_detail=f"无法启动 SteamCMD: {e}",
-                )
-                for mid in valid
-            }
-
-        # Register under every id so cancel_download(mod_id) can kill the
-        # shared process from any of the batch's items.
-        with _live_guard:
-            for mid in valid:
-                _live_procs[mid] = proc
+        # P1-3: serialize every SteamCMD run per installation. Queue batches,
+        # SSE/direct downloads and the mods router all funnel through here;
+        # concurrent processes would share logs/, appcache/, depotcache/ and
+        # the anonymous login state. Progress callbacks and cancel_download()
+        # keep working — the lock covers only the child process lifetime.
         reader: _ProgressReader | None = None
+        batch_cancelled = False
+        _run_lock.acquire()
         try:
-            # A reader thread drains stdout line-by-line while the process
-            # runs, so progress callbacks fire in real time (communicate()
-            # would buffer everything until exit).
-            reader = _ProgressReader(proc.stdout, set(valid), progress_cb)
-            reader.start()
-            proc.wait(timeout=timeout_secs)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+            log_offset = self._log_offset()
+
+            # Total timeout scales with batch size (each item gets the 10-min
+            # budget of the single-item path) but is capped so a giant batch
+            # can never pin a worker for hours.
+            timeout_secs = min(
+                40 * 60,
+                max(self._TIMEOUT_MINUTES * 60, 5 * 60 * len(valid)),
+            )
+
+            # Windows: a new process group is what makes cancel_download()'s
+            # CTRL_BREAK_EVENT reach *this* child (and its download children)
+            # instead of the server's own console group — without the flag the
+            # signal is silently not delivered and can even terminate the
+            # caller's shell. Non-Windows must pass 0 (Windows-only flag).
+            creationflags = 0
+            if os.name == "nt":
+                creationflags = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+
             try:
-                proc.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                _log.warning(
-                    "SteamCMD 批量 %s 超时且 kill 后 30s 仍未退出（进程可能残留）",
-                    valid[:5],
+                proc = subprocess.Popen(  # nosec B603 — command list is fixed, no shell, no user input
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    bufsize=1,  # line-buffered — progress lines arrive promptly
+                    cwd=str(self.steam_dir),
+                    creationflags=creationflags,
                 )
-            if reader is not None:
-                reader.join(timeout=5)
-            with contextlib.suppress(Exception):
-                if proc.stdout:
-                    proc.stdout.close()
+            except OSError as e:
+                return {
+                    mid: DownloadResult(
+                        success=False,
+                        mod_id=mid,
+                        error_kind=ErrorKind.UNKNOWN,
+                        error_detail=f"无法启动 SteamCMD: {e}",
+                    )
+                    for mid in valid
+                }
+
+            try:
+                # Register under every id so cancel_download(mod_id) can kill
+                # the shared process from any of the batch's items.
+                with _live_guard:
+                    for mid in valid:
+                        _live_procs[mid] = proc
+                # A reader thread drains stdout line-by-line while the process
+                # runs, so progress callbacks fire in real time (communicate()
+                # would buffer everything until exit).
+                reader = _ProgressReader(proc.stdout, set(valid), progress_cb)
+                reader.start()
+                proc.wait(timeout=timeout_secs)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                try:
+                    proc.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    _log.warning(
+                        "SteamCMD 批量 %s 超时且 kill 后 30s 仍未退出（进程可能残留）",
+                        valid[:5],
+                    )
+                if reader is not None:
+                    reader.join(timeout=5)
+                with contextlib.suppress(Exception):
+                    if proc.stdout:
+                        proc.stdout.close()
+                return {
+                    mid: DownloadResult(
+                        success=False,
+                        mod_id=mid,
+                        error_kind=ErrorKind.TIMEOUT,
+                        error_detail="SteamCMD 批量下载超时",
+                    )
+                    for mid in valid
+                }
+            finally:
+                # The process has exited (or was killed) — free all slots.
+                with _live_guard:
+                    batch_cancelled = proc in _cancelled_procs
+                    _cancelled_procs.discard(proc)
+                    for mid in valid:
+                        _live_procs.pop(mid, None)
+                if reader is not None:
+                    reader.join(timeout=5)
+                with contextlib.suppress(Exception):
+                    if proc.stdout:
+                        proc.stdout.close()
+        finally:
+            _run_lock.release()
+
+        if batch_cancelled:
+            # The user killed the shared process. Report CANCELLED for every
+            # item SteamCMD had not finished; items that printed "Success"
+            # are already on disk and are reported as successes so the caller
+            # installs them instead of re-downloading the whole batch.
+            cancelled_lines = list(reader.lines) if reader is not None else []
+            completed = set(reader.completed) if reader is not None else set()
             return {
                 mid: DownloadResult(
-                    success=False,
+                    success=mid in completed,
                     mod_id=mid,
-                    error_kind=ErrorKind.TIMEOUT,
-                    error_detail="SteamCMD 批量下载超时",
+                    error_kind=ErrorKind.OK if mid in completed else ErrorKind.CANCELLED,
+                    error_detail="" if mid in completed else "SteamCMD 批次被用户取消",
+                    output_lines=cancelled_lines,
+                    completed=mid in completed,
                 )
                 for mid in valid
             }
-        finally:
-            # The process has exited (or was killed) — free all registry slots.
-            with _live_guard:
-                for mid in valid:
-                    _live_procs.pop(mid, None)
-            if reader is not None:
-                reader.join(timeout=5)
-            with contextlib.suppress(Exception):
-                if proc.stdout:
-                    proc.stdout.close()
 
         lines: list[str] = list(reader.lines) if reader is not None else []
 
+        # SteamCMD may still refuse to start for path reasons the pre-check
+        # could not see (e.g. a non-ASCII cwd reached through a link).
+        fatal_env = self._fatal_environment_error(lines)
+        if fatal_env is not None:
+            return {
+                mid: DownloadResult(
+                    success=False,
+                    mod_id=mid,
+                    error_kind=ErrorKind.ENVIRONMENT,
+                    error_detail=fatal_env,
+                    output_lines=lines,
+                )
+                for mid in valid
+            }
+
         # ── parse workshop_log.txt (only this run's appended section) ──
         for mid in valid:
+            content_exists = (self.workshop_content_dir / mid).exists()
             error_kind, error_detail = self._parse_workshop_error(mid, log_offset)
             if error_kind == ErrorKind.OK:
                 # Double-check the content actually exists
-                content_dir = self.workshop_content_dir / mid
-                if content_dir.exists():
+                if content_exists:
                     results[mid] = DownloadResult(
                         success=True,
                         mod_id=mid,
@@ -373,7 +541,17 @@ class SteamCMD:
                     continue
                 # SteamCMD said OK but file not on disk → treat as failure
                 error_kind = ErrorKind.FAILURE
-                error_detail = "SteamCMD 返回成功但未找到下载内容"
+                error_detail = "SteamCMD 报告下载成功，但磁盘上找不到下载内容"
+            elif content_exists:
+                # No usable log line, but the files are on disk (e.g. the log
+                # was rotated mid-run). Trust the filesystem over the log.
+                results[mid] = DownloadResult(
+                    success=True,
+                    mod_id=mid,
+                    error_kind=ErrorKind.OK,
+                    output_lines=lines,
+                )
+                continue
             results[mid] = DownloadResult(
                 success=False,
                 mod_id=mid,
@@ -425,14 +603,22 @@ class SteamCMD:
         )
         detail_matches = list(re.finditer(detail_pattern, text))
 
-        error_kind = ErrorKind.OK
-        error_detail = ""
+        # No result line for this id in the section *this* run appended: the
+        # item was never processed. That is NOT success — defaulting to OK here
+        # produced a stream of bogus "SteamCMD 返回成功但未找到下载内容" errors.
+        if not result_matches:
+            if detail_matches:
+                raw_detail = detail_matches[-1].group(1).strip()
+                return ErrorKind.UNKNOWN, f"SteamCMD: {raw_detail}"
+            return (
+                ErrorKind.UNKNOWN,
+                "workshop_log.txt 本次运行没有记录该 Mod 的下载结果"
+                "（SteamCMD 可能未启动或提前退出）",
+            )
 
-        # Parse the last result line
-        if result_matches:
-            raw_reason = result_matches[-1].group(1).strip()
-            error_kind = self._classify_reason(raw_reason)
-            error_detail = f"SteamCMD: {raw_reason}"
+        raw_reason = result_matches[-1].group(1).strip()
+        error_kind = self._classify_reason(raw_reason)
+        error_detail = f"SteamCMD: {raw_reason}"
 
         # Detail lines give more specific info (e.g. "Wrong AppID 241100")
         if detail_matches:

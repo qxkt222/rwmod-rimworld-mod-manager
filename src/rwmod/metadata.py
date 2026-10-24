@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from rwmod.mod_rules import normalize_package_id
 from rwmod.xmlutil import parse_xml_root
 
 # Safe XML parser: rejects entity-expansion / external-entity (XXE) attacks.
@@ -13,8 +14,20 @@ __all__ = [
     "ModMeta",
     "installed_mod_metas",
     "installed_package_ids",
+    "package_id_key",
     "package_id_to_workshop_id",
 ]
+
+
+def package_id_key(package_id: str | None) -> str:
+    """Comparison key for a packageId — trimmed and case-folded.
+
+    RimWorld lowercases every packageId it writes (ModsConfig.xml, save files),
+    while a local About.xml keeps the author's original casing, so the two
+    routinely differ only by case. Compare through this key; keep the original
+    spelling for display or for anything written back to disk.
+    """
+    return normalize_package_id(package_id)
 
 
 class ModMeta:

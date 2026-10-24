@@ -19,7 +19,7 @@ def list_profiles(
     return {
         "profiles": _list(),
         "modsconfig_path": str(path)
-        if (path := resolve_modsconfig_path(cfg.rimworld_dir))
+        if (path := resolve_modsconfig_path(cfg.rimworld_dir, config_dir=cfg.config_dir))
         else None,
     }
 
@@ -35,7 +35,7 @@ def save_profile(
     from rwmod.profile import resolve_modsconfig_path
     from rwmod.profile import save_profile as _save
 
-    source = resolve_modsconfig_path(cfg.rimworld_dir)
+    source = resolve_modsconfig_path(cfg.rimworld_dir, config_dir=cfg.config_dir)
     if not source:
         from rwmod.rimsort import generate_modsconfig
 
@@ -48,11 +48,12 @@ def restore_profile(
     name: str,
     cfg: Config = Depends(get_config),
 ):
-    from rwmod.profile import resolve_modsconfig_path
+    from rwmod.profile import modsconfig_target
     from rwmod.profile import restore_profile as _restore
     from rwmod.undo import snapshot_modsconfig
 
-    target = resolve_modsconfig_path(cfg.rimworld_dir) or (cfg.rimworld_dir / "ModsConfig.xml")
+    # Sandbox-checked; cfg.config_dir (when set) wins over LocalLow discovery.
+    target = modsconfig_target(cfg.rimworld_dir, cfg.config_dir)
     if target.exists():
         snapshot_modsconfig(target, label="restore")
     return _restore(name, target)

@@ -14,6 +14,28 @@ export interface ModEntry {
   name: string;
   package_id: string;
   workshop_id: string;
+  /** True when the packageId is listed in ModsConfig.xml's activeMods. */
+  active: boolean;
+}
+
+export interface ActiveModsResult {
+  ok: boolean;
+  active_count: number;
+  added: string[];
+  removed: string[];
+  skipped: string[];
+  backup: string | null;
+  needs_sort: boolean;
+}
+
+export interface InstanceData {
+  id: string;
+  name: string;
+  steamcmd_path: string;
+  mods_dir: string;
+  rimworld_dir: string;
+  backup_dir: string;
+  config_dir: string | null;
 }
 
 export interface ConfigData {
@@ -25,6 +47,20 @@ export interface ConfigData {
   has_steam_api_key: boolean;
   steamcmd_exists: boolean;
   mods_dir_exists: boolean;
+  /** Every configured RimWorld installation. */
+  instances: InstanceData[];
+  /** Id of the instance the flat fields above describe. */
+  active_instance: string;
+}
+
+export interface CreateInstancePayload {
+  id?: string;
+  name?: string;
+  steamcmd_path?: string;
+  mods_dir: string;
+  rimworld_dir?: string;
+  backup_dir?: string;
+  config_dir?: string;
 }
 
 export interface DownloadResult {
@@ -109,6 +145,72 @@ export interface CollectionPreview {
   installed_count?: number;
   new_count?: number;
   failed_count?: number;
+}
+
+// ── Mod settings files (Config/Mod_*.xml) ────────────────────────
+
+export interface ModSettingEntry {
+  filename: string;
+  size: number;
+  mtime: string;
+  associated: boolean;
+  workshop_id: string;
+  package_id: string;
+  name: string;
+}
+
+export interface ModSettingList {
+  config_dir: string | null;
+  files: ModSettingEntry[];
+}
+
+export interface ModSettingDetail {
+  filename: string;
+  size: number;
+  mtime: string;
+  xml: string;
+  well_formed: boolean;
+  root_tag: string;
+  game_running: boolean;
+}
+
+export interface ModSettingBackup {
+  /** Backup file name under ~/.rwmod/mod_settings_backups/. */
+  filename: string;
+  /** Original Mod_*.xml this backup belongs to. */
+  source: string;
+  size: number;
+  mtime: string;
+}
+
+export interface ModSettingBackupList {
+  backup_dir: string;
+  backups: ModSettingBackup[];
+}
+
+export interface ModSettingWriteResult {
+  ok: boolean;
+  filename: string;
+  size: number;
+  backup: string;
+  game_running: boolean;
+  warning?: string;
+}
+
+export interface ModSettingRestoreResult {
+  ok: boolean;
+  filename: string;
+  restored_from: string;
+  backup: string;
+  game_running: boolean;
+  warning?: string;
+}
+
+export interface ModSettingBackupAllResult {
+  ok: boolean;
+  count: number;
+  backup_dir: string;
+  backups: { filename: string; backup: string; size: number }[];
 }
 
 // ── updates / search / saves / tags ──────────────────────────────
@@ -227,6 +329,36 @@ export const api = {
   // ── mods ───────────────────────────────────────────────────────
   listMods: () => req<ModEntry[]>("/mods"),
 
+  /** Batch enable/disable packageIds in ModsConfig.xml (appends; no reorder). */
+  setModsActive: (enable: string[], disable: string[], sort = false) =>
+    postJSON<ActiveModsResult>("/mods/active", { enable, disable, sort }),
+
+  // ── mod settings files (Config/Mod_*.xml) ──────────────────────
+  listModSettings: () => req<ModSettingList>("/mod-settings"),
+
+  getModSetting: (file: string) =>
+    req<ModSettingDetail>(`/mod-settings/${encodeURIComponent(file)}`),
+
+  /** PUT the raw XML. `ackGameClosed` must be true or the server answers 400. */
+  saveModSetting: (file: string, xml: string, ackGameClosed: boolean) =>
+    req<ModSettingWriteResult>(`/mod-settings/${encodeURIComponent(file)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ xml, ack_game_closed: ackGameClosed }),
+    }),
+
+  /** Restore a backup (empty `backup` = the newest one for this file). */
+  restoreModSetting: (file: string, backup: string, ackGameClosed: boolean) =>
+    postJSON<ModSettingRestoreResult>(`/mod-settings/${encodeURIComponent(file)}/restore`, {
+      backup,
+      ack_game_closed: ackGameClosed,
+    }),
+
+  listModSettingBackups: () => req<ModSettingBackupList>("/mod-settings/backups"),
+
+  backupAllModSettings: () =>
+    req<ModSettingBackupAllResult>("/mod-settings/backup-all", { method: "POST" }),
+
   getModHealth: () => req<{ mods?: ModHealthEntry[] }>("/mods/health"),
 
   getModCompatibility: () => req<ModCompatibility>("/mods/compatibility"),
@@ -271,14 +403,27 @@ export const api = {
   /**
    * Add mod ids (or Workshop URLs) to the download queue.
    * Single implementation — search/updates/rimsort used to duplicate the
-   * POST/header/body verbatim.
+   * POST/header/body verbatim. `force` marks the ids as updates: an already
+   * installed mod is replaced instead of skipped as "已安装".
    */
-  addToQueue: (ids: string[]) =>
-    postJSON<{ added: number; items: { id: string; status: string }[] }>("/queue/add", { ids }),
+  addToQueue: (ids: string[], force = false) =>
+    postJSON<{ added: number; items: { id: string; status: string }[] }>("/queue/add", {
+      ids,
+      force,
+    }),
 
   startQueue: () => req<{ ok: boolean }>("/queue/start", { method: "POST" }),
 
   clearQueue: () => req<{ ok: boolean }>("/queue/clear", { method: "POST" }),
+
+  /** Re-queue failed items (all failed items when `ids` is empty). */
+  retryQueue: (ids: string[] = []) =>
+    postJSON<{ accepted: number }>("/queue/retry", { ids }),
+
+  /** Pause dispatching new batches; the in-flight batch finishes normally. */
+  pauseQueue: () => req<{ paused: boolean }>("/queue/pause", { method: "POST" }),
+
+  resumeQueue: () => req<{ paused: boolean }>("/queue/resume", { method: "POST" }),
 
   removeQueueItem: (id: string) =>
     req<{ ok: boolean }>(`/queue/${encodeURIComponent(id)}`, { method: "DELETE" }),
@@ -351,6 +496,23 @@ export const api = {
 
   saveConfig: (cfg: Partial<ConfigData>) =>
     postJSON<{ ok: boolean }>("/config", cfg),
+
+  /** Register another RimWorld installation (not activated automatically). */
+  createInstance: (payload: CreateInstancePayload) =>
+    postJSON<{ ok: boolean; instance: InstanceData }>("/config/instances", payload),
+
+  /** Switch the active instance. 409 while downloads are pending. */
+  activateInstance: (id: string) =>
+    req<{ ok: boolean; active_instance: string }>(
+      `/config/instances/${encodeURIComponent(id)}/activate`,
+      { method: "POST" },
+    ),
+
+  /** Delete a non-active instance (the last/active one is refused). */
+  deleteInstance: (id: string) =>
+    req<{ ok: boolean }>(`/config/instances/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
 
   checkSteamcmd: () => req<{ ok?: boolean; msg?: string }>("/steamcmd/check"),
 
@@ -450,6 +612,8 @@ export interface SSEEvent {
   mod_id?: string;
   /** Collection total (info event) or per-mod byte totals (progress event). */
   total?: number;
+  /** Already-installed children reported in one summary info event. */
+  skipped?: number;
   /** Live download progress (progress event). */
   percent?: number;
   downloaded?: number;

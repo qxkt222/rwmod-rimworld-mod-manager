@@ -25,6 +25,7 @@ export const PANEL_NAMES = [
   "saves",
   "tags",
   "config",
+  "settings",
 ] as const;
 
 export type PanelName = (typeof PANEL_NAMES)[number];

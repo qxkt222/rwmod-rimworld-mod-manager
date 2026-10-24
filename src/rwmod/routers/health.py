@@ -9,10 +9,18 @@ router = APIRouter(prefix="/api", tags=["status"])
 
 @router.get("/status")
 def api_status():
-    """Return connectivity status: online/offline, last check time."""
-    from rwmod.offline import get_status
+    """Return connectivity status: online/offline, last check time.
 
-    return get_status()
+    ``sources`` reports optional fallback sources; ``skymods`` is one of
+    ``disabled`` (opt-in, the default), ``blocked`` (circuit breaker open) or
+    ``available``. Only this field is added — the existing keys are untouched.
+    """
+    from rwmod.offline import get_status
+    from rwmod.skymods import skymods_status
+
+    body = get_status()
+    body["sources"] = {"skymods": skymods_status()}
+    return body
 
 
 @router.get("/locale")

@@ -36,10 +36,21 @@ const EVENT_PREFIX: Record<string, string> = {
   skip: "  ⏭ ",
 };
 
+// Cap the log DOM: a big collection can produce thousands of lines, and
+// `innerHTML +=` re-parses everything already in the panel on every append.
+const MAX_LOG_LINES = 500;
+
+function trimLog(log: HTMLElement) {
+  while (log.childElementCount > MAX_LOG_LINES) {
+    log.removeChild(log.firstElementChild!);
+  }
+}
+
 function logLine(log: HTMLElement, text: string, event: string) {
   const color = EVENT_COLORS[event] || "#c0caf5";
   const prefix = EVENT_PREFIX[event] || "";
   log.innerHTML += `<span style="color:${color}">${esc(prefix + text)}</span>\n`;
+  trimLog(log);
   log.scrollTop = log.scrollHeight;
 }
 
@@ -101,6 +112,13 @@ async function startCollection() {
   api.downloadStream(cid, forceChk.checked, (evt) => {
     if (evt.event === "info" && typeof evt.total === "number") {
       totalCount = evt.total;
+      // Already-installed children arrive as one summary event now; count
+      // them toward progress instead of the old per-item skip events.
+      if (typeof evt.skipped === "number") {
+        doneCount += evt.skipped;
+        totalCount += evt.skipped;
+        renderProgress();
+      }
     } else if (evt.event === "progress" && evt.id) {
       current[evt.id] = {
         percent: evt.percent ?? 0,
@@ -131,7 +149,11 @@ async function startCollection() {
       refreshMods();
       return;
     }
-    if (evt.msg) logLine(log, evt.msg, evt.event);
+    // P0-2: failed children carry a reason (error_detail). Show it after the
+    // short "cid 失败" message, truncated — never a whole log dump.
+    const detail = ((evt as { error_detail?: string }).error_detail || "").trim().slice(0, 160);
+    const text = evt.msg && detail && !evt.msg.includes(detail) ? `${evt.msg} — ${detail}` : evt.msg;
+    if (text) logLine(log, text, evt.event);
   });
 
   // Timeout guard: if the stream ends without a done/fail event (network

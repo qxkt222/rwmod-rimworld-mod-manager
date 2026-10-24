@@ -42,6 +42,7 @@ from rwmod.routers.health import router as health_router
 from rwmod.routers.history import router as history_router
 from rwmod.routers.metrics import record_request, set_gauge
 from rwmod.routers.metrics import router as metrics_router
+from rwmod.routers.mod_settings import router as mod_settings_router
 from rwmod.routers.mods import router as mods_router
 from rwmod.routers.profiles import router as profiles_router
 from rwmod.routers.queue import router as queue_router
@@ -100,7 +101,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title="rwmod Web",
-    version="0.6.0",
+    version="0.7.0",
     lifespan=lifespan,
     docs_url="/api/docs",
     openapi_url="/api/openapi.json",
@@ -268,6 +269,7 @@ app.include_router(health_router)
 app.include_router(config_router)
 app.include_router(dashboard_router)
 app.include_router(mods_router)
+app.include_router(mod_settings_router)
 app.include_router(download_router)
 app.include_router(workshop_router)
 app.include_router(queue_router)

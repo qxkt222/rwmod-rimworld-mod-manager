@@ -1,14 +1,15 @@
 """Config router."""
 
 import os
+import re
 import sys
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from rwmod.config import Config
+from rwmod.config import Config, InstanceConfig, is_valid_instance_id
 from rwmod.deps import get_config
-from rwmod.models.schemas import ConfigResponse, ConfigUpdateRequest
+from rwmod.models.schemas import ConfigResponse, ConfigUpdateRequest, InstanceCreateRequest
 
 router = APIRouter(prefix="/api", tags=["config"])
 
@@ -26,6 +27,10 @@ _WINDOWS_PREFIX_BLOCK: tuple[str, ...] = (
 _WINDOWS_EXACT_BLOCK: tuple[str, ...] = ("c:\\users",)
 
 
+# Host names that address the local machine through a UNC path.
+_LOCAL_UNC_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", ".", "?"})
+
+
 def _is_root(p: Path) -> bool:
     """True if p is a filesystem root (``C:\\`` or ``/``)."""
     if sys.platform.startswith("win"):
@@ -33,18 +38,65 @@ def _is_root(p: Path) -> bool:
     return p == Path("/")
 
 
-def _reject_unsafe_dir(p: Path, field: str) -> None:
-    """Reject filesystem roots, the working directory and system directories."""
+def _windows_alias_candidates(raw: str) -> tuple[list[str], bool]:
+    """Normalise Windows path aliases for the system-directory blocklist.
+
+    ``Path.resolve()`` mangles the extended-length / device / UNC namespaces
+    (``\\\\?\\C:\\Windows`` resolves to a drive-relative string), so the raw
+    spelling is normalised too. Returns ``(candidate_norms, is_device)`` where
+    ``is_device`` marks a namespace that can never be a legitimate directory
+    (device paths and UNC admin shares such as ``\\\\localhost\\C$``).
+    """
+    s = raw.replace("/", "\\")
+    low = s.lower()
+    is_device = False
+    if low.startswith("\\\\?\\unc\\"):
+        # Extended-length UNC: \\?\UNC\host\share -> \\host\share
+        s = "\\\\" + s[8:]
+    elif low.startswith("\\\\?\\") or low.startswith("\\??\\"):
+        s = s[4:]
+    elif low.startswith("\\\\.\\"):
+        # \\.\PhysicalDrive0, \\.\C: — device namespace, never a directory.
+        is_device = True
+
+    candidates = [os.path.normcase(s)]
+    if s.startswith("\\\\"):
+        parts = s[2:].split("\\", 2)
+        host = parts[0].lower() if parts else ""
+        share = parts[1] if len(parts) > 1 else ""
+        rest = parts[2] if len(parts) > 2 else ""
+        if share.endswith("$"):
+            # Admin / hidden share (C$, ADMIN$, ...) aliases a volume. Never
+            # accept one as a mods/backup directory.
+            is_device = True
+        elif host in _LOCAL_UNC_HOSTS and re.fullmatch(r"[A-Za-z]\$?", share):
+            # \\localhost\C\Windows is not valid UNC, but be defensive.
+            candidates.append(os.path.normcase(f"{share.rstrip('$')}:\\{rest}"))
+    return candidates, is_device
+
+
+def _reject_unsafe_dir(p: Path, field: str, raw: str | None = None) -> None:
+    """Reject filesystem roots, the working directory and system directories.
+
+    ``raw`` is the user-supplied spelling (before ``resolve()``) so Windows
+    namespace aliases can be compared against the same blocklist.
+    """
     if _is_root(p):
         raise HTTPException(400, f"{field} 不能指向磁盘根目录: {str(p)!r}")
     if p == Path.cwd():
         raise HTTPException(400, f"{field} 不能指向程序运行目录: {str(p)!r}")
     if sys.platform.startswith("win"):
-        norm = os.path.normcase(str(p))
-        if any(norm == d or norm.startswith(d + "\\") for d in _WINDOWS_PREFIX_BLOCK):
-            raise HTTPException(400, f"{field} 不能指向系统目录: {str(p)!r}")
-        if any(norm == d for d in _WINDOWS_EXACT_BLOCK):
-            raise HTTPException(400, f"{field} 不能指向系统目录: {str(p)!r}")
+        candidates, is_device = _windows_alias_candidates(raw or str(p))
+        candidates.append(os.path.normcase(str(p)))
+        if is_device:
+            raise HTTPException(400, f"{field} 不能指向设备/管理共享路径: {raw or str(p)!r}")
+        for norm in candidates:
+            if any(norm == d or norm.startswith(d + "\\") for d in _WINDOWS_PREFIX_BLOCK):
+                raise HTTPException(400, f"{field} 不能指向系统目录: {str(p)!r}")
+            if any(norm == d for d in _WINDOWS_EXACT_BLOCK):
+                raise HTTPException(400, f"{field} 不能指向系统目录: {str(p)!r}")
+            if re.fullmatch(r"[a-z]:\\?", norm):
+                raise HTTPException(400, f"{field} 不能指向磁盘根目录: {str(p)!r}")
 
 
 def _validate_dir_path(raw: str, field: str) -> Path:
@@ -56,7 +108,7 @@ def _validate_dir_path(raw: str, field: str) -> Path:
         resolved = p.resolve()
     except (OSError, RuntimeError):
         raise HTTPException(400, f"{field} 路径无效: {raw!r}") from None
-    _reject_unsafe_dir(resolved, field)
+    _reject_unsafe_dir(resolved, field, raw)
     return p
 
 
@@ -71,8 +123,20 @@ def _validate_steamcmd_path(raw: str) -> Path:
         raise HTTPException(400, f"steamcmd_path 路径无效: {raw!r}") from None
     if resolved.is_dir():
         raise HTTPException(400, f"steamcmd_path 不能是目录: {raw!r}")
-    _reject_unsafe_dir(resolved, "steamcmd_path")
+    _reject_unsafe_dir(resolved, "steamcmd_path", raw)
     return p
+
+
+def _instance_payload(instance: InstanceConfig) -> dict:
+    return {
+        "id": instance.id,
+        "name": instance.name,
+        "steamcmd_path": str(instance.steamcmd_path),
+        "mods_dir": str(instance.mods_dir),
+        "rimworld_dir": str(instance.rimworld_dir),
+        "backup_dir": str(instance.backup_dir),
+        "config_dir": str(instance.config_dir) if instance.config_dir is not None else None,
+    }
 
 
 @router.get("/config", response_model=ConfigResponse)
@@ -88,7 +152,109 @@ def get_config_route(
         "has_steam_api_key": bool(cfg.steam_api_key),
         "steamcmd_exists": cfg.steamcmd_path.exists(),
         "mods_dir_exists": cfg.mods_dir.exists(),
+        "instances": [_instance_payload(i) for i in cfg.instances],
+        "active_instance": cfg.active_instance,
     }
+
+
+@router.post("/config/instances")
+def create_instance(
+    payload: InstanceCreateRequest,
+    cfg: Config = Depends(get_config),
+):
+    """Register another RimWorld installation (does not activate it)."""
+    mods_dir = _validate_dir_path(payload.mods_dir, "mods_dir")
+    rimworld_raw = payload.rimworld_dir
+    rimworld_dir = (
+        _validate_dir_path(rimworld_raw, "rimworld_dir") if rimworld_raw else mods_dir.parent
+    )
+    backup_dir = (
+        _validate_dir_path(payload.backup_dir, "backup_dir") if payload.backup_dir else None
+    )
+    config_dir = (
+        _validate_dir_path(payload.config_dir, "config_dir") if payload.config_dir else None
+    )
+    steamcmd_path = (
+        _validate_steamcmd_path(payload.steamcmd_path) if payload.steamcmd_path else None
+    )
+
+    instance_id = (payload.id or "").strip() or None
+    if instance_id is not None and not is_valid_instance_id(instance_id):
+        raise HTTPException(400, f"非法实例 id: {instance_id!r}")
+    try:
+        instance = cfg.add_instance(
+            instance_id=instance_id,
+            name=(payload.name or "").strip() or None,
+            steamcmd_path=steamcmd_path,
+            mods_dir=mods_dir,
+            rimworld_dir=rimworld_dir,
+            backup_dir=backup_dir,
+            config_dir=config_dir,
+        )
+    except ValueError as e:
+        raise HTTPException(409, str(e)) from e
+    cfg.save()
+    return {"ok": True, "instance": _instance_payload(instance)}
+
+
+@router.post("/config/instances/{instance_id}/activate")
+def activate_instance(
+    instance_id: str,
+    cfg: Config = Depends(get_config),
+):
+    """Switch the active instance.
+
+    Refused with 409 while downloads are pending/downloading: switching would
+    point the running queue at another mods directory mid-flight.
+    """
+    if cfg.get_instance(instance_id) is None:
+        raise HTTPException(404, f"实例不存在: {instance_id}")
+    if cfg.active_instance != instance_id:
+        pending = _pending_downloads()
+        if pending:
+            raise HTTPException(
+                409,
+                f"队列中还有 {len(pending)} 个未完成的下载任务，请等待完成或清空队列后再切换实例",
+            )
+        cfg.activate_instance(instance_id)
+        cfg.save()
+        # The in-memory metadata partition is keyed by mods_dir already, but a
+        # switch is a hard boundary: drop it so nothing stale survives.
+        from rwmod.mod_cache import clear_memory_cache
+
+        clear_memory_cache()
+    return {"ok": True, "active_instance": cfg.active_instance}
+
+
+@router.delete("/config/instances/{instance_id}")
+def delete_instance(
+    instance_id: str,
+    cfg: Config = Depends(get_config),
+):
+    if cfg.get_instance(instance_id) is None:
+        raise HTTPException(404, f"实例不存在: {instance_id}")
+    if instance_id == cfg.active_instance:
+        raise HTTPException(400, "不能删除活动实例，请先切换到其他实例")
+    if len(cfg.instances) <= 1:
+        raise HTTPException(400, "至少保留一个实例")
+    try:
+        cfg.remove_instance(instance_id)
+    except (KeyError, ValueError) as e:
+        raise HTTPException(400, str(e)) from e
+    cfg.save()
+    return {"ok": True}
+
+
+def _pending_downloads() -> list[dict]:
+    """Pending/downloading queue rows; an unprepared DB counts as empty."""
+    import sqlite3
+
+    from rwmod.database import queue_load_pending
+
+    try:
+        return queue_load_pending()
+    except sqlite3.Error:
+        return []
 
 
 @router.post("/config")

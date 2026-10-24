@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import re
+import threading
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -19,6 +20,8 @@ __all__ = [
     "fetch_item_details",
     "fetch_item_dependencies",
     "is_collection",
+    "collection_probe_failed",
+    "reset_collection_probe",
     "check_mod_updates",
 ]
 
@@ -153,15 +156,42 @@ def _get_collection_details(collection_id: str, api_key: str = "anonymous") -> d
     return response
 
 
+# ── probe outcome side channel ─────────────────────────────────────
+# is_collection() must keep its historical bool contract: it answers False
+# both for "definitely not a collection" and for "could not ask Steam".
+# Download routing must tell those apart — treating a failed probe as
+# "not a collection" is exactly how a collection id used to be handed to
+# SteamCMD. The latest outcome is recorded per thread; callers that need the
+# distinction call reset_collection_probe(), is_collection(), then
+# collection_probe_failed() in the same thread (the three calls must not be
+# split across threads, which is why routers/download.py wraps them in one
+# thread-pool function).
+_probe_state = threading.local()
+
+
+def reset_collection_probe() -> None:
+    """Forget this thread's previous probe outcome before a new is_collection()."""
+    _probe_state.failed = False
+
+
+def collection_probe_failed() -> bool:
+    """True when the last is_collection() call in this thread could not reach Steam."""
+    return bool(getattr(_probe_state, "failed", False))
+
+
 def is_collection(workshop_id: str) -> bool:
     """Check if a workshop item is a collection via Steam Web API.
 
     A valid collection returns ``result == 1`` in ``collectiondetails[0]``;
-    a non-collection returns ``result == 9``.
+    a non-collection returns ``result == 9``. Returns False when the API
+    cannot be reached; use ``collection_probe_failed()`` to distinguish that
+    from a definitive "not a collection".
     """
     response = _get_collection_details(workshop_id)
     if not response:
+        _probe_state.failed = True
         return False
+    _probe_state.failed = False
     details = response.get("collectiondetails", [])
     return bool(details) and details[0].get("result") == 1
 

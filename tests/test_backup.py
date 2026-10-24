@@ -60,6 +60,32 @@ class TestBackupMod:
         result = restore_mod(tmp_path / "Mods", "000", tmp_path / "backups")
         assert not result["ok"]
 
+    def test_restore_specific_backup_filename(self, tmp_path: Path):
+        """P1-2 rollback restores the exact zip taken before the update."""
+        mods_dir = tmp_path / "Mods"
+        mods_dir.mkdir()
+        mod_dir = mods_dir / "test_mod"
+        (mod_dir / "About").mkdir(parents=True)
+        (mod_dir / "About" / "About.xml").write_text(
+            "<ModMetaData><name>Original</name></ModMetaData>"
+        )
+        backup_dir = tmp_path / "backups"
+        zip_path = backup_mod(mods_dir, "123", "test_mod", backup_dir)
+        assert zip_path is not None
+
+        import shutil
+
+        shutil.rmtree(mod_dir)
+        result = restore_mod(mods_dir, "123", backup_dir, backup_filename=zip_path.name)
+        assert result["ok"]
+        assert (mods_dir / "test_mod" / "About" / "About.xml").exists()
+
+    def test_restore_rejects_unknown_filename(self, tmp_path: Path):
+        result = restore_mod(
+            tmp_path / "Mods", "123", tmp_path / "backups", backup_filename="../evil.zip"
+        )
+        assert not result["ok"]
+
     def test_list_backups(self, tmp_path: Path):
         mods_dir = tmp_path / "Mods"
         mods_dir.mkdir()

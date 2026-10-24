@@ -1,10 +1,7 @@
 """Dashboard router."""
 
 import asyncio
-import contextlib
-import os
 import time
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -13,6 +10,9 @@ from rwmod.autoupdate import AutoUpdateManager
 from rwmod.config import Config
 from rwmod.database import get_download_history
 from rwmod.deps import get_autoupdate, get_config
+from rwmod.mod_cache import get_cached_mods
+from rwmod.mod_health_check import get_health
+from rwmod.mod_sizes import get_sizes, is_pending
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
 
@@ -23,7 +23,13 @@ _CACHE_TTL = 5  # seconds
 
 
 def _cached_dashboard(cfg: Config) -> dict:
-    """Return cached dashboard stats if fresh, otherwise recompute."""
+    """Return cached dashboard stats if fresh, otherwise recompute.
+
+    Counts and sizes come from the metadata cache + mod_sizes snapshot; the
+    old implementation walked all ~150k files with ``Path.stat()`` on every
+    call (7-18 seconds). ``backup_dir`` is excluded: it commonly lives inside
+    ``mods_dir`` (``_backups``) and must not inflate the mod count or usage.
+    """
     now = time.time()
     key = str(cfg.mods_dir)
     entry = _cache.get(key)
@@ -31,22 +37,20 @@ def _cached_dashboard(cfg: Config) -> dict:
         return entry
 
     mods_count = 0
-    total_size = 0
+    total_bytes = 0
+    pending = False
     if cfg.mods_dir.exists():
-        for d in cfg.mods_dir.iterdir():
-            if d.is_dir():
-                mods_count += 1
-                # Recursively sum file sizes — mods contain nested folders
-                # (About/, Defs/, Assemblies/, ...) so a top-level scan alone
-                # would badly under-report disk usage.
-                for root, _dirs, files in os.walk(d):
-                    for fname in files:
-                        with contextlib.suppress(OSError):
-                            total_size += (Path(root) / fname).stat().st_size
+        metas = get_cached_mods(cfg.mods_dir)
+        mods_count = len(metas)
+        sizes = get_sizes(cfg.mods_dir)
+        pending = is_pending(cfg.mods_dir)
+        excluded = {cfg.backup_dir.name} if cfg.backup_dir.parent == cfg.mods_dir else set()
+        total_bytes = sum(sizes.get(m.folder, 0) for m in metas if m.folder not in excluded)
 
     entry = {
         "mods_count": mods_count,
-        "disk_usage_mb": round(total_size / 1024 / 1024, 1),
+        "disk_usage_mb": round(total_bytes / (1024 * 1024), 1),
+        "size_pending": pending,
         "_ts": now,
     }
     _cache[key] = entry
@@ -64,18 +68,19 @@ async def dashboard(
     explicit "一键更新" button (POST /api/auto-update/run), so merely opening
     the dashboard can never kick off a full re-download.
     """
-    # Both calls are blocking (full recursive disk walk + per-mod Steam API
-    # requests with up-to-15s timeouts) — run them off the event loop so a
-    # dashboard refresh can never freeze the whole server.
+    # Stats come from caches only (metadata + size snapshot) — run off the
+    # event loop so a cold metadata scan can never freeze the server.
     cached = await asyncio.to_thread(_cached_dashboard, cfg)
     history = get_download_history(limit=10)
 
-    # Abandoned/stale/removed mod counts (reuses the health scan, cached 60s).
+    # Health counts come from the persistent cache. ``start_refresh=False`` is
+    # deliberate: a dashboard refresh must never trigger Steam API work. The
+    # mods panel's /api/mods/health call owns the background refresh.
     abandoned = stale = removed = 0
+    health_stale = False
     try:
-        from rwmod.routers.mods import mod_health
-
-        health = await asyncio.to_thread(mod_health, cfg)
+        health = await asyncio.to_thread(get_health, cfg.mods_dir, start_refresh=False)
+        health_stale = bool(health.get("stale"))
         for m in health.get("mods", []):
             if m["status"] == "abandoned":
                 abandoned += 1
@@ -90,8 +95,14 @@ async def dashboard(
         "mods_count": cached["mods_count"],
         "updates_pending": len(au.last_result),
         "disk_usage_mb": cached["disk_usage_mb"],
+        "size_pending": cached.get("size_pending", False),
         "recent_activity": history,
-        "health": {"abandoned": abandoned, "stale": stale, "removed": removed},
+        "health": {
+            "abandoned": abandoned,
+            "stale": stale,
+            "removed": removed,
+            "stale_data": health_stale,
+        },
     }
 
 
@@ -110,6 +121,17 @@ def steamcmd_check(
     """
     if not cfg.steamcmd_path.exists():
         return {"ok": False, "msg": "SteamCMD 路径不存在"}
+    # SteamCMD on Windows refuses to run from a path containing non-ASCII
+    # characters; the old check said "就绪" because the fatal message happened
+    # to contain the word "steam".
+    if any(ord(ch) > 127 for ch in str(cfg.steamcmd_path)):
+        return {
+            "ok": False,
+            "msg": (
+                f"SteamCMD 路径含非 ASCII 字符，SteamCMD 无法运行：{cfg.steamcmd_path}。"
+                "请把 SteamCMD 移到纯英文路径（例如 D:\\steamcmd）并在设置中更新路径。"
+            ),
+        }
     try:
         import subprocess
 
@@ -127,7 +149,15 @@ def steamcmd_check(
             cwd=str(cfg.steamcmd_path.parent),
         )
         out = (proc.stdout or "").lower()
-        if "steam" in out or "success" in out or proc.returncode in (0, 7):
+        if "incompatible path" in out or "非 ascii" in out or "非ascii" in out:
+            return {
+                "ok": False,
+                "msg": (
+                    f"SteamCMD 无法从路径 {cfg.steamcmd_path.parent} 运行"
+                    "（路径含非 ASCII 字符）。请移到纯英文路径并更新设置。"
+                ),
+            }
+        if "steam console client" in out or "success" in out or proc.returncode in (0, 7):
             # returncode 7 is SteamCMD's "already running / need update then retry"
             # code which still proves the binary is functional.
             return {"ok": True, "msg": "SteamCMD 就绪"}

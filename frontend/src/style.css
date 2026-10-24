@@ -55,6 +55,16 @@ body {
   flex-direction: column;
 }
 
+/* body is a flex column; #app must carry that chain down so
+   #workspace's flex:1 is bounded instead of growing with content. */
+#app {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 /* ── nav bar ───────────────────────────────────────────────── */
 #navbar {
   height: var(--nav-h);
@@ -338,9 +348,33 @@ textarea { resize: vertical; min-height: 80px; }
 #queue-list,
 #history-list,
 #update-results,
-#rimsort-compare-result {
+#rimsort-compare-result,
+#mod-settings-list {
   flex: 1;
   min-height: 0;
+  overflow-y: auto;
+}
+
+/* ── scrollable panel cards ─────────────────────────────────── */
+/* A .card is not a flex container by default, so a child's
+   flex:1/overflow-y:auto has no effect. Make the hosting cards
+   flex columns with a bounded height so their inner lists scroll. */
+#panel-mods .card,
+#panel-settings .card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+#panel-settings .card { flex: 1; }
+
+/* Fallback: if the card's content still outgrows the viewport
+   (e.g. the XML editor is open), the panel scrolls too. */
+#panel-settings { overflow-y: auto; }
+
+/* Backups stay compact; scroll inside instead of pushing the
+   editor off-screen. */
+#mod-settings-backups {
+  max-height: 20vh;
   overflow-y: auto;
 }
 

@@ -162,6 +162,7 @@ class TestTrySkymods:
         )
         urlopen = MagicMock(return_value=MagicMock(__enter__=MagicMock(return_value=resp)))
         cfg = Config(mods_dir=tmp_path / "Mods")
+        cfg.enable_skymods = True  # opt-in since P2-2
         dest = tmp_path / "Mods" / "T"
         with (
             patch("rwmod.skymods.urllib.request.urlopen", urlopen),

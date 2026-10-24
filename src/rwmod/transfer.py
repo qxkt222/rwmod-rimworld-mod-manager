@@ -3,6 +3,15 @@
 Produces a single ``.rwmod`` zip that can be moved to another machine and
 imported to restore the full rwmod setup (minus the actual mod files, which
 are re-downloaded from Steam).
+
+Bundle format v2 scopes profiles and tags to instances::
+
+    manifest.json   {"version": 2, "instances": [{"id": ..., "name": ...}]}
+    profiles/<instance_id>/<name>.xml
+    tags.json       {"version": 2, "instances": {<id>: {folder: [tags]}}}
+
+Version-1 bundles (profiles at the zip root, a flat ``folder -> tags`` map)
+are still importable; everything in them belongs to the ``default`` instance.
 """
 
 from __future__ import annotations
@@ -14,8 +23,8 @@ import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 
-from rwmod.config import Config
-from rwmod.profile import PROFILES_DIR
+from rwmod.config import Config, is_valid_instance_id
+from rwmod.profile import PROFILES_DIR, profiles_dir_for
 from rwmod.utils import safe_extract_zip
 
 _log = logging.getLogger(__name__)
@@ -28,6 +37,7 @@ _PROFILES = "profiles/"
 _BACKUPS = "backups/"
 _TAGS = "tags.json"
 _CONFIG = "config.toml"
+_BUNDLE_VERSION = 2
 
 
 def export_bundle(
@@ -47,22 +57,29 @@ def export_bundle(
 
     profiles_count = 0
     backups_count = 0
+    instance_ids = _profile_instance_ids(cfg)
     manifest: dict[str, object] = {
         "app": "rwmod",
-        "version": 1,
+        "version": _BUNDLE_VERSION,
         "exported_at": datetime.now(UTC).isoformat(),
         "profiles": 0,
         "backups": 0,
         "tags": False,
         "config": True,
         "has_steam_api_key": bool(cfg.steam_api_key and not include_secrets),
+        "instances": [{"id": iid, "name": _instance_name(cfg, iid)} for iid in instance_ids],
     }
 
     with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        # 1. Profiles
-        if PROFILES_DIR.exists():
-            for f in sorted(PROFILES_DIR.glob("*.xml")):
-                zf.write(f, f"{_PROFILES}{f.name}")
+        # 1. Profiles, one directory per instance.
+        for iid in instance_ids:
+            directory = profiles_dir_for(iid, create=False)
+            if not directory.exists():
+                continue
+            for f in sorted(directory.glob("*.xml")):
+                if not f.is_file():
+                    continue
+                zf.write(f, f"{_PROFILES}{iid}/{f.name}")
                 profiles_count += 1
 
         # 2. Backups (optional — can be large)
@@ -120,13 +137,38 @@ def import_bundle(cfg: Config, bundle_path: Path) -> dict:
         return {"ok": False, "msg": f"解压失败: {e}"}
 
     try:
-        # 1. Profiles
+        # 1. Profiles — v2 bundles keep them under profiles/<instance>/,
+        # v1 bundles at the root (→ default instance).
         profiles_imported = 0
         src_profiles = tmp_dir / _PROFILES
         if src_profiles.exists():
-            PROFILES_DIR.mkdir(parents=True, exist_ok=True)
-            for f in src_profiles.glob("*.xml"):
-                shutil.copy2(f, PROFILES_DIR / f.name)
+            for entry in sorted(src_profiles.rglob("*")):
+                rel = entry.relative_to(src_profiles)
+                parts = rel.parts
+                if entry.is_dir():
+                    # A zip may carry a directory entry named "dir.xml/":
+                    # copying it would raise IsADirectoryError and used to
+                    # crash the whole import (DATA-3).
+                    if entry.name.endswith(".xml"):
+                        return {
+                            "ok": False,
+                            "msg": f"bundle 包含非文件条目: profiles/{rel.as_posix()}",
+                        }
+                    continue
+                if not entry.name.endswith(".xml"):
+                    continue
+                if len(parts) == 1:
+                    iid, filename = "default", parts[0]
+                elif len(parts) == 2:
+                    iid, filename = parts
+                else:
+                    # Older importers ignored nested directories; keep doing so.
+                    continue
+                if not is_valid_instance_id(iid):
+                    return {"ok": False, "msg": f"bundle 包含非法实例 id: {iid!r}"}
+                dest_dir = profiles_dir_for(iid)
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(entry, dest_dir / filename)
                 profiles_imported += 1
 
         # 2. Backups
@@ -135,6 +177,8 @@ def import_bundle(cfg: Config, bundle_path: Path) -> dict:
         if src_backups.exists():
             cfg.backup_dir.mkdir(parents=True, exist_ok=True)
             for f in src_backups.glob("*.zip"):
+                if not f.is_file():
+                    return {"ok": False, "msg": f"bundle 包含非文件条目: backups/{f.name}"}
                 shutil.copy2(f, cfg.backup_dir / f.name)
                 backups_imported += 1
 
@@ -165,33 +209,76 @@ def import_bundle(cfg: Config, bundle_path: Path) -> dict:
 # ── internal helpers ───────────────────────────────────────────────
 
 
+def _profile_instance_ids(cfg: Config) -> list[str]:
+    """Configured instance ids plus any instance dir found on disk."""
+    ids = [inst.id for inst in cfg.instances]
+    try:
+        base = Path(PROFILES_DIR)
+        if base.is_dir():
+            for child in sorted(base.iterdir()):
+                if child.is_dir() and is_valid_instance_id(child.name) and child.name not in ids:
+                    ids.append(child.name)
+    except OSError:  # pragma: no cover — unreadable profiles dir
+        pass
+    return ids
+
+
+def _instance_name(cfg: Config, instance_id: str) -> str:
+    inst = cfg.get_instance(instance_id)
+    return inst.name if inst is not None else instance_id
+
+
 def _export_tags() -> dict | None:
-    """Read all folder→tags mappings from the tags DB. Returns None if unavailable."""
+    """Read instance→folder→tags from the DB. Returns None if unavailable."""
     try:
         from rwmod.database import get_conn
 
         db = get_conn()
-        rows = db.execute("SELECT folder, tag FROM mod_tags ORDER BY folder, tag").fetchall()
-        result: dict[str, list[str]] = {}
+        rows = db.execute(
+            "SELECT instance_id, folder, tag FROM mod_tags ORDER BY instance_id, folder, tag"
+        ).fetchall()
+        result: dict[str, dict[str, list[str]]] = {}
         for r in rows:
-            result.setdefault(r["folder"], []).append(r["tag"])
-        return result
+            result.setdefault(r["instance_id"], {}).setdefault(r["folder"], []).append(r["tag"])
+        return {"version": _BUNDLE_VERSION, "instances": result}
     except Exception:
         return None
 
 
-def _import_tags(tags: dict) -> None:
-    """Write folder→tags mappings into the tags DB."""
+def _import_tags(tags: object) -> None:
+    """Write folder→tags mappings into the tags DB (v1 flat or v2 scoped)."""
     try:
         from rwmod.database import get_conn
 
+        if not isinstance(tags, dict):
+            return
+        pairs: list[tuple[str, str, str]] = []
+        scoped = tags.get("instances")
+        if isinstance(scoped, dict):
+            for iid, mapping in scoped.items():
+                iid_s = str(iid)
+                if not is_valid_instance_id(iid_s) or not isinstance(mapping, dict):
+                    continue
+                for folder, tag_list in mapping.items():
+                    if not isinstance(tag_list, list):
+                        continue
+                    for tag in tag_list:
+                        if isinstance(tag, str):
+                            pairs.append((iid_s, str(folder), tag))
+        else:
+            for folder, tag_list in tags.items():
+                if not isinstance(tag_list, list):
+                    continue
+                for tag in tag_list:
+                    if isinstance(tag, str):
+                        pairs.append(("default", str(folder), tag))
+
         db = get_conn()
-        for folder, tag_list in tags.items():
-            for tag in tag_list:
-                db.execute(
-                    "INSERT OR IGNORE INTO mod_tags (folder, tag) VALUES (?, ?)",
-                    (folder, tag),
-                )
+        for iid, folder, tag in pairs:
+            db.execute(
+                "INSERT OR IGNORE INTO mod_tags (instance_id, folder, tag) VALUES (?, ?, ?)",
+                (iid, folder, tag),
+            )
         db.commit()
     except Exception as e:
         _log.warning("写入标签失败: %s", e)

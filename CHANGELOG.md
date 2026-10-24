@@ -1,5 +1,137 @@
 # Changelog
 
+## [0.7.0] - 2026-10-24
+
+### Added
+
+- **批量启停 Mod** — `POST /api/mods/active` 按 packageId 批量启用/停用，`GET /api/mods`
+  增加 `active` 字段；前端 Mod 列表新增复选框与工具栏。写入大小写不敏感、只修改
+  `activeMods`，落盘前生成 `.bak` 与 undo 快照，保留 CRLF/BOM（`modsconfig_edit.py`,
+  `routers/mods.py`, `frontend/`）
+- **Mod 设置管理** — 新增 `mod_settings.py` 与 `routers/mod_settings.py`：列出、查看、
+  保存 `Config/Mod_*.xml`，支持单文件备份/恢复与「备份全部」。限制单文件 ≤ 2 MB、
+  校验 XML well-formed、basename 白名单、写入前必须确认游戏已关闭（`ack_game_closed`），
+  保留 BOM/CRLF；前端新增独立「Mod 设置」页（`panels/settings.ts`, `panel-registry.ts`,
+  `layout.ts`）
+- **Community Rules** — 接入 CC0 的 RimSort Community Rules Database，替换已失效的
+  RimPy 上游 URL；`~/.rwmod/community_rules.json` 缓存 24h TTL、2 MB 上限、ETag/304、
+  原子写、失败 fail-open（`rimpy_db.py`, `routers/rimsort.py`）
+- **多实例支持** —
+  - **Config v2**：新增 `[[instances]]` 与 `active_instance`；旧扁平配置加载时自动
+    合成 `default` 实例，保存时保留 v1 兼容的扁平镜像（`config.py`）
+  - **DB migration v3/v4**：`local_mod_metadata`、`mod_tags`、`download_queue`、
+    `download_queue_flags` 按 `instance_id` 复合作用域重建；迁移前自动生成
+    `.bak_v3` / `.bak_v4` 备份（`database.py`）
+  - **队列按实例归属**：不同实例的同名 Mod 不混批，排队项记录所属实例且重启后保留；
+    切换实例时若有 pending 下载返回 409（`queue.py`, `routers/config.py`）
+  - **路径隔离**：profiles / undo 使用实例子目录，tags / cache 按实例作用域，
+    transfer manifest 升级到 v2，saves 使用实例 config_dir（`profile.py`,
+    `undo.py`, `tags.py`, `cache_db.py`, `transfer.py`, `routers/saves.py`）
+  - **API / 前端**：实例 CRUD 与切换接口（`/api/config/instances`），配置面板新增
+    实例卡片（`routers/config.py`, `frontend/src/panels/config.ts`）
+- **Steam Workshop DB（可选）** — 接入 CC0 的 Steam Workshop 数据库（47 MB、
+  57,679 条）；默认关闭，只有显式 `POST /api/rimsort/steamdb/refresh` 才会下载。
+  缓存 `~/.rwmod/steam_db.json`：30 天 TTL、60 MB 上限、ETag/304、原子写、
+  fail-open；`GET /api/rimsort/steamdb/status` 暴露缓存状态；`check-order` 可选附加
+  gameVersions 信息（`steam_db.py`, `config.py`, `load_order.py`,
+  `routers/rimsort.py`）
+- **用户排序规则** — 新增 `~/.rwmod/rules.json`，优先级 用户 > 社区 > 内置；
+  `sort_mods` 消费 `modDependencies`（438 条边）、`forceLoad*`（16+1）与版本化规则
+  （v1.6）（`mod_rules.py`, `load_order.py`, `rimsort.py`）
+- **排序诊断** — `check_load_order` 新增「声明规则 vs 实际顺序」检查；真实 522 项配置
+  0 未解析、0 循环，跨分区违例显式报告（`load_order.py`）
+- **Mod 大小快照** — 新增 `mod_sizes.py`：后台 `scandir` 快照、TTL 10 分钟、写入后
+  可失效；560 个真实 Mod 后台扫描 3.63 秒，不阻塞请求（`mod_sizes.py`,
+  `routers/dashboard.py`, `routers/mods.py`）
+- **健康检查持久缓存** — 新增 `mod_health_check.py`：`mod_cache` 持久缓存 6 小时、
+  single-flight 刷新、允许读取 stale 值；网络失败不再把 Mod 误标为 removed
+  （`mod_health_check.py`, `routers/health.py`）
+- **队列重试 / 暂停 / 恢复** — 新增 `POST /api/queue/retry`、`/api/queue/pause`、
+  `/api/queue/resume`，前端队列面板对应按钮（`routers/queue.py`, `queue.py`,
+  `frontend/`）
+
+### Changed
+
+- **SteamCMD 执行模型** — 增加全局运行锁：真正的 SteamCMD 下载串行执行，安装校验与
+  合集探测可并行；配合 5/15/45 秒（±20% jitter）退避重试（`steamcmd.py`,
+  `downloader.py`）
+- **下载错误透出** — 新增结构化 `DownloadOutcome` / `BatchResult`（保留
+  `dict[str, bool]` 旧契约）；失败原因经队列、WebSocket、SSE、前端与下载历史展示，
+  不再只返回一个 false（`downloader.py`, `queue.py`, `routers/download.py`,
+  `frontend/`）
+- **取消语义隔离** — 取消的项保持 `CANCELLED`，使用 completed 集合避免重复处理；
+  被取消批次的未完成兄弟项重新排队，取消标记在结束后清理（`downloader.py`,
+  `queue.py`）
+- **更新流程加固** — force 更新前持久备份（默认开启，`backup_keep=3`）、安装后校验、
+  失败时按 stash → backup 顺序回滚旧版（`downloader.py`, `backup.py`）
+- **Skymods 默认关闭** — `Config.enable_skymods` 默认 `False`；首次失败后打开 10 分钟
+  熔断，避免对 Cloudflare 403 反复重试刷日志；`/api/status` 暴露 `sources.skymods`
+  （disabled / blocked）（`config.py`, `skymods.py`, `routers/health.py`）
+- **响应性能（553 Mod 沙箱实测）** — `/api/mods` 热缓存 11 ms（旧 5.2–8.6 s）、
+  `/api/dashboard` 6–8 ms（旧 25 s）、`/api/mods/health` 11 ms（旧 14 s）
+- **supported_versions 持久化** — SQLite migration v2 增加
+  `local_mod_metadata.supported_versions`；旧缓存行按 miss 重新解析一次后回填，
+  冷/热缓存结果一致（`database.py`, `cache_db.py`, `metadata.py`）
+- **packageId 大小写归一** — 全链路按大小写不敏感比较；`compare` 的缺失项从 420
+  降到 5（仅 DLC）；存档解析同样大小写不敏感并复用 mod_cache，真实存档 missing
+  从 420 降到 6（Core + 5 DLC）（`metadata.py`, `mod_rules.py`, `save_parser.py`,
+  `routers/saves.py`）
+- **官方内容锚定** — load order 固定 Harmony → Core → Royalty → Ideology → Biotech →
+  Anomaly → Odyssey；`generate` 使用真实游戏版本与 knownExpansions
+  （`load_order.py`, `rimsort.py`, `profile.py`）
+- **富格式依赖** — 支持 `<modDependencies>`、`alternativePackageIds` 与 DLC 豁免；
+  510 组依赖解析，真正缺失为 0（`mod_rules.py`, `load_order.py`）
+- **ModsConfig 路径显式化** — 新增 `Config.config_dir`、
+  `profile.resolve_modsconfig_path()` / `modsconfig_target()`；apply / profile restore /
+  undo / CLI restore 全部传入显式 config_dir，不再隐式扫描 LocalLow（`config.py`,
+  `profile.py`, `modsconfig_edit.py`, `routers/profiles.py`, `routers/undo.py`,
+  `cli.py`）
+- **测试沙箱守卫** — `RWMOD_TEST_SANDBOX_HOME` 在解析符号链接后仍越界时 fail-closed，
+  抛出 `SandboxViolationError`；该变量只用于测试隔离，不是生产开关（`profile.py`,
+  `tests/conftest.py`）
+- **既有未发布改动（10/18）** — 队列重启恢复、force 更新意图持久化、批量覆盖 stash
+  回滚、循环依赖防护、SteamCMD 非 ASCII 路径预检、下载历史入库（`queue.py`,
+  `downloader.py`, `steamcmd.py`, `database.py`）
+- **清理** — 删除 10/18 产生的 102 个 `assert_steamcmd.exe_*.dmp`（约 17 MB，
+  用户授权）（`dumps/`）
+
+### Fixed
+
+- **合集 ID 不再交给 SteamCMD** — 合集探测失败时明确失败，而不是把合集 ID 本身当作
+  Mod 下载（此前触发 `no About.xml` → Skymods 403 的失败链）（`downloader.py`）
+- **健康检查误标 removed** — 网络失败与「Mod 已下架」区分开，网络错误保留旧状态
+  （`mod_health_check.py`）
+- **ModsConfig.xml 被误写事故（如实记录）** —
+  - **时间**：2026-10-24 15:47:28。
+  - **原因**：S 组独立验证脚本调用 `rimsort_apply`；`resolve_modsconfig_path()` 优先
+    扫描 LocalLow，脚本未 patch `Path.home()`；同秒幂等调用覆盖了唯一备份。
+  - **影响**：真实 `Config/ModsConfig.xml` 的 activeMods 顺序被改写；未丢失 Mod，
+    未改动数据库 / 日志 / 配置 / `D:/RimWorld/`。
+  - **恢复**：用 Player.log（10/18 13:32）的 522 项加事故前记录的最后 10 项重建；
+    当前 522 个 unique 项，保留 version/knownExpansions，XML 合法、无 BOM、CRLF；
+    前 12 与后 10 项与事故前记录一致，尾部 12 个位置与 Player.log 不同；
+    `sakurata.ideotickopt`、`gwinnbleidd.mothballedanddeadpawns.zh` 原位无法确定，
+    暂放 510/511。当前 sha256
+    `054251852cf5e71b814e64cab5c6ed514fa61434c2353a0645fb12b91ef92136`。
+  - **证据保留**：`Config/ModsConfig.xml.rwmod-incident-sorted.bak`、
+    `Config/ModsConfig.xml.bak_20261024_074728`、
+    `~/.rwmod/undo/20261024_074728_sort.xml`。
+  - **根因修复**：见上节「ModsConfig 路径显式化」与「测试沙箱守卫」；新增 20 个
+    `tests/test_config_path_safety.py` 用例。
+  - **未完成**：仍需用户进游戏确认最终排序；两个 Mod 的原始位置无法从现有证据精确
+    恢复。
+
+### Tests
+
+- 离线 pytest：**1382 passed, 0 xfailed, 12 deselected**（升级前 952 passed /
+  35 xfailed）
+- `run_tests.py` 六项门禁 **6/6 通过**；`ruff format --check src/ tests/` 96 个文件通过
+- 新增测试：`test_mod_sizes.py`、`test_mod_health_check.py`、
+  `test_modsconfig_edit.py`、`test_mod_settings.py`、
+  `test_config_path_safety.py`（20 个安全用例）
+- 原有 33 个 xfail 已全部转正：PARSE-2..7、DATA-1..9、SEC-1..4、API-1/2/4/7、
+  DL-6/7/9 等
+
 ## [0.6.0] - 2026-09-13
 
 ### ⚠️ 破坏性变更

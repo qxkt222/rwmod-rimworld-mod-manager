@@ -98,8 +98,13 @@ function renderUpdateList(updates: UpdateItem[], container: HTMLElement) {
     b.addEventListener("click", async () => {
       const id = (b as HTMLElement).dataset.id!;
       try {
-        await api.addToQueue([id]);
-        toast(`已加入队列: ${id}`, "success");
+        // force=true: this is an update — without it the queue skips the mod
+        // as already installed and the button silently does nothing (DL-12).
+        const data = await api.addToQueue([id], true);
+        toast(
+          data.added > 0 ? `已加入队列并标记为更新: ${id}` : `已在队列中，已标记为更新: ${id}`,
+          "success",
+        );
       } catch (e: any) {
         toast(`失败: ${e.message}`, "error");
       }
@@ -125,12 +130,19 @@ async function updateAll() {
       allBtn.textContent = "⬇ 全部更新";
       return;
     }
+    // queued = ids add() actually accepted; the rest were already queued
+    // (including residues just requeued by the restart recovery) and are
+    // picked up by the start() call all the same.
+    const queued = data.queued ?? 0;
+    const outdated = data.outdated ?? 0;
+    const requeued = Math.max(0, outdated - queued);
     toast(
-      `已检查 ${data.checked} 个 Mod，${data.outdated} 个待更新已加入队列并开始下载`,
+      `已检查 ${data.checked} 个 Mod：${queued} 个新加入队列，${requeued} 个已在队列中，开始下载`,
       "success",
     );
     container.innerHTML =
-      `<span style="color:#9ece6a">✅ 已加入 ${data.queued} 个 Mod 到下载队列，自动开始下载</span>\n` +
+      `<span style="color:#9ece6a">✅ 已开始处理 ${queued + requeued} 个待更新 Mod` +
+      `（新加入 ${queued} 个，队列中已有 ${requeued} 个）</span>\n` +
       `<span style="color:var(--gray-text)">切换到 📋 队列 面板查看进度</span>`;
   } catch (e: any) {
     container.innerHTML = `<span style="color:#f7768e">全部更新失败: ${esc(e.message)}</span>`;

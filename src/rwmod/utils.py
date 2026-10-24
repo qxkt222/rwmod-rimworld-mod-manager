@@ -50,10 +50,13 @@ def extract_mod_id(raw: str) -> str:
     raw = raw.strip()
     if not raw:
         return ""
-    m = re.search(r"[?&]id=(\d+)", raw)
+    # ASCII-only on purpose: ``str.isdigit()`` and ``\d`` also accept
+    # full-width / Arabic-Indic digits, which are not valid workshop ids and
+    # must not reach SteamCMD argv or backup filenames.
+    m = re.search(r"[?&]id=([0-9]+)", raw)
     if m:
         return m.group(1)
-    if raw.isdigit():
+    if re.fullmatch(r"[0-9]+", raw):
         return raw
     return ""
 
@@ -85,6 +88,28 @@ MAX_ZIP_TOTAL_BYTES = 4 * 1024 * 1024 * 1024  # 4 GB uncompressed total
 MAX_ZIP_MEMBERS = 50_000
 
 
+def _unsafe_member_component(part: str) -> bool:
+    """True if a zip member path component is unusable / aliased on Windows.
+
+    ``zipfile`` strips trailing dots and spaces from every component before
+    creating it, and drops ``""``/``"."``/``".."`` components. A member named
+    ``".. "`` therefore passes a naive string check, resolves to ``dest``
+    itself, and then makes ``extractall`` raise ``ValueError("Empty filename.")``
+    — outside the documented ``BadZipFile`` contract. Reject such components
+    up front: empty after Windows trimming, a trailing-dot/space alias, or a
+    traversal component.
+    """
+    stripped = part.rstrip(" .")
+    if stripped == "..":
+        return True
+    if stripped == "":
+        # "." is a harmless no-op component that zipfile drops; any other
+        # all-dots/spaces component ("", ".. ", "...") is traversal or
+        # collapses to an empty name inside extractall.
+        return part != "."
+    return stripped != part
+
+
 def safe_extract_zip(
     zf: zipfile.ZipFile,
     dest_dir: Path,
@@ -112,6 +137,11 @@ def safe_extract_zip(
     seen: set[str] = set()
     for member in members:
         name = member.filename.replace("\\", "/")
+        parts = name.split("/")
+        if parts and parts[-1] == "":
+            parts.pop()  # a directory member's trailing slash
+        if any(_unsafe_member_component(part) for part in parts if part):
+            raise zipfile.BadZipFile(f"zip 包含不安全的路径: {member.filename!r}")
         unsafe = name.startswith("/") or name.startswith("../") or "/../" in name
         if unsafe or name in ("", ".", ".."):
             raise zipfile.BadZipFile(f"zip 包含不安全的路径: {member.filename!r}")

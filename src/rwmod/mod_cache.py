@@ -2,6 +2,10 @@
 
 Uses a TTL-based in-memory cache with directory mtime-based invalidation.
 When a mod folder is touched (installed/deleted), only that entry is invalidated.
+
+The in-memory layer is partitioned by ``str(mods_dir)``: switching to another
+instance (another mods directory) must never serve the previous instance's
+metadata, even when both contain a folder with the same name.
 """
 
 from __future__ import annotations
@@ -14,38 +18,37 @@ from pathlib import Path
 
 from rwmod.metadata import ModMeta, read_mod_metadata
 
-__all__ = ["get_cached_mods", "invalidate_cache"]
+__all__ = ["clear_memory_cache", "get_cached_mods", "invalidate_cache"]
 
 _MAX_AGE_SECONDS = 30  # TTL: re-scan entire mods dir after this many seconds
-_cache: dict[str, ModMeta] = {}
-_cache_time: float = 0
-_cache_dir_mtime: float = 0
+#: mods dir (str) → (folder → meta, cached_at monotonic, dir mtime)
+_cache: dict[str, tuple[dict[str, ModMeta], float, float]] = {}
 _lock = threading.Lock()
 
 
-def get_cached_mods(mods_dir: Path) -> list[ModMeta]:
+def get_cached_mods(mods_dir: Path, instance_id: str | None = None) -> list[ModMeta]:
     """Return cached mod metadata with three-layer fallback.
 
     1. In-memory TTL cache (30s) — instant for rapid re-requests.
     2. SQLite persistent cache — per-mod incremental refresh, survives restarts.
     3. Full filesystem scan — only when cache is cold (first run).
     """
-    global _cache, _cache_time, _cache_dir_mtime
-
+    key = str(mods_dir)
     if not mods_dir.exists():
         with _lock:
-            _cache.clear()
-            _cache_time = 0
-            _cache_dir_mtime = 0
+            _cache.pop(key, None)
         return []
 
     dir_mtime = _mods_dir_mtime(mods_dir)
     now = time.monotonic()
 
-    # Layer 1: in-memory cache hit
+    # Layer 1: in-memory cache hit (per mods directory)
     with _lock:
-        if _cache and (now - _cache_time) < _MAX_AGE_SECONDS and dir_mtime == _cache_dir_mtime:
-            return list(_cache.values())
+        part = _cache.get(key)
+        if part is not None:
+            cached, cached_at, cached_mtime = part
+            if cached and (now - cached_at) < _MAX_AGE_SECONDS and dir_mtime == cached_mtime:
+                return list(cached.values())
 
     # Layer 2: persistent SQLite cache with per-mod incremental refresh.
     # get_or_refresh_metas handles cold start internally — if DB is empty,
@@ -54,7 +57,12 @@ def get_cached_mods(mods_dir: Path) -> list[ModMeta]:
     try:
         from rwmod.cache_db import get_or_refresh_metas
 
-        metas = get_or_refresh_metas(mods_dir)
+        if instance_id is None:
+            # Let cache_db derive the owning instance from mods_dir; this also
+            # keeps the long-standing one-argument call shape.
+            metas = get_or_refresh_metas(mods_dir)
+        else:
+            metas = get_or_refresh_metas(mods_dir, instance_id=instance_id)
     except Exception:
         _log = logging.getLogger(__name__)
         _log.warning("持久化缓存不可用，回退到全量扫描", exc_info=True)
@@ -62,9 +70,7 @@ def get_cached_mods(mods_dir: Path) -> list[ModMeta]:
 
     if metas:
         with _lock:
-            _cache = {m.folder: m for m in metas}
-            _cache_time = now
-            _cache_dir_mtime = dir_mtime
+            _cache[key] = ({m.folder: m for m in metas}, now, dir_mtime)
         return metas
 
     # Layer 3: full filesystem scan (emergency fallback — only if SQLite cache is
@@ -89,10 +95,14 @@ def get_cached_mods(mods_dir: Path) -> list[ModMeta]:
 
     metas_full = list(new_cache.values())
     with _lock:
-        _cache = new_cache
-        _cache_time = now
-        _cache_dir_mtime = dir_mtime
+        _cache[key] = (new_cache, now, dir_mtime)
     return metas_full
+
+
+def clear_memory_cache() -> None:
+    """Drop the whole in-memory layer (used when switching instances)."""
+    with _lock:
+        _cache.clear()
 
 
 def invalidate_cache(folder: str | None = None) -> None:
@@ -101,13 +111,12 @@ def invalidate_cache(folder: str | None = None) -> None:
     Args:
         folder: mod folder name to invalidate, or None for full invalidation.
     """
-    global _cache, _cache_time
     with _lock:
         if folder is None:
             _cache.clear()
-            _cache_time = 0
-        elif folder in _cache:
-            del _cache[folder]
+        else:
+            for cached, _cached_at, _mtime in _cache.values():
+                cached.pop(folder, None)
 
     # Also invalidate the persistent cache
     try:

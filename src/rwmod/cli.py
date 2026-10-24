@@ -266,7 +266,7 @@ def profile_save(
     cfg = Config.load()
     from rwmod.profile import resolve_modsconfig_path, save_profile
 
-    source = resolve_modsconfig_path(cfg.rimworld_dir)
+    source = resolve_modsconfig_path(cfg.rimworld_dir, config_dir=cfg.config_dir)
     if not source:
         typer.echo("未找到 ModsConfig.xml，从已安装 Mod 生成中...")
         from rwmod.rimsort import generate_modsconfig
@@ -300,9 +300,12 @@ def profile_restore(
 ) -> None:
     """恢复指定 profile 到 ModsConfig.xml."""
     cfg = Config.load()
-    from rwmod.profile import resolve_modsconfig_path, restore_profile
+    from rwmod.profile import modsconfig_target, restore_profile
 
-    target = resolve_modsconfig_path(cfg.rimworld_dir) or (cfg.rimworld_dir / "ModsConfig.xml")
+    # cfg.config_dir (when set) wins over LocalLow discovery; the target is
+    # sandbox-checked, so a misconfigured sandbox fails instead of writing the
+    # user's real ModsConfig.xml.
+    target = modsconfig_target(cfg.rimworld_dir, cfg.config_dir)
     result = restore_profile(name, target)
     typer.echo(result["msg"])
 
@@ -402,9 +405,9 @@ def check_load_order() -> None:
     """分析 ModsConfig.xml 加载顺序，检测常见问题."""
     cfg = Config.load()
     from rwmod.load_order import check_load_order as _check
-    from rwmod.profile import resolve_modsconfig_path
+    from rwmod.profile import modsconfig_target
 
-    path = resolve_modsconfig_path(cfg.rimworld_dir) or (cfg.rimworld_dir / "ModsConfig.xml")
+    path = modsconfig_target(cfg.rimworld_dir, cfg.config_dir)
     try:
         result = _check(path, cfg.mods_dir)
     except RwmodError as e:

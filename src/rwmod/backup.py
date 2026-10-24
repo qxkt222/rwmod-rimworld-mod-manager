@@ -140,6 +140,7 @@ def restore_mod(
     # rename is NOT atomic — if RimWorld locks a DLL mid-delete, the mod is
     # left half-deleted with nothing to restore.
     swapped_old: Path | None = None
+    swap_done = False
     try:
         if current.exists():
             swapped_old = mods_dir / (
@@ -148,15 +149,23 @@ def restore_mod(
             current.rename(swapped_old)
         try:
             restored_src.rename(current)
+            swap_done = True
         except OSError:
             if swapped_old is not None and swapped_old.exists():
-                swapped_old.rename(current)  # roll back to pre-restore state
+                # Roll back to the pre-restore state. If this rename also
+                # fails, the original stays at swapped_old: the finally block
+                # must NOT delete it — there is no replacement in place, and
+                # destroying the only copy is exactly what the swap prevents
+                # (DATA-6).
+                swapped_old.rename(current)
+                swapped_old = None
             raise
     except OSError as e:
         shutil.rmtree(tmp_dir, ignore_errors=True)
         return {"ok": False, "msg": f"恢复失败: {e}"}
     finally:
-        if swapped_old is not None:
+        # Only discard the replaced copy once the new one is safely in place.
+        if swap_done and swapped_old is not None:
             shutil.rmtree(swapped_old, ignore_errors=True)
         shutil.rmtree(tmp_dir, ignore_errors=True)
 

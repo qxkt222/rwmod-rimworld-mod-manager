@@ -66,6 +66,59 @@ class TestCheckVersionSupport:
         assert len(result["unknown"]) == 1
 
 
+class TestSupportedVersionsCache:
+    def test_supported_versions_survive_second_scan(self, tmp_path: Path):
+        """S-P0-1: cold and warm cache reads must agree.
+
+        The SQLite cache used to reconstruct ModMeta without supported_versions,
+        so every warm read reported all mods as "unknown".
+        """
+        from rwmod.cache_db import get_or_refresh_metas
+        from rwmod.database import close_db, init_db
+
+        mods = tmp_path / "Mods"
+        about = mods / "MyMod" / "About"
+        about.mkdir(parents=True)
+        (about / "About.xml").write_text(
+            "<ModMetaData><name>My Mod</name><packageId>author.mod</packageId>"
+            "<supportedVersions><li>1.5</li><li>1.6</li></supportedVersions></ModMetaData>",
+            encoding="utf-8",
+        )
+
+        init_db()
+        try:
+            first = get_or_refresh_metas(mods)
+            second = get_or_refresh_metas(mods)
+        finally:
+            close_db()
+
+        assert first[0].supported_versions == ["1.5", "1.6"]
+        assert second[0].supported_versions == ["1.5", "1.6"]
+
+    def test_empty_supported_versions_survive_second_scan(self, tmp_path: Path):
+        """An explicitly empty list is cached as [] — not confused with NULL."""
+        from rwmod.cache_db import get_or_refresh_metas
+        from rwmod.database import close_db, init_db
+
+        mods = tmp_path / "Mods"
+        about = mods / "MyMod" / "About"
+        about.mkdir(parents=True)
+        (about / "About.xml").write_text(
+            "<ModMetaData><name>My Mod</name><packageId>author.mod</packageId></ModMetaData>",
+            encoding="utf-8",
+        )
+
+        init_db()
+        try:
+            first = get_or_refresh_metas(mods)
+            second = get_or_refresh_metas(mods)
+        finally:
+            close_db()
+
+        assert first[0].supported_versions == []
+        assert second[0].supported_versions == []
+
+
 class TestNormalizeVersion:
     def test_simple(self):
         assert _normalize_version("1.5") == "1.5"

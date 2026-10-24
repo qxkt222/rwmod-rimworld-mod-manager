@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
+from rwmod.config import Config
 from rwmod.database import (
     close_db,
     get_conn,
@@ -17,6 +18,7 @@ from rwmod.database import (
     queue_load_pending,
     queue_upsert,
 )
+from rwmod.queue import DownloadQueue
 
 
 @pytest.fixture
@@ -122,3 +124,155 @@ class TestQueueClearDone:
         assert len(remaining) == 2
         ids = {r["workshop_id"] for r in remaining}
         assert ids == {"3", "4"}
+
+
+# ── Wave 6b: per-instance queue ownership ──────────────────────────
+
+
+class TestQueueInstanceScope:
+    def test_loads_and_mutations_are_instance_scoped(self, temp_db):
+        queue_upsert("1", instance_id="alpha", name="A", status="done")
+        queue_upsert("2", instance_id="alpha", name="B", status="pending")
+        queue_upsert("3", instance_id="beta", name="C", status="done")
+
+        assert {r["workshop_id"] for r in queue_load_all(instance_id="alpha")} == {"1", "2"}
+        assert {r["workshop_id"] for r in queue_load_all(instance_id="beta")} == {"3"}
+        assert {r["workshop_id"] for r in queue_load_pending(instance_id="alpha")} == {"2"}
+        assert queue_load_pending(instance_id="beta") == []
+        assert {r["instance_id"] for r in queue_load_all()} == {"alpha", "beta"}
+
+        # Scoped cleanup only touches the named instance's rows.
+        queue_clear_done(instance_id="alpha")
+        assert {r["workshop_id"] for r in queue_load_all()} == {"2", "3"}
+        queue_delete("2", instance_id="beta")  # wrong instance → no-op
+        assert {r["workshop_id"] for r in queue_load_all()} == {"2", "3"}
+        queue_delete("2", instance_id="alpha")
+        assert {r["workshop_id"] for r in queue_load_all()} == {"3"}
+
+    def test_unscoped_calls_keep_their_old_meaning(self, temp_db):
+        queue_upsert("1", instance_id="alpha", status="done")
+        queue_upsert("2", instance_id="beta", status="pending")
+        assert {r["workshop_id"] for r in queue_load_all()} == {"1", "2"}
+        assert [r["workshop_id"] for r in queue_load_pending()] == ["2"]
+        queue_clear_done()
+        assert [r["workshop_id"] for r in queue_load_all()] == ["2"]
+        queue_delete("2")
+        assert queue_load_all() == []
+
+
+class TestQueueInstanceRecovery:
+    def test_load_from_db_preserves_instance_id(self, temp_db):
+        queue_upsert("111", instance_id="alpha", name="A", status="downloading")
+        queue_upsert("222", instance_id="beta", name="B", status="pending")
+
+        q = DownloadQueue()
+        q._load_from_db()
+
+        got = {i.id: (i.instance_id, i.status) for i in q.items}
+        assert got["111"][0] == "alpha"
+        assert got["111"][1] == "pending"  # interrupted download is requeued
+        assert got["222"] == ("beta", "pending")
+
+    def test_add_records_current_instance_and_dedupes_per_instance(self, temp_db, monkeypatch):
+        import rwmod.queue as q_mod
+
+        monkeypatch.setattr(q_mod, "current_instance_id", lambda: "alpha")
+        q = DownloadQueue()
+        first = q.add(["111"])
+        assert first[0].instance_id == "alpha"
+        assert q.add(["111"]) == []  # same instance + id is a duplicate
+
+        other = q.add(["111"], instance_id="beta")  # explicit override
+        assert other[0].instance_id == "beta"
+        assert [i.instance_id for i in q.items] == ["alpha", "beta"]
+
+
+class TestInstanceSwitchQueueGuard:
+    """Queue-side half of the 409: the router sees the pending rows."""
+
+    @staticmethod
+    def _cfg(tmp_path: Path):
+        from rwmod.config import InstanceConfig
+
+        exe = tmp_path / "steamcmd.exe"
+        default_mods = tmp_path / "DefaultMods"
+        beta_mods = tmp_path / "BetaMods"
+        default_mods.mkdir()
+        beta_mods.mkdir()
+        return Config(
+            instances=[
+                InstanceConfig(id="default", mods_dir=default_mods, steamcmd_path=exe),
+                InstanceConfig(id="beta", mods_dir=beta_mods, steamcmd_path=exe),
+            ],
+            active_instance="default",
+        )
+
+    def test_pending_queue_item_blocks_activation(self, temp_db, tmp_path):
+        from fastapi import HTTPException
+
+        from rwmod.routers.config import activate_instance
+
+        cfg = self._cfg(tmp_path)
+        queue_upsert("111", instance_id="default", status="pending")
+
+        with pytest.raises(HTTPException) as exc:
+            activate_instance("beta", cfg=cfg)
+        assert exc.value.status_code == 409
+        assert cfg.active_instance == "default"
+
+        queue_delete("111", instance_id="default")
+        assert activate_instance("beta", cfg=cfg) == {"ok": True, "active_instance": "beta"}
+        assert cfg.active_instance == "beta"
+
+
+class TestQueueCompositePersistenceV4:
+    """Wave 6c: two instances may persist the same workshop id side by side."""
+
+    def test_two_instances_same_id_survive_restart(self, temp_db):
+        queue_upsert("111", instance_id="alpha", name="A", status="pending")
+        queue_upsert("111", instance_id="beta", name="B", status="downloading")
+
+        q = DownloadQueue()
+        q._load_from_db()
+
+        assert {(i.instance_id, i.id, i.status) for i in q.items} == {
+            ("alpha", "111", "pending"),
+            ("beta", "111", "pending"),  # interrupted download requeued
+        }
+
+    def test_queue_add_persists_both_instances(self, temp_db, monkeypatch):
+        import rwmod.queue as q_mod
+
+        monkeypatch.setattr(q_mod, "current_instance_id", lambda: "alpha")
+        q = DownloadQueue()
+        q.add(["111"])
+        q.add(["111"], instance_id="beta")
+
+        reloaded = DownloadQueue()
+        reloaded._load_from_db()
+        assert {(i.instance_id, i.id) for i in reloaded.items} == {
+            ("alpha", "111"),
+            ("beta", "111"),
+        }
+
+    def test_clear_done_and_delete_are_scoped_for_the_same_workshop_id(self, temp_db):
+        queue_upsert("111", instance_id="alpha", status="done")
+        queue_upsert("111", instance_id="beta", status="done")
+
+        queue_clear_done(instance_id="alpha")
+        assert [(r["instance_id"], r["workshop_id"]) for r in queue_load_all()] == [("beta", "111")]
+
+        queue_delete("111", instance_id="alpha")  # already gone → no-op
+        assert [(r["instance_id"], r["workshop_id"]) for r in queue_load_all()] == [("beta", "111")]
+        queue_delete("111", instance_id="beta")
+        assert queue_load_all() == []
+
+    def test_remove_same_id_only_deletes_its_own_instance_row(self, temp_db):
+        q = DownloadQueue()
+        q.add(["111"], instance_id="alpha")
+        q.add(["111"], instance_id="beta")
+
+        assert q.remove("111") is True
+
+        assert [(r["instance_id"], r["workshop_id"]) for r in queue_load_all()] == [("beta", "111")]
+        assert [(i.instance_id, i.id) for i in q.items] == [("beta", "111")]

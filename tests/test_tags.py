@@ -95,3 +95,30 @@ class TestRemoveAllTags:
 
     def test_nonexistent_folder(self, temp_db_tags):
         assert remove_all_tags("nonexistent") == 0
+
+
+class TestInstanceScopedTags:
+    """Wave 6a: two instances with the same folder name keep separate tags."""
+
+    def test_same_folder_is_isolated_per_instance(self, temp_db_tags):
+        assert add_tag("Shared", "QoL", instance_id="alpha")
+        assert add_tag("Shared", "Content", instance_id="beta")
+
+        assert get_tags("Shared", instance_id="alpha") == ["QoL"]
+        assert get_tags("Shared", instance_id="beta") == ["Content"]
+        assert get_mods_by_tag("QoL", instance_id="beta") == []
+        assert get_mods_by_tag("Content", instance_id="alpha") == []
+
+        assert list_all_tags(instance_id="alpha") == [{"tag": "QoL", "count": 1}]
+        assert list_all_tags(instance_id="beta") == [{"tag": "Content", "count": 1}]
+
+        assert remove_tag("Shared", "QoL", instance_id="beta") is False
+        assert remove_tag("Shared", "QoL", instance_id="alpha") is True
+
+        remove_all_tags("Shared", instance_id="beta")
+        assert get_tags("Shared", instance_id="beta") == []
+
+    def test_omitted_instance_uses_the_default(self, temp_db_tags):
+        add_tag("mod", "QoL")
+        assert get_tags("mod", instance_id="default") == ["QoL"]
+        assert list_all_tags(instance_id="default") == [{"tag": "QoL", "count": 1}]

@@ -5,6 +5,10 @@ import { api, type SSEEvent } from "../api";
 import { esc, fmtBytes } from "../dom";
 import { setStatus, refreshMods } from "../main";
 
+// P0-2: fail events carry a structured reason. api.ts is shared, so extend
+// the event type locally.
+type DownloadEvent = SSEEvent & { error_kind?: string; error_detail?: string };
+
 let activeController: AbortController | null = null;
 let depTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -169,7 +173,7 @@ async function startDownload() {
   refreshMods();
 }
 
-function renderSSE(evt: SSEEvent) {
+function renderSSE(evt: DownloadEvent) {
   switch (evt.event) {
     case "start":
       return renderLog(`▶ 开始下载 ${evt.id}`);
@@ -183,8 +187,12 @@ function renderSSE(evt: SSEEvent) {
       return renderLog(`  ✓ ${evt.msg}`, "line-ok");
     case "ok":
       return renderLog(`  ✓ ${evt.msg}`, "line-ok");
-    case "fail":
-      return renderLog(`  ✗ ${evt.msg}`, "line-error");
+    case "fail": {
+      // Short reason from the backend; the raw detail is one line, truncated.
+      const detail = (evt.error_detail || "").trim().slice(0, 160);
+      const extra = detail && detail !== evt.msg ? ` — ${detail}` : "";
+      return renderLog(`  ✗ ${evt.msg || "下载失败"}${extra}`, "line-error");
+    }
     case "done":
       return renderLog(`✅ 完成 ${evt.id}`, "line-ok");
     case "progress":
@@ -211,5 +219,10 @@ export function renderLog(msg: string, cls = "") {
   };
   const style = cls ? ` style="${classes[cls] || ""}"` : "";
   log.innerHTML += `<span${style}>${esc(msg)}</span>\n`;
+  // Cap the DOM: innerHTML += re-parses the whole panel, so an unbounded log
+  // turns a long download into a UI freeze.
+  while (log.childElementCount > 500) {
+    log.removeChild(log.firstElementChild!);
+  }
   log.scrollTop = log.scrollHeight;
 }

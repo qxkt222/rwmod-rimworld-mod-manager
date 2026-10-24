@@ -25,10 +25,28 @@ __all__ = [
 ]
 
 
+def _read_text_any_encoding(file_path: Path) -> str:
+    """Decode a user-supplied text file, tolerating a BOM and non-UTF-8 bytes.
+
+    Modlists and collection JSON are authored on Windows by tools that may
+    prepend a UTF-8 BOM (``utf-8-sig`` strips it) or write in the system
+    codepage (``gbk`` is the common case on Chinese installs). ``latin-1`` is
+    the lossless last resort, so one undecodable byte can no longer abort a
+    whole import with ``UnicodeDecodeError``.
+    """
+    data = file_path.read_bytes()
+    for encoding in ("utf-8-sig", "gbk"):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("latin-1")
+
+
 def parse_modlist_file(file_path: Path) -> list[str]:
     """Extract mod IDs from a text file, one per line, supports # comments and URLs."""
     ids: list[str] = []
-    for line in file_path.read_text(encoding="utf-8").splitlines():
+    for line in _read_text_any_encoding(file_path).splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
@@ -63,7 +81,7 @@ def parse_collection_dir(collection_path: Path) -> list[str]:
     for f in collection_path.iterdir():
         if f.suffix == ".json":
             try:
-                data = json.loads(f.read_text(encoding="utf-8"))
+                data = json.loads(_read_text_any_encoding(f))
                 _extract_ids_from_json(data, ids)
             except (OSError, json.JSONDecodeError) as e:
                 _log.debug("跳过不可读 JSON %s: %s", f.name, e)
@@ -129,14 +147,23 @@ def _extract_from_dict(d: dict[str, object], ids: list[str]) -> None:
 
 
 def parse_mods_config(config_xml: Path) -> list[str]:
-    """Extract mod packageIds from a RimSort ModsConfig.xml."""
+    """Extract active mod packageIds from a RimSort ModsConfig.xml.
+
+    Only ``<activeMods><li>`` entries are mods. ``knownExpansions`` also uses
+    ``<li>`` and must not leak in here — ``rimsort.parse_modsconfig`` has
+    always scoped to ``activeMods``, and disagreeing scopes made the CLI
+    report installed DLC as missing mods (PARSE-5).
+    """
     try:
         root = parse_xml_root(config_xml)
     except Exception as e:  # noqa: BLE001 — malformed or entity-laden XML
         _log.error("无法解析 ModsConfig.xml: %s", e)
         return []
+    active_mods = root.find("activeMods")
+    if active_mods is None:
+        return []
     ids: list[str] = []
-    for li in root.findall(".//li"):
+    for li in active_mods.findall("li"):
         if li.text:
             ids.append(li.text.strip())
     return ids

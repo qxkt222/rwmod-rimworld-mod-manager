@@ -5,10 +5,25 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from rwmod.config import Config
 from rwmod.deps import get_config
 from rwmod.errors import ModNotFoundError
-from rwmod.parser import get_installed_package_ids
+from rwmod.metadata import ModMeta, package_id_key
+from rwmod.mod_cache import get_cached_mods
 from rwmod.save_parser import analyze_save, find_save_files, parse_save_mods
 
 router = APIRouter(prefix="/api/saves", tags=["saves"])
+
+
+def _installed_package_ids(cfg: Config) -> set[str]:
+    """packageIds of installed mods, read from the shared metadata cache.
+
+    Re-parsing every About.xml on each save request dominated the cost on a
+    560-mod install; the cache already refreshes via TTL and per-folder mtime.
+    """
+    return {m.package_id for m in get_cached_mods(cfg.mods_dir) if m.package_id}
+
+
+def _workshop_ids_by_key(metas: list[ModMeta]) -> dict[str, str]:
+    """Map the comparison key of each cached packageId to its workshop ID."""
+    return {package_id_key(m.package_id): m.workshop_id for m in metas if m.workshop_id}
 
 
 @router.get("")
@@ -16,8 +31,8 @@ def list_saves(
     cfg: Config = Depends(get_config),
 ):
     """List all found save files with basic analysis."""
-    saves = find_save_files(cfg.rimworld_dir)
-    installed = get_installed_package_ids(cfg.mods_dir)
+    saves = find_save_files(cfg.rimworld_dir, config_dir=cfg.config_dir)
+    installed = _installed_package_ids(cfg)
     results = []
     for sp in saves[:50]:
         analysis = analyze_save(sp, installed)
@@ -40,11 +55,11 @@ def save_detail(
     cfg: Config = Depends(get_config),
 ):
     """Analyze a specific save file in detail."""
-    saves = find_save_files(cfg.rimworld_dir)
+    saves = find_save_files(cfg.rimworld_dir, config_dir=cfg.config_dir)
     target = next((sp for sp in saves if sp.stem == save_name or sp.name == save_name), None)
     if target is None:
         raise ModNotFoundError(f"Save not found: {save_name}")
-    installed = get_installed_package_ids(cfg.mods_dir)
+    installed = _installed_package_ids(cfg)
     return analyze_save(target, installed)
 
 
@@ -80,21 +95,31 @@ async def download_missing_mods(
     import asyncio
 
     from rwmod.downloader import download_one
-    from rwmod.parser import resolve_workshop_ids
 
-    saves = find_save_files(cfg.rimworld_dir)
+    saves = find_save_files(cfg.rimworld_dir, config_dir=cfg.config_dir)
     target = next((sp for sp in saves if sp.stem == save_name or sp.name == save_name), None)
     if target is None:
         raise HTTPException(404, f"Save not found: {save_name}")
 
-    installed = get_installed_package_ids(cfg.mods_dir)
+    # One cache read serves both the installed-id set and the workshop-ID
+    # lookup (issue: re-parsing all About.xml twice per request).
+    metas = get_cached_mods(cfg.mods_dir)
+    installed = {m.package_id for m in metas if m.package_id}
     analysis = analyze_save(target, installed)
     missing = analysis["missing_mods"]
     if not missing:
         return {"total": 0, "results": [], "msg": "该存档所需 Mod 已全部安装"}
 
     cfg.validate()
-    known, unknown = resolve_workshop_ids(missing, cfg.mods_dir)
+    workshop_by_key = _workshop_ids_by_key(metas)
+    known: list[str] = []
+    unknown: list[str] = []
+    for pid in missing:
+        wid = workshop_by_key.get(package_id_key(pid), "")
+        if wid:
+            known.append(wid)
+        else:
+            unknown.append(pid)
     results = []
     for wid in known:
         ok = await asyncio.to_thread(download_one, cfg, wid)

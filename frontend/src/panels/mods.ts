@@ -20,12 +20,77 @@ export function initModsPanel() {
   loadHealth();
   loadCompatibility();
   bindExportCollection();
+  bindActiveToolbar();
 }
 
 // Exported so main.ts can re-apply badges after rendering mod list
 export function refreshBadges() {
   loadHealth();
   loadCompatibility();
+  // A re-render drops the row display style, so re-apply the "仅看已启用"
+  // filter (and keep it authoritative over freshly rendered rows).
+  applyActiveFilter();
+}
+
+// ── batch enable / disable ────────────────────────────────────────
+
+const SELECT_BOXES = "#mod-list .mod-select";
+
+function bindActiveToolbar() {
+  document.getElementById("btn-mods-select-all")?.addEventListener("click", toggleSelectAll);
+  document.getElementById("btn-mods-enable")?.addEventListener("click", () => applyActive(true));
+  document.getElementById("btn-mods-disable")?.addEventListener("click", () => applyActive(false));
+  document.getElementById("mods-only-active")?.addEventListener("change", applyActiveFilter);
+}
+
+function selectedPackageIds(): string[] {
+  return Array.from(document.querySelectorAll<HTMLInputElement>(SELECT_BOXES))
+    .filter((cb) => cb.checked)
+    .map((cb) => cb.dataset.packageId || "")
+    .filter((pid) => pid.length > 0);
+}
+
+function toggleSelectAll() {
+  const boxes = Array.from(document.querySelectorAll<HTMLInputElement>(SELECT_BOXES)).filter(
+    (cb) => (cb.closest(".mod-row") as HTMLElement | null)?.style.display !== "none",
+  );
+  const allChecked = boxes.length > 0 && boxes.every((cb) => cb.checked);
+  boxes.forEach((cb) => {
+    cb.checked = !allChecked;
+  });
+}
+
+function applyActiveFilter() {
+  const only = (document.getElementById("mods-only-active") as HTMLInputElement | null)?.checked;
+  document.querySelectorAll<HTMLElement>("#mod-list .mod-row").forEach((row) => {
+    row.style.display = only && row.dataset.active !== "1" ? "none" : "";
+  });
+}
+
+async function applyActive(enable: boolean) {
+  const ids = selectedPackageIds();
+  if (!ids.length) {
+    toast("请先勾选要操作的 Mod", "error");
+    return;
+  }
+
+  try {
+    const result = enable
+      ? await api.setModsActive(ids, [])
+      : await api.setModsActive([], ids);
+    const parts = [
+      result.added.length ? `启用 ${result.added.length}` : "",
+      result.removed.length ? `禁用 ${result.removed.length}` : "",
+      result.skipped.length ? `跳过 ${result.skipped.length}` : "",
+    ].filter(Boolean);
+    toast(parts.join("，") || "没有变化", result.skipped.length ? "error" : "success");
+    if (result.needs_sort) {
+      toast("加载顺序需要排序：Harmony/Core/DLC 不在最前", "error");
+    }
+    await refreshMods();
+  } catch (e: any) {
+    toast(`操作失败: ${e.message}`, "error");
+  }
 }
 
 async function loadHealth() {

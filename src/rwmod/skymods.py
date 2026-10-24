@@ -10,14 +10,17 @@ import re
 import shutil
 import socket
 import tempfile
+import threading
+import time
 import urllib.parse
 import urllib.request
 import zipfile
 from collections.abc import Buffer
 from http.client import HTTPResponse
 from pathlib import Path
+from typing import Any
 
-__all__ = ["try_skymods"]
+__all__ = ["try_skymods", "skymods_status", "reset_skymods_breaker"]
 
 from rwmod.config import Config
 from rwmod.utils import safe_extract_zip
@@ -26,6 +29,57 @@ _log = logging.getLogger(__name__)
 
 SKYMODS_SEARCH = "https://catalogue.smods.ru/"
 RIMWORLD_APP_ID = "294100"
+
+# ── circuit breaker (P2-2) ─────────────────────────────────────────
+# smods.ru is behind a Cloudflare JS challenge: plain urllib gets a 403
+# ("Cf-Mitigated: challenge"). Retrying it per failed mod wastes time and
+# floods the log, so the first failure opens a 10-minute breaker. The
+# fallback is also opt-in (Config.enable_skymods defaults to False).
+SKYMODS_BLOCK_SECONDS = 600
+
+_breaker_lock = threading.Lock()
+_breaker_until = 0.0
+_breaker_logged = False
+
+
+def reset_skymods_breaker() -> None:
+    """Close the breaker and forget the one-shot log state (tests/DI)."""
+    global _breaker_until, _breaker_logged
+    with _breaker_lock:
+        _breaker_until = 0.0
+        _breaker_logged = False
+
+
+def skymods_blocked() -> bool:
+    """True while the breaker is open; also clears it once it expires."""
+    global _breaker_until, _breaker_logged
+    with _breaker_lock:
+        if _breaker_until and time.monotonic() >= _breaker_until:
+            _breaker_until = 0.0
+            _breaker_logged = False
+            return False
+        return _breaker_until > 0
+
+
+def _mark_skymods_blocked(reason: str) -> None:
+    """Open the breaker for 10 minutes, logging only on the transition."""
+    global _breaker_until, _breaker_logged
+    with _breaker_lock:
+        if not _breaker_logged:
+            _log.warning("Skymods 备用源不可用，%s 秒内不再尝试：%s", SKYMODS_BLOCK_SECONDS, reason)
+            _breaker_logged = True
+        _breaker_until = time.monotonic() + SKYMODS_BLOCK_SECONDS
+
+
+def skymods_status(config: Config | None = None) -> str:
+    """One of ``disabled`` / ``blocked`` / ``available`` (for /api/status)."""
+    if config is None:
+        config = Config.load()
+    if not bool(getattr(config, "enable_skymods", False)):
+        return "disabled"
+    return "blocked" if skymods_blocked() else "available"
+
+
 _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     " (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -68,11 +122,75 @@ def _is_safe_download_url(url: str) -> bool:
     return not (addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved)
 
 
+class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Follow a redirect only when the *new* URL passes the SSRF guard.
+
+    urllib follows 3xx internally, so the one check in
+    ``_download_and_extract`` only ever saw the first hop: a 302 from an
+    allowlisted host to a loopback / cloud-metadata address was chased without
+    validation. Re-check the host allowlist (cheap, no DNS) and then the full
+    guard (DNS-resolved private ranges) before urllib issues the next request.
+    """
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        try:
+            parsed = urllib.parse.urlparse(newurl)
+        except ValueError:
+            parsed = None
+        host = ((parsed.hostname or "") if parsed else "").lower()
+        if parsed is None or parsed.scheme not in ("http", "https") or not _host_allowed(host):
+            _log.warning("Skymods 拒绝不安全的重定向: %s", newurl[:120])
+            return None
+        if not _is_safe_download_url(newurl):
+            _log.warning("Skymods 重定向目标解析到内网地址，拒绝: %s", newurl[:120])
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _harden_opener(opener: Any) -> Any:
+    """Make an opener refuse unsafe redirects (idempotent, DI-friendly).
+
+    Production builds ``_shared_opener`` with ``_SafeRedirectHandler``; this
+    also covers injected/test openers built with the plain
+    ``HTTPRedirectHandler``. Only real ``OpenerDirector``-shaped objects are
+    touched; test doubles that merely expose ``open()`` are returned as-is.
+    """
+    handlers = getattr(opener, "handlers", None)
+    if not isinstance(handlers, list):
+        return opener
+    if any(isinstance(h, _SafeRedirectHandler) for h in handlers):
+        return opener
+    safe = _SafeRedirectHandler()
+    opener.add_handler(safe)  # sets parent + dispatch tables
+    # add_handler registers the safe handler next to the plain one; the plain
+    # one would win the 3xx chain (it was inserted first), so drop it from the
+    # dispatch tables (the *only* thing _call_chain consults).
+    http_errors = getattr(opener, "handle_error", {}).get("http", {})
+    for code, chain in list(http_errors.items()):
+        http_errors[code] = [
+            h
+            for h in chain
+            if not (
+                isinstance(h, urllib.request.HTTPRedirectHandler)
+                and not isinstance(h, _SafeRedirectHandler)
+            )
+        ]
+    return opener
+
+
 # Shared opener with redirect + cookie handling — reused across all Skymods
 # downloads. Building a new opener per download wastes resources and loses
 # TCP keep-alive / connection pooling.
 _shared_opener = urllib.request.build_opener(
-    urllib.request.HTTPRedirectHandler(),
+    _SafeRedirectHandler(),
     urllib.request.HTTPCookieProcessor(),
 )
 
@@ -81,7 +199,13 @@ def try_skymods(mod_id: str, config: Config) -> Path | None:
     """Try to download a mod from Skymods as fallback.
 
     Returns the path to the extracted mod folder on success, None on failure.
+    Disabled by default; a failed search opens the 10-minute breaker.
     """
+    if not bool(getattr(config, "enable_skymods", False)):
+        return None
+    if skymods_blocked():
+        return None
+
     search_url = f"{SKYMODS_SEARCH}?s={mod_id}&app={RIMWORLD_APP_ID}"
 
     try:
@@ -93,7 +217,8 @@ def try_skymods(mod_id: str, config: Config) -> Path | None:
                 return None
             html = page.decode("utf-8", errors="replace")
     except OSError as e:
-        _log.warning("Skymods 搜索失败 (%s): %s", mod_id, e)
+        # One log line per breaker window, not one per failed mod.
+        _mark_skymods_blocked(str(e))
         return None
 
     download_url = _extract_download_url(html, mod_id)
@@ -204,7 +329,8 @@ def _download_and_extract(
     tmp_path: Path | None = None
     try:
         req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-        with _shared_opener.open(req, timeout=60) as resp:
+        opener = _harden_opener(_shared_opener)
+        with opener.open(req, timeout=60) as resp:
             sniff = resp.read(512)
             if len(sniff) < 512:
                 _log.warning("Skymods 响应内容过短 (%s): %s bytes", mod_id, len(sniff))

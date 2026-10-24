@@ -7,7 +7,7 @@
  */
 import "./style.css";
 import { api, type ModEntry, type QueueItem } from "./api";
-import { esc } from "./dom";
+import { esc, escAttr } from "./dom";
 import { renderLayout } from "./layout";
 import { DEFAULT_PANEL, PANEL_SHORTCUTS, resolvePanel, type PanelName } from "./panel-registry";
 import { initRouter, navigate } from "./router";
@@ -67,6 +67,9 @@ const PANEL_INIT: Record<PanelName, () => void | Promise<void>> = {
   },
   config: async () => {
     (await import("./panels/config")).initConfigPanel();
+  },
+  settings: async () => {
+    (await import("./panels/settings")).initSettingsPanel();
   },
   saves: async () => {
     (await import("./panels/saves")).initSavesPanel();
@@ -142,7 +145,8 @@ function renderModList(modList: ModEntry[]) {
   }
 
   container.innerHTML = modList.map(m => /* html */ `
-    <div class="mod-row">
+    <div class="mod-row" data-folder="${escAttr(m.folder)}" data-active="${m.active ? '1' : '0'}">
+      <input type="checkbox" class="mod-select" data-package-id="${escAttr(m.package_id)}" title="选中以批量启用/禁用" />
       <div class="mod-icon">📦</div>
       <div class="mod-info">
         <div class="mod-name">${esc(m.name)}</div>
@@ -150,6 +154,7 @@ function renderModList(modList: ModEntry[]) {
           <span>${esc(m.folder)}</span>
           ${m.workshop_id ? `<span>Workshop ${esc(m.workshop_id)}</span>` : ''}
           ${m.package_id ? `<span>${esc(m.package_id)}</span>` : ''}
+          <span class="mod-active-badge" style="color:${m.active ? 'var(--green, #9ece6a)' : 'var(--gray-text)'}">${m.active ? '✅ 已启用' : '⬜ 未启用'}</span>
         </div>
       </div>
     </div>

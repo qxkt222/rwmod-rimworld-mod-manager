@@ -1,3 +1,64 @@
+# rwmod v0.7.0 发布说明
+
+> 全离线 RimWorld Mod 管理器 — 无需 Steam 客户端即可匿名下载、更新、备份与管理 Mod。
+> 本次发布集中加固下载/更新内核、Mod 管理与排序冲突检测，并修复了 ModsConfig 误写
+> 事故的根因。定位于个人本机 / 局域网自用，**不是公网软件**，请勿直接暴露到公网。
+
+---
+
+## ⚡ 下载与更新内核
+
+- 合集 ID 不再交给 SteamCMD；合集探测失败时明确判失败
+- 结构化下载错误（`DownloadOutcome` / `BatchResult`）经队列 / WebSocket / SSE /
+  前端 / 下载历史透出
+- 取消隔离：被取消的项与同批兄弟项互不影响，未完成项重新排队
+- force 更新前持久备份（默认开启、保留 3 份）、安装校验、失败按 stash → backup 回滚
+- SteamCMD 全局运行锁：下载串行，安装校验与合集探测并行
+- 5/15/45 秒退避（±20% jitter）；新增队列重试 / 暂停 / 恢复
+- Skymods 默认关闭，失败后熔断 10 分钟
+
+## 🚀 性能
+
+- Mod 大小后台快照（10 分钟 TTL，不阻塞请求）
+- 健康检查持久缓存（6 小时 TTL、single-flight、允许 stale）
+- 553 Mod 实测：`/api/mods` 11ms（旧 5.2–8.6s）、`/api/dashboard` 6–8ms（旧 25s）、
+  `/api/mods/health` 11ms（旧 14s）
+
+## 🧩 排序与冲突
+
+- `supported_versions` 持久化（SQLite migration v2）
+- packageId 全链路大小写归一；真实存档 missing 420 → 6
+- 官方内容锚定（Harmony → Core → Royalty → Ideology → Biotech → Anomaly → Odyssey）
+- 富格式 `modDependencies` / `alternativePackageIds` / DLC 豁免
+- Community Rules（CC0）+ 用户 `~/.rwmod/rules.json`（用户 > 社区 > 内置）
+- 「声明规则 vs 实际顺序」诊断
+
+## 🛠 Mod 管理
+
+- Mod 列表批量启用/停用，写入 ModsConfig.xml 前自动备份并可撤销
+- 独立「Mod 设置」页：查看/编辑/备份/恢复 `Config/Mod_*.xml`，写入前需确认游戏已关闭
+
+## 🔒 安全
+
+- `Config.config_dir` + `profile.modsconfig_target`：写入不再隐式扫描 LocalLow
+- `RWMOD_TEST_SANDBOX_HOME` 测试沙箱守卫（resolve 后越界即 fail-closed）
+
+## ⚠️ 事故记录
+
+- 2026-10-24 15:47:28，独立验证脚本在未 patch `Path.home()` 的情况下调用
+  `rimsort_apply`，覆盖了真实 `Config/ModsConfig.xml` 的 activeMods 顺序。未丢失 Mod，
+  未改动数据库 / 日志 / 配置 / 游戏目录。已用 Player.log 与事故前记录重建 522 项，
+  证据备份保留；两个 Mod 的原始位置无法精确恢复，仍需进游戏确认。根因已按上述路径
+  显式化与沙箱守卫修复。
+
+## 🧪 质量
+
+- 离线测试套件 **1382 passed / 0 xfailed**；`run_tests.py` 门禁 **6/6**；
+  原有 33 个 xfail 已全部转正
+- `ruff format --check src/ tests/` 96 个文件通过
+
+---
+
 # rwmod v0.6.0 发布说明
 
 > 全离线 RimWorld Mod 管理器 — 无需 Steam 客户端即可匿名下载、更新、备份与管理 Mod。

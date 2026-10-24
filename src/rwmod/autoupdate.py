@@ -74,11 +74,17 @@ class AutoUpdateManager:
             self._check_result.extend(updates)
 
             outdated_ids = [u["workshop_id"] for u in updates]
+            queued = 0
             if outdated_ids:
                 from rwmod.queue import get_queue
 
                 queue = get_queue()
-                queue.add(outdated_ids)
+                # add() dedupes ids that are already queued (including ones the
+                # startup recovery just requeued), so report what it actually
+                # accepted instead of claiming the whole outdated list (DL-13).
+                # Wave 6b: tag the items with the instance being updated, so
+                # the worker downloads into that instance's mods directory.
+                queued = len(queue.add(outdated_ids, instance_id=cfg.active_instance))
                 # force=True: 更新场景必须覆盖现有 Mod，否则 _download_one 会跳过
                 await queue.start(cfg, force=True)
                 self._notify(updates)
@@ -86,7 +92,7 @@ class AutoUpdateManager:
             return {
                 "checked": len(updates),
                 "outdated": len(outdated_ids),
-                "queued": len(outdated_ids),
+                "queued": queued,
             }
 
         finally:

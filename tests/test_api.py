@@ -2,8 +2,18 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
+
+
+@pytest.fixture
+def cfg():
+    """The config the isolated TestClient is serving (same isolated paths)."""
+    from rwmod.config import Config
+
+    return Config.load()
 
 
 class TestHealthEndpoint:
@@ -35,6 +45,8 @@ class TestConfigEndpoint:
             "has_steam_api_key",
             "steamcmd_exists",
             "mods_dir_exists",
+            "instances",
+            "active_instance",
         }
 
     def test_update_config(self, client: TestClient, tmp_path):
@@ -50,6 +62,97 @@ class TestConfigEndpoint:
         # Refuse pointing mods/backup dirs at a filesystem root (C:\ on Windows).
         resp = client.post("/api/config", json={"mods_dir": "C:\\"})
         assert resp.status_code == 400
+
+
+class TestInstanceEndpoints:
+    """Wave 6a — multi-instance API: list, create, activate, delete."""
+
+    def _create(self, client: TestClient, tmp_path: Path, instance_id: str = "second"):
+        mods = tmp_path / f"{instance_id}_Mods"
+        rimworld = tmp_path / f"{instance_id}_RimWorld"
+        return client.post(
+            "/api/config/instances",
+            json={
+                "id": instance_id,
+                "name": instance_id.title(),
+                "mods_dir": str(mods),
+                "rimworld_dir": str(rimworld),
+            },
+        )
+
+    def test_config_reports_instances_and_active(self, client: TestClient):
+        body = client.get("/api/config").json()
+        assert body["active_instance"] == "default"
+        assert [i["id"] for i in body["instances"]] == ["default"]
+        assert body["instances"][0]["mods_dir"] == body["mods_dir"]
+
+    def test_create_activate_and_delete(self, client: TestClient, tmp_path: Path):
+        resp = self._create(client, tmp_path)
+        assert resp.status_code == 200
+        instance = resp.json()["instance"]
+        assert instance["id"] == "second"
+        assert instance["config_dir"] is None
+
+        assert self._create(client, tmp_path).status_code == 409  # duplicate id
+
+        assert client.post("/api/config/instances/second/activate").status_code == 200
+        body = client.get("/api/config").json()
+        assert body["active_instance"] == "second"
+        assert body["mods_dir"] == str(tmp_path / "second_Mods")
+
+        # Cannot delete the active instance.
+        assert client.delete("/api/config/instances/second").status_code == 400
+
+        assert client.post("/api/config/instances/default/activate").status_code == 200
+        assert client.delete("/api/config/instances/second").status_code == 200
+        assert [i["id"] for i in client.get("/api/config").json()["instances"]] == ["default"]
+
+    def test_cannot_delete_the_last_instance(self, client: TestClient):
+        resp = client.delete("/api/config/instances/default")
+        assert resp.status_code == 400
+
+    def test_activate_unknown_instance_is_404(self, client: TestClient):
+        assert client.post("/api/config/instances/ghost/activate").status_code == 404
+
+    def test_create_rejects_relative_mods_dir(self, client: TestClient):
+        resp = client.post(
+            "/api/config/instances",
+            json={"id": "bad", "mods_dir": "relative/path", "rimworld_dir": "D:/RimWorld"},
+        )
+        assert resp.status_code == 400
+
+    def test_activate_is_blocked_by_pending_downloads(self, client: TestClient, tmp_path):
+        assert self._create(client, tmp_path).status_code == 200
+        from rwmod.database import queue_upsert
+
+        queue_upsert("123456", status="pending")
+        resp = client.post("/api/config/instances/second/activate")
+        assert resp.status_code == 409
+        assert client.get("/api/config").json()["active_instance"] == "default"
+
+    def test_activation_clears_the_memory_mod_cache(self, client: TestClient, tmp_path):
+        assert self._create(client, tmp_path).status_code == 200
+        import rwmod.mod_cache as mod_cache
+
+        mod_cache._cache["sentinel"] = ({}, 0.0, 0.0)
+        try:
+            assert client.post("/api/config/instances/second/activate").status_code == 200
+            assert "sentinel" not in mod_cache._cache
+        finally:
+            mod_cache.clear_memory_cache()
+
+    def test_switching_does_not_see_another_instances_tags(self, client: TestClient, tmp_path):
+        """The switch itself is what makes scoped reads follow the new instance."""
+        from rwmod.tags import add_tag, get_tags
+
+        assert self._create(client, tmp_path).status_code == 200
+        add_tag("Shared", "DefaultOnly")  # active instance = default
+        assert client.post("/api/config/instances/second/activate").status_code == 200
+        assert get_tags("Shared") == []
+        add_tag("Shared", "SecondOnly")
+        assert get_tags("Shared") == ["SecondOnly"]
+        assert client.post("/api/config/instances/default/activate").status_code == 200
+        assert get_tags("Shared") == ["DefaultOnly"]
 
 
 class TestModsEndpoint:
@@ -85,6 +188,316 @@ class TestModsEndpoint:
         resp = client.get("/api/mods/health")
         assert resp.status_code == 200
         assert "mods" in resp.json()
+
+
+class TestModsActiveEndpoint:
+    """POST /api/mods/active and the `active` flag on GET /api/mods."""
+
+    @pytest.fixture(autouse=True)
+    def _sandbox_marker(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Every path this class writes must stay inside pytest's tmp tree."""
+        monkeypatch.setenv("RWMOD_TEST_SANDBOX_HOME", str(tmp_path))
+
+    @staticmethod
+    def _make_mod(cfg, folder: str, package_id: str) -> None:
+        about = cfg.mods_dir / folder / "About"
+        about.mkdir(parents=True)
+        (about / "About.xml").write_text(
+            f"<ModMetaData><name>{folder}</name><packageId>{package_id}</packageId></ModMetaData>",
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def _write_config(cfg, active_ids: list[str]) -> Path:
+        target = Path(cfg.rimworld_dir) / "ModsConfig.xml"
+        items = "".join(f"<li>{pid}</li>" for pid in active_ids)
+        target.write_text(
+            f"<ModsConfigData><version>1.6</version>"
+            f"<activeMods>{items}</activeMods></ModsConfigData>",
+            encoding="utf-8",
+        )
+        return target
+
+    def test_list_mods_reports_active_case_insensitively(self, client: TestClient, cfg):
+        """RimWorld lowercases ModsConfig ids while About.xml keeps the casing."""
+        self._make_mod(cfg, "MixedCase", "Author.MixedCase")
+        self._make_mod(cfg, "Inactive", "inactive.mod")
+        self._write_config(cfg, ["author.mixedcase"])
+
+        mods = client.get("/api/mods").json()
+        by_folder = {m["folder"]: m for m in mods}
+
+        assert by_folder["MixedCase"]["active"] is True
+        assert by_folder["Inactive"]["active"] is False
+        assert all("active" in m for m in mods)
+
+    def test_list_mods_without_modsconfig_marks_everything_inactive(self, client: TestClient, cfg):
+        self._make_mod(cfg, "Lonely", "lonely.mod")
+
+        mods = client.get("/api/mods").json()
+        assert [m["active"] for m in mods] == [False]
+
+    def test_list_mods_with_malformed_modsconfig_degrades_to_inactive(
+        self, client: TestClient, cfg
+    ):
+        """Listing is read-only: a broken config must not fail the whole page."""
+        self._make_mod(cfg, "Lonely", "lonely.mod")
+        (cfg.rimworld_dir / "ModsConfig.xml").write_text("<broken>", encoding="utf-8")
+
+        resp = client.get("/api/mods")
+
+        assert resp.status_code == 200
+        assert [m["active"] for m in resp.json()] == [False]
+
+    def test_enable_appends_and_returns_backup(self, client: TestClient, cfg, tmp_path):
+        self._make_mod(cfg, "Fresh", "fresh.mod")
+        target = self._write_config(cfg, ["brrainz.harmony"])
+        assert Path(target).is_relative_to(tmp_path)
+
+        resp = client.post("/api/mods/active", json={"enable": ["fresh.mod"]})
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["added"] == ["fresh.mod"]
+        assert body["removed"] == []
+        assert body["skipped"] == []
+        assert body["active_count"] == 2
+        assert body["needs_sort"] is False
+        assert body["backup"] and body["backup"].startswith("ModsConfig.xml.bak_")
+        assert body["backup"] in [p.name for p in Path(target).parent.glob("*.bak_*")]
+        written = Path(target).read_text(encoding="utf-8")
+        assert written.index("brrainz.harmony") < written.index("fresh.mod")
+
+    def test_disable_removes_only_the_requested_mod(self, client: TestClient, cfg):
+        self._make_mod(cfg, "Fresh", "fresh.mod")
+        target = self._write_config(cfg, ["brrainz.harmony", "fresh.mod", "keep.mod"])
+
+        body = client.post("/api/mods/active", json={"disable": ["FRESH.MOD"]}).json()
+
+        assert body["removed"] == ["fresh.mod"]
+        assert body["added"] == []
+        written = Path(target).read_text(encoding="utf-8")
+        assert "fresh.mod" not in written
+        assert "keep.mod" in written
+
+    def test_unknown_ids_are_skipped_without_failing(self, client: TestClient, cfg):
+        self._write_config(cfg, ["brrainz.harmony"])
+
+        resp = client.post(
+            "/api/mods/active", json={"enable": ["ghost.mod"], "disable": ["nope.mod"]}
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["skipped"] == ["nope.mod", "ghost.mod"]
+
+    def test_missing_modsconfig_is_404(self, client: TestClient):
+        resp = client.post("/api/mods/active", json={"enable": ["a.b"]})
+        assert resp.status_code == 404
+        assert resp.json()["error"] == "ModNotFoundError"
+
+    def test_malformed_modsconfig_is_400(self, client: TestClient, cfg):
+        target = cfg.rimworld_dir / "ModsConfig.xml"
+        target.write_text("<ModsConfigData><activeMods>", encoding="utf-8")
+
+        resp = client.post("/api/mods/active", json={"enable": ["a.b"]})
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "ValidationError"
+
+    def test_empty_request_is_400(self, client: TestClient, cfg):
+        self._write_config(cfg, ["brrainz.harmony"])
+
+        resp = client.post("/api/mods/active", json={})
+        assert resp.status_code == 400
+
+    def test_sort_true_anchors_official_content(self, client: TestClient, cfg):
+        self._make_mod(cfg, "Community", "community.mod")
+        target = self._write_config(cfg, ["community.mod", "ludeon.rimworld"])
+
+        body = client.post("/api/mods/active", json={"sort": True}).json()
+
+        assert body["needs_sort"] is False
+        written = Path(target).read_text(encoding="utf-8")
+        assert written.index("ludeon.rimworld") < written.index("community.mod")
+
+    def test_sort_keeps_unresolved_active_ids(self, client: TestClient, cfg):
+        """A stale id cannot be sorted but must never be dropped."""
+        target = self._write_config(cfg, ["ghost.mod", "ludeon.rimworld"])
+
+        resp = client.post("/api/mods/active", json={"sort": True})
+
+        assert resp.status_code == 200, resp.text
+        written = Path(target).read_text(encoding="utf-8")
+        assert "ghost.mod" in written
+        assert written.index("ludeon.rimworld") < written.index("ghost.mod")
+
+
+class TestModSettingsEndpoint:
+    """Config/Mod_*.xml listing, raw editing and backups over HTTP."""
+
+    @pytest.fixture(autouse=True)
+    def _sandbox_marker(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Every path this class writes must stay inside pytest's tmp tree."""
+        monkeypatch.setenv("RWMOD_TEST_SANDBOX_HOME", str(tmp_path))
+
+    @staticmethod
+    def _use_config_dir(cfg, tmp_path: Path) -> Path:
+        from rwmod.config import Config
+
+        config_dir = tmp_path / "explicit_config"
+        config_dir.mkdir()
+        cfg.config_dir = config_dir
+        cfg.save()
+        assert Config.load().config_dir == config_dir
+        return config_dir
+
+    @staticmethod
+    def _write_setting(config_dir: Path, name: str, xml: str) -> Path:
+        target = config_dir / name
+        target.write_text(xml, encoding="utf-8")
+        assert target.is_relative_to(config_dir.parent)
+        return target
+
+    def test_list_without_config_dir_is_empty(self, client: TestClient):
+        resp = client.get("/api/mod-settings")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["files"] == []
+        assert body["config_dir"] is None
+
+    def test_list_only_mod_settings_files(self, client: TestClient, cfg, tmp_path: Path):
+        config_dir = self._use_config_dir(cfg, tmp_path)
+        self._write_setting(config_dir, "Mod_1_Thing.xml", "<a/>")
+        self._write_setting(config_dir, "KeyPrefs.xml", "<b/>")
+
+        body = client.get("/api/mod-settings").json()
+
+        assert body["config_dir"] == str(config_dir)
+        assert [f["filename"] for f in body["files"]] == ["Mod_1_Thing.xml"]
+
+    def test_get_returns_raw_xml(self, client: TestClient, cfg, tmp_path: Path):
+        config_dir = self._use_config_dir(cfg, tmp_path)
+        self._write_setting(config_dir, "Mod_1_Thing.xml", "<ModSettings><v>1</v></ModSettings>")
+
+        resp = client.get("/api/mod-settings/Mod_1_Thing.xml")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["xml"] == "<ModSettings><v>1</v></ModSettings>"
+        assert body["well_formed"] is True
+        assert body["root_tag"] == "ModSettings"
+
+    def test_get_missing_file_is_404(self, client: TestClient, cfg, tmp_path: Path):
+        self._use_config_dir(cfg, tmp_path)
+
+        resp = client.get("/api/mod-settings/Mod_9_Nope.xml")
+        assert resp.status_code == 404
+        assert resp.json()["error"] == "ModNotFoundError"
+
+    def test_non_mod_filename_is_400(self, client: TestClient, cfg, tmp_path: Path):
+        self._use_config_dir(cfg, tmp_path)
+
+        resp = client.get("/api/mod-settings/KeyPrefs.xml")
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "ValidationError"
+
+    def test_put_requires_ack(self, client: TestClient, cfg, tmp_path: Path):
+        config_dir = self._use_config_dir(cfg, tmp_path)
+        target = self._write_setting(config_dir, "Mod_1_Thing.xml", "<a/>")
+
+        resp = client.put("/api/mod-settings/Mod_1_Thing.xml", json={"xml": "<b/>"})
+
+        assert resp.status_code == 400
+        assert target.read_text(encoding="utf-8") == "<a/>"
+
+    def test_put_writes_and_backs_up(self, client: TestClient, cfg, tmp_path: Path):
+        config_dir = self._use_config_dir(cfg, tmp_path)
+        target = self._write_setting(config_dir, "Mod_1_Thing.xml", "<a/>")
+
+        resp = client.put(
+            "/api/mod-settings/Mod_1_Thing.xml",
+            json={"xml": "<b/>", "ack_game_closed": True},
+        )
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["backup"]
+        assert target.read_text(encoding="utf-8") == "<b/>"
+        backup = Path.home() / ".rwmod" / "mod_settings_backups" / body["backup"]
+        assert backup.is_relative_to(tmp_path)
+        assert backup.read_text(encoding="utf-8") == "<a/>"
+
+    def test_put_malformed_xml_is_400(self, client: TestClient, cfg, tmp_path: Path):
+        config_dir = self._use_config_dir(cfg, tmp_path)
+        target = self._write_setting(config_dir, "Mod_1_Thing.xml", "<a/>")
+
+        resp = client.put(
+            "/api/mod-settings/Mod_1_Thing.xml",
+            json={"xml": "<broken>", "ack_game_closed": True},
+        )
+
+        assert resp.status_code == 400
+        assert target.read_text(encoding="utf-8") == "<a/>"
+
+    def test_put_oversized_is_400(self, client: TestClient, cfg, tmp_path: Path):
+        config_dir = self._use_config_dir(cfg, tmp_path)
+        self._write_setting(config_dir, "Mod_1_Thing.xml", "<a/>")
+
+        resp = client.put(
+            "/api/mod-settings/Mod_1_Thing.xml",
+            json={"xml": "<a>" + "x" * (2 * 1024 * 1024) + "</a>", "ack_game_closed": True},
+        )
+
+        assert resp.status_code == 400
+
+    def test_restore_latest_backup(self, client: TestClient, cfg, tmp_path: Path):
+        config_dir = self._use_config_dir(cfg, tmp_path)
+        target = self._write_setting(config_dir, "Mod_1_Thing.xml", "<v1/>")
+        client.put(
+            "/api/mod-settings/Mod_1_Thing.xml",
+            json={"xml": "<v2/>", "ack_game_closed": True},
+        )
+        assert target.read_text(encoding="utf-8") == "<v2/>"
+
+        resp = client.post(
+            "/api/mod-settings/Mod_1_Thing.xml/restore",
+            json={"ack_game_closed": True},
+        )
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["restored_from"]
+        assert target.read_text(encoding="utf-8") == "<v1/>"
+
+    def test_restore_without_backups_is_404(self, client: TestClient, cfg, tmp_path: Path):
+        config_dir = self._use_config_dir(cfg, tmp_path)
+        self._write_setting(config_dir, "Mod_9_Never.xml", "<a/>")
+
+        resp = client.post(
+            "/api/mod-settings/Mod_9_Never.xml/restore",
+            json={"ack_game_closed": True},
+        )
+
+        assert resp.status_code == 404
+        assert resp.json()["error"] == "ModNotFoundError"
+
+    def test_backup_all_then_list_backups(self, client: TestClient, cfg, tmp_path: Path):
+        config_dir = self._use_config_dir(cfg, tmp_path)
+        self._write_setting(config_dir, "Mod_1_Thing.xml", "<a/>")
+        self._write_setting(config_dir, "Mod_2_Other.xml", "<b/>")
+
+        backed_up = client.post("/api/mod-settings/backup-all")
+        assert backed_up.status_code == 200
+        assert backed_up.json()["count"] == 2
+
+        listed = client.get("/api/mod-settings/backups")
+        assert listed.status_code == 200
+        body = listed.json()
+        assert {b["source"] for b in body["backups"]} == {
+            "Mod_1_Thing.xml",
+            "Mod_2_Other.xml",
+        }
+        assert Path(body["backup_dir"]).is_relative_to(tmp_path)
 
 
 class TestDashboardEndpoint:
@@ -191,6 +604,76 @@ class TestSavesEndpoint:
         assert resp.status_code == 404
         assert resp.json()["error"] == "ModNotFoundError"
         assert resp.json()["detail"]
+
+    def test_save_detail_matches_package_ids_case_insensitively(self, client: TestClient, cfg):
+        """RimWorld lowercases save ids; About.xml keeps the original casing."""
+        about = cfg.mods_dir / "MixedCase" / "About"
+        about.mkdir(parents=True)
+        (about / "About.xml").write_text(
+            "<ModMetaData><packageId>Author.MixedCase</packageId></ModMetaData>",
+            encoding="utf-8",
+        )
+        saves_dir = cfg.rimworld_dir / "Saves"
+        saves_dir.mkdir()
+        (saves_dir / "Colony.rws").write_text(
+            "<savegame><modIds><li>author.mixedcase</li></modIds></savegame>",
+            encoding="utf-8",
+        )
+
+        detail = client.get("/api/saves/Colony")
+        assert detail.status_code == 200
+        body = detail.json()
+        assert body["required_mods"] == ["author.mixedcase"]
+        assert body["missing_mods"] == []
+        assert body["loadable"] is True
+
+        listing = client.get("/api/saves").json()["saves"]
+        assert [s["name"] for s in listing] == ["Colony"]
+        assert listing[0]["missing_count"] == 0
+
+    def test_save_analysis_uses_the_shared_mod_cache(self, client: TestClient, cfg, monkeypatch):
+        """The saves router must not re-parse every About.xml per request."""
+        import rwmod.routers.saves as saves_router
+        from rwmod.metadata import ModMeta
+
+        calls: list = []
+
+        def fake_get_cached_mods(mods_dir):
+            calls.append(mods_dir)
+            return [ModMeta(folder="Cached", package_id="cached.mod")]
+
+        monkeypatch.setattr(saves_router, "get_cached_mods", fake_get_cached_mods)
+        saves_dir = cfg.rimworld_dir / "Saves"
+        saves_dir.mkdir()
+        (saves_dir / "Cached.rws").write_text(
+            "<savegame><modIds><li>cached.mod</li></modIds></savegame>",
+            encoding="utf-8",
+        )
+
+        body = client.get("/api/saves/Cached").json()
+        assert calls == [cfg.mods_dir]
+        assert body["missing_mods"] == []
+        assert body["loadable"] is True
+
+    def test_download_missing_sees_no_missing_after_case_folding(self, client: TestClient, cfg):
+        """A case-only difference must not trigger a download attempt."""
+        about = cfg.mods_dir / "MixedCase" / "About"
+        about.mkdir(parents=True)
+        (about / "About.xml").write_text(
+            "<ModMetaData><packageId>Author.MixedCase</packageId></ModMetaData>",
+            encoding="utf-8",
+        )
+        saves_dir = cfg.rimworld_dir / "Saves"
+        saves_dir.mkdir()
+        (saves_dir / "Colony.rws").write_text(
+            "<savegame><modIds><li>author.mixedcase</li></modIds></savegame>",
+            encoding="utf-8",
+        )
+
+        resp = client.post("/api/saves/Colony/download-missing")
+        assert resp.status_code == 200
+        assert resp.json()["total"] == 0
+        assert resp.json()["results"] == []
 
 
 class TestWorkshopEndpoint:

@@ -1,23 +1,39 @@
 """Mods router — listing, health, compatibility, export, collection-export, disk usage."""
 
 import asyncio
-import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from pydantic import BaseModel, Field
 
 from rwmod.config import Config
 from rwmod.deps import get_config
-from rwmod.metadata import read_mod_metadata
+from rwmod.errors import ModNotFoundError, ValidationError
+from rwmod.metadata import package_id_key, read_mod_metadata
 from rwmod.mod_cache import get_cached_mods
+from rwmod.mod_health_check import get_health
+from rwmod.mod_sizes import get_sizes, is_pending
 from rwmod.models.schemas import DownloadRequest, FoldersRequest
 from rwmod.routers.download import _dl_semaphore
 from rwmod.utils import extract_mod_id, read_upload_limited
-from rwmod.workshop import _fetch_batch_parallel, check_mod_updates
+from rwmod.workshop import check_mod_updates
 
 router = APIRouter(prefix="/api/mods", tags=["mods"])
+
+
+class ActiveModsRequest(BaseModel):
+    """POST /api/mods/active — batch enable/disable of packageIds.
+
+    ``sort`` is opt-in: by default enabling appends at the end and never
+    reorders the existing load order.
+    """
+
+    enable: list[str] = Field(default_factory=list)
+    disable: list[str] = Field(default_factory=list)
+    sort: bool = False
+
 
 # Local mod zips are far larger than text uploads — a 2GB cap still stops
 # unbounded uploads without rejecting legitimate mods.
@@ -32,8 +48,10 @@ def _reject_oversized_mod(file: UploadFile) -> None:
 
 # ── lightweight in-memory cache ───────────────────────────────────
 # Keyed by mods_dir so switching config directories doesn't reuse stale data.
-# Each miss walks EVERY mod folder recursively for disk usage — the UI polls
-# faster than a short TTL, so 30s amortizes the scan across requests.
+# Only the cheap part (metadata + tags) is cached here; disk sizes come from
+# rwmod.mod_sizes' long-lived background snapshot and are overlaid on every
+# response. The old code walked every mod folder recursively on each miss
+# (5-8 seconds on a 150k-file tree).
 _mods_cache: dict[str, dict[str, Any]] = {}
 _CACHE_TTL = 30  # seconds
 
@@ -43,9 +61,9 @@ def _cached_mod_list(cfg: Config) -> list[dict]:
     key = str(cfg.mods_dir)
     entry = _mods_cache.get(key)
     if entry and now - entry.get("_ts", 0) < _CACHE_TTL:
-        data = entry.get("data")
-        if isinstance(data, list):
-            return data
+        rows = entry.get("data")
+        if isinstance(rows, list):
+            return _with_sizes(cfg, rows)
     if not cfg.mods_dir.exists():
         return []
     metas = get_cached_mods(cfg.mods_dir)
@@ -62,48 +80,129 @@ def _cached_mod_list(cfg: Config) -> list[dict]:
 
     data = []
     for m in metas:
-        mod_dir = cfg.mods_dir / m.folder
-        size_mb = _get_dir_size_mb(mod_dir)
-        tags = tags_by_folder.get(m.folder, [])
         data.append(
             {
                 "folder": m.folder,
                 "name": m.name,
                 "package_id": m.package_id,
                 "workshop_id": m.workshop_id,
-                "size_mb": size_mb,
-                "tags": tags,
+                "tags": tags_by_folder.get(m.folder, []),
             }
         )
     _mods_cache[key] = {"data": data, "_ts": now}
-    return data
+    return _with_sizes(cfg, data)
 
 
-def _get_dir_size_mb(dir_path) -> float:
-    """Get the total file size of a directory in MB.
+def _with_sizes(cfg: Config, rows: list[dict]) -> list[dict]:
+    """Overlay the current size snapshot; never blocks on a disk walk.
 
-    Uses os.walk for a *recursive* scan — mods contain nested folders
-    (About/, Defs/, Assemblies/, Patches/, ...) so a top-level os.scandir
-    alone would badly under-report disk usage.
+    A cold snapshot yields ``size_mb=0`` plus ``size_pending=True`` for the
+    first few seconds after startup (the frontend does not display this field;
+    it exists for API consumers and tests).
     """
-    total = 0
+    sizes = get_sizes(cfg.mods_dir)
+    pending = is_pending(cfg.mods_dir)
+    return [
+        {
+            **row,
+            "size_mb": round(sizes.get(row["folder"], 0) / (1024 * 1024), 2),
+            "size_pending": pending,
+        }
+        for row in rows
+    ]
+
+
+def _active_package_keys(cfg: Config) -> set[str]:
+    """Normalized packageIds currently listed in ModsConfig.xml's activeMods.
+
+    Read-only: a missing or malformed ModsConfig degrades to "nothing active"
+    rather than failing the whole listing. ``SandboxViolationError`` is
+    deliberately not caught — a sandbox escape must fail closed, not look like
+    an empty config.
+    """
+    from rwmod.modsconfig_edit import read_active_mods
+    from rwmod.profile import resolve_modsconfig_path
+
+    path = resolve_modsconfig_path(cfg.rimworld_dir, cfg.config_dir)
+    if path is None:
+        return set()
     try:
-        for root, _dirs, files in os.walk(dir_path):
-            for fname in files:
-                try:
-                    total += os.path.getsize(os.path.join(root, fname))
-                except OSError:
-                    continue
-    except OSError:
-        pass
-    return round(total / 1024 / 1024, 2)
+        return {key for pid in read_active_mods(path) if (key := package_id_key(pid))}
+    except (OSError, ValidationError):
+        return set()
 
 
 @router.get("")
 def list_mods(
     cfg: Config = Depends(get_config),
 ):
-    return _cached_mod_list(cfg)
+    active_keys = _active_package_keys(cfg)
+    result = []
+    for row in _cached_mod_list(cfg):
+        key = package_id_key(row.get("package_id"))
+        result.append({**row, "active": bool(key and key in active_keys)})
+    return result
+
+
+@router.post("/active")
+def set_active_mods(
+    payload: ActiveModsRequest,
+    cfg: Config = Depends(get_config),
+):
+    """Batch enable/disable packageIds in ModsConfig.xml.
+
+    Enabling appends to the end of ``activeMods``; disabling filters entries
+    out. Existing order is never changed unless ``sort=true`` is requested.
+    The file is backed up (``.bak_<ts>``) and snapshotted for undo before an
+    atomic replace.
+    """
+    from rwmod.metadata import installed_package_ids
+    from rwmod.modsconfig_edit import (
+        active_order_needs_sort,
+        plan_active_changes,
+        read_active_mods,
+        read_modsconfig_text,
+        rewrite_active_mods,
+        write_modsconfig_target,
+    )
+    from rwmod.profile import modsconfig_target
+
+    if not payload.enable and not payload.disable and not payload.sort:
+        raise ValidationError("需要提供 enable 或 disable（或 sort=true）")
+
+    # The only ModsConfig write path — profile.modsconfig_target applies the
+    # sandbox guard before anything is read or written.
+    target = modsconfig_target(cfg.rimworld_dir, cfg.config_dir)
+    if not target.exists():
+        raise ModNotFoundError(f"ModsConfig.xml 未找到: {target}")
+
+    current = read_active_mods(target)
+    plan = plan_active_changes(
+        current,
+        enable=payload.enable,
+        disable=payload.disable,
+        installed=list(installed_package_ids(cfg.mods_dir)),
+    )
+
+    new_ids = plan.active
+    if payload.sort:
+        from rwmod.rimsort import sort_mods
+
+        sorted_result = sort_mods(cfg.mods_dir, new_ids)
+        new_ids = [*sorted_result["sorted"], *sorted_result["unresolved"]]
+
+    new_text = rewrite_active_mods(read_modsconfig_text(target), new_ids)
+    backup = write_modsconfig_target(target, new_text, label="batch-active")
+
+    return {
+        "ok": True,
+        "active_count": len(new_ids),
+        "added": plan.added,
+        "removed": plan.removed,
+        "skipped": plan.skipped,
+        "backup": backup.name if backup else None,
+        "needs_sort": active_order_needs_sort(new_ids),
+    }
 
 
 @router.get("/check-updates")
@@ -113,53 +212,16 @@ def check_updates(
     return {"updates": check_mod_updates(str(cfg.mods_dir))}
 
 
-# ── health cache (expensive — hits Steam API for 600+ mods) ───────
-# Keyed by mods_dir so switching config directories returns correct data.
-_health_cache: dict[str, dict[str, Any]] = {}
-_HEALTH_CACHE_TTL = 60  # 1 minute — Steam API data changes slowly
-
-
+# ── health (persistent cache — hits Steam API for 600+ mods) ──────
+# mod_health_check keeps workshop time_updated in the existing mod_cache table
+# (6h TTL) and refreshes it in a daemon thread behind a single-flight guard.
+# Readers never wait for the network; a failed refresh keeps the old status
+# instead of mass-marking every mod "removed".
 @router.get("/health")
 def mod_health(
     cfg: Config = Depends(get_config),
 ):
-    now = time.time()
-    key = str(cfg.mods_dir)
-    entry = _health_cache.get(key)
-    if entry and now - entry.get("_ts", 0) < _HEALTH_CACHE_TTL:
-        return entry["data"]
-
-    if not cfg.mods_dir.exists():
-        return {"mods": []}
-    # Reuse the shared metadata cache (memory → SQLite → one-time scan)
-    # instead of re-parsing About.xml for every folder.
-    metas = [m for m in get_cached_mods(cfg.mods_dir) if m.workshop_id]
-    all_ids = [m.workshop_id for m in metas]
-    # Batch + parallel API fetch: Steam caps GetPublishedFileDetails at 100
-    # ids per call, so >100 mods MUST be split (the old fetch_item_details
-    # single-batch call silently returned incomplete data for large setups).
-    details = _fetch_batch_parallel(all_ids)
-    results = []
-    for meta in metas:
-        remote = details.get(meta.workshop_id)
-        if remote:
-            age = (now - remote.get("time_updated", 0)) / 86400
-            status = "maintained" if age < 90 else "stale" if age < 365 else "abandoned"
-            last_updated = time.strftime("%Y-%m-%d", time.gmtime(remote["time_updated"]))
-        else:
-            status, last_updated = "removed", ""
-        results.append(
-            {
-                "folder": meta.folder,
-                "name": meta.name,
-                "workshop_id": meta.workshop_id,
-                "status": status,
-                "last_updated": last_updated,
-            }
-        )
-    data = {"mods": results}
-    _health_cache[key] = {"data": data, "_ts": now}
-    return data
+    return get_health(cfg.mods_dir)
 
 
 @router.get("/export")
@@ -257,8 +319,13 @@ def _import_local_sync(content: bytes, cfg: Config) -> dict:
     tmp_dir = Path(tempfile.mkdtemp(prefix="rwmod_import_"))
     try:
         # Extract to a temp dir first so we can validate before moving.
-        with zipfile.ZipFile(__import__("io").BytesIO(content), "r") as zf:
-            safe_extract_zip(zf, tmp_dir)
+        # API-7: a corrupt / hostile zip raises BadZipFile (documented); it
+        # must become the standard 400 error body, not an unhandled 500.
+        try:
+            with zipfile.ZipFile(__import__("io").BytesIO(content), "r") as zf:
+                safe_extract_zip(zf, tmp_dir)
+        except (zipfile.BadZipFile, ValueError) as e:
+            raise ValidationError(f"压缩包损坏或不安全: {e}") from None
 
         # Determine candidate mod folders: top-level dirs that contain About.xml.
         candidates: list[Path] = []
@@ -366,6 +433,10 @@ async def batch_download_mods(
     # Route through the shared global semaphore so batch + queue + SSE streams
     # together never exceed the SteamCMD concurrency budget (Steam rate-limits
     # parallel anonymous logins).
+    # Explicit dict[str, bool]: download_batch returns BatchResult (a dict
+    # subclass carrying .outcomes), but the failure path below assigns a plain
+    # dict — the annotation keeps both branches type-compatible for mypy.
+    ok_map: dict[str, bool]
     async with _dl_semaphore:
         try:
             ok_map = await asyncio.to_thread(download_batch, cfg, parsed, force=force)

@@ -34,6 +34,18 @@ class ErrorResponse(BaseModel):
 # ── config ─────────────────────────────────────────────────────────
 
 
+class InstanceInfo(BaseModel):
+    """One multi-instance entry in GET /api/config."""
+
+    id: str
+    name: str
+    steamcmd_path: str
+    mods_dir: str
+    rimworld_dir: str
+    backup_dir: str
+    config_dir: str | None = None
+
+
 class ConfigResponse(BaseModel):
     steamcmd_path: str
     mods_dir: str
@@ -42,6 +54,24 @@ class ConfigResponse(BaseModel):
     has_steam_api_key: bool
     steamcmd_exists: bool
     mods_dir_exists: bool
+    instances: list[InstanceInfo] = Field(default_factory=list)
+    active_instance: str = "default"
+
+
+class InstanceCreateRequest(BaseModel):
+    """POST /api/config/instances — create a second RimWorld installation.
+
+    ``mods_dir`` is the only required path; ``rimworld_dir`` defaults to the
+    parent directory and the remaining settings are inherited/defaulted.
+    """
+
+    id: str | None = None
+    name: str | None = None
+    steamcmd_path: str | None = None
+    mods_dir: str
+    rimworld_dir: str | None = None
+    backup_dir: str | None = None
+    config_dir: str | None = None
 
 
 class ConfigUpdateRequest(BaseModel):
@@ -87,9 +117,11 @@ class SearchResponse(BaseModel):
 
 
 class ModIdsRequest(BaseModel):
-    """A batch of workshop ids, nothing else."""
+    """A batch of workshop ids. ``force`` is only consumed by /queue/add
+    (update intent); the other consumers ignore it."""
 
     ids: list[str] = Field(default_factory=list)
+    force: bool = False
 
 
 class DownloadRequest(ModIdsRequest):
