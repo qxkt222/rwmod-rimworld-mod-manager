@@ -168,6 +168,55 @@ class DownloadResult:
     completed: bool = False
 
 
+def _decide_download_result(
+    mod_id: str,
+    error_kind: str,
+    error_detail: str,
+    content_exists: bool,
+    lines: list[str],
+) -> DownloadResult:
+    """Combine the workshop_log verdict with the on-disk state into a result.
+
+    The filesystem is trusted *only* when the log has no verdict for this id
+    (UNKNOWN). An explicit failure must never be masked by content left over
+    from an earlier download — that is exactly how a failed update used to be
+    reported as success and have its ``last_updated`` refreshed.
+    """
+    if error_kind == ErrorKind.OK:
+        if content_exists:
+            return DownloadResult(
+                success=True,
+                mod_id=mod_id,
+                error_kind=ErrorKind.OK,
+                output_lines=lines,
+            )
+        # SteamCMD said OK but the files are not on disk → failure.
+        return DownloadResult(
+            success=False,
+            mod_id=mod_id,
+            error_kind=ErrorKind.FAILURE,
+            error_detail="SteamCMD 报告下载成功，但磁盘上找不到下载内容",
+            output_lines=lines,
+        )
+    if error_kind == ErrorKind.UNKNOWN and content_exists:
+        # No usable log line, but the files are on disk (e.g. the log was
+        # rotated mid-run). Trust the filesystem over the log.
+        return DownloadResult(
+            success=True,
+            mod_id=mod_id,
+            error_kind=ErrorKind.OK,
+            output_lines=lines,
+        )
+    # Explicit failure — keep its classification and detail untouched.
+    return DownloadResult(
+        success=False,
+        mod_id=mod_id,
+        error_kind=error_kind,
+        error_detail=error_detail,
+        output_lines=lines,
+    )
+
+
 # Progress callback signature: (mod_id, percent, downloaded_bytes, total_bytes).
 ProgressCallback = Callable[[str, float, float, float], None]
 
@@ -529,35 +578,8 @@ class SteamCMD:
         for mid in valid:
             content_exists = (self.workshop_content_dir / mid).exists()
             error_kind, error_detail = self._parse_workshop_error(mid, log_offset)
-            if error_kind == ErrorKind.OK:
-                # Double-check the content actually exists
-                if content_exists:
-                    results[mid] = DownloadResult(
-                        success=True,
-                        mod_id=mid,
-                        error_kind=ErrorKind.OK,
-                        output_lines=lines,
-                    )
-                    continue
-                # SteamCMD said OK but file not on disk → treat as failure
-                error_kind = ErrorKind.FAILURE
-                error_detail = "SteamCMD 报告下载成功，但磁盘上找不到下载内容"
-            elif content_exists:
-                # No usable log line, but the files are on disk (e.g. the log
-                # was rotated mid-run). Trust the filesystem over the log.
-                results[mid] = DownloadResult(
-                    success=True,
-                    mod_id=mid,
-                    error_kind=ErrorKind.OK,
-                    output_lines=lines,
-                )
-                continue
-            results[mid] = DownloadResult(
-                success=False,
-                mod_id=mid,
-                error_kind=error_kind,
-                error_detail=error_detail,
-                output_lines=lines,
+            results[mid] = _decide_download_result(
+                mid, error_kind, error_detail, content_exists, lines
             )
         return results
 

@@ -9,12 +9,13 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      # Built-in SteamCMD (host directory)
-      - ./steamcmd:/app/steamcmd:ro
+      # Built-in SteamCMD (host directory; SteamCMD writes logs/, steamapps/
+      # and appcache/ here, so it must stay writable — no :ro)
+      - ./steamcmd:/app/steamcmd
       # Mods directory — persistent
       - mods_data:/app/mods
-      # Config persisted in volume
-      - rwmod_config:/home/rwmod
+      # Home directory (~/.rwmod, ~/.rwmod.db) and config — persistent
+      - rwmod_config:/app/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/config')"]

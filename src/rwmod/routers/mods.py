@@ -3,6 +3,7 @@
 import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -372,6 +373,24 @@ def _import_local_sync(content: bytes, cfg: Config) -> dict:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+def _is_plain_folder_name(folder: str) -> bool:
+    """True only for a bare, single-segment folder name.
+
+    Rejects empty / ``.`` / ``..``, anything containing a path separator, and
+    ``:`` — which on Windows enables drive-relative paths (``C:Windows``)
+    and NTFS alternate data streams (``mod:stream``); neither contains a
+    separator, so a separator-only check let them through. ``Path`` is the
+    final backstop: the name must not be absolute or carry a drive, and must
+    round-trip unchanged.
+    """
+    if not folder or folder in (".", ".."):
+        return False
+    if "/" in folder or "\\" in folder or ":" in folder:
+        return False
+    path = Path(folder)
+    return not path.is_absolute() and not path.drive and path.name == folder
+
+
 @router.post("/batch/delete")
 def batch_delete_mods(
     payload: FoldersRequest,
@@ -392,11 +411,22 @@ def batch_delete_mods(
     deleted = []
     failed = []
     for folder in folders:
-        # Path-traversal guard: only allow plain folder names.
-        if not folder or folder in (".", "..") or "/" in folder or "\\" in folder:
+        # Path-traversal guard: only allow plain folder names. This also
+        # rejects Windows drive-relative paths ("C:Windows") and NTFS stream
+        # names ("mod:stream"), neither of which contains a separator.
+        if not _is_plain_folder_name(folder):
             failed.append({"folder": folder, "reason": "非法文件夹名"})
             continue
         target = cfg.mods_dir / folder
+        # Defence in depth: even a syntactically plain name must resolve to a
+        # path inside mods_dir (catches symlinks/junctions pointing away).
+        try:
+            contained = target.resolve().is_relative_to(cfg.mods_dir.resolve())
+        except (OSError, RuntimeError):
+            contained = False
+        if not contained:
+            failed.append({"folder": folder, "reason": "非法文件夹名"})
+            continue
         if not target.is_dir():
             failed.append({"folder": folder, "reason": "不存在"})
             continue

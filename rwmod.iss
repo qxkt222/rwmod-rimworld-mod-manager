@@ -19,6 +19,11 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Source: "dist\rwmod.exe"; DestDir: "{app}"
 Source: "steamcmd\*.*"; DestDir: "{app}\steamcmd"; Flags: recursesubdirs createallsubdirs; Excludes: "steamapps\*,userdata,depotcache,appcache,logs,siteserverui,steamcmd_siteserverui_win64.zip*,*.old,update_hosts_cached.vdf"
 
+[Dirs]
+; SteamCMD writes logs/, steamapps/ and appcache/ under {app}\steamcmd at runtime.
+; Standard users cannot write to Program Files, so let them modify this directory.
+Name: "{app}\steamcmd"; Permissions: users-modify
+
 [Icons]
 Name: "{commondesktop}\rwmod"; Filename: "{app}\rwmod.exe"; Parameters: "web"; WorkingDir: "{app}"
 Name: "{group}\rwmod"; Filename: "{app}\rwmod.exe"; Parameters: "web"; WorkingDir: "{app}"

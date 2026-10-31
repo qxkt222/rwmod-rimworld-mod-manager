@@ -97,6 +97,19 @@
 
 ### Fixed
 
+- **批量删除路径穿越** — 批量删除接口此前仅拦截 `/`、`\` 与 `..`，Windows 驱动器相对
+  路径（如 `C:Windows`）与 NTFS 数据流名（`mod:stream`）不含分隔符却会绕过检查；
+  现仅接受纯文件夹名，并校验解析后的路径仍位于 mods_dir 内（`routers/mods.py`）
+- **下载失败被旧内容掩盖** — 显式失败（如 `Get details for item ... failed`）不再因
+  上次下载残留的文件而被判成功并刷新 `last_updated`；仅当日志没有该 Mod 的结论
+  （UNKNOWN）时才信任磁盘内容（`steamcmd.py`）
+- **安装版 SteamCMD 目录不可写** — 安装到 Program Files 后普通用户无法在
+  `{app}\steamcmd` 下创建 `logs/`、`steamapps/`、`appcache/`，导致默认安装下所有
+  下载失败；安装时为该目录授予 Users 修改权限（`rwmod.iss`）
+- **Docker 镜像启动失败** — `useradd -r` 未创建家目录，`Path.home()/.rwmod.db`
+  不可写；现设置 `HOME=/app/data` 并先 mkdir/chown 再声明 VOLUME（此前顺序导致卷为
+  root:root）；compose 去掉 SteamCMD 的 `:ro` 挂载并把配置卷改挂 `/app/data`
+  （`Dockerfile`, `docker-compose.yml`）
 - **合集 ID 不再交给 SteamCMD** — 合集探测失败时明确失败，而不是把合集 ID 本身当作
   Mod 下载（此前触发 `no About.xml` → Skymods 403 的失败链）（`downloader.py`）
 - **健康检查误标 removed** — 网络失败与「Mod 已下架」区分开，网络错误保留旧状态

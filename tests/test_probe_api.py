@@ -1507,6 +1507,35 @@ class TestModsRouterBranches:
         assert len(body["failed"]) == 3
         assert not (cfg.mods_dir / "Doomed").exists()
 
+    def test_batch_delete_rejects_drive_relative_and_stream_names(self, client: TestClient, cfg):
+        """Drive-relative paths and NTFS stream names have no separator but
+        still escape mods_dir / name a stream — reject them before any
+        filesystem call.
+
+        ``C:Windows`` deliberately names the real system directory: only the
+        response structure is asserted here, and the endpoint must classify it
+        as 非法文件夹名 so no rmtree is ever pointed at it.
+        """
+        _make_mod(cfg.mods_dir, "normal_mod", workshop_id="888")
+
+        resp = client.post(
+            "/api/mods/batch/delete",
+            json={"folders": ["C:Windows", "D:", "mod:stream", "normal_mod"]},
+        )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["deleted"] == ["normal_mod"]
+        assert body["count"] == 1
+        assert body["failed"] == [
+            {"folder": "C:Windows", "reason": "非法文件夹名"},
+            {"folder": "D:", "reason": "非法文件夹名"},
+            {"folder": "mod:stream", "reason": "非法文件夹名"},
+        ]
+        # The system directory was only ever named, never touched.
+        assert "C:Windows" not in body["deleted"]
+        assert not (cfg.mods_dir / "normal_mod").exists()
+
     def test_batch_download_mocked(self, client: TestClient):
         with patch(
             "rwmod.downloader.download_batch",

@@ -31,6 +31,10 @@ WORKDIR /app
 RUN groupadd -r rwmod -g 1001 && \
     useradd -r -g rwmod -u 1001 rwmod
 
+# Home directory for the non-root user: Path.home() puts ~/.rwmod.db here,
+# so it must exist and be writable by rwmod.
+ENV HOME=/app/data
+
 # Copy Python deps from builder
 COPY --from=python-deps /install /usr/local
 
@@ -46,15 +50,16 @@ ENV PYTHONPATH=/app/src
 # Copy frontend build
 COPY --from=frontend-builder /app/static ./static/
 
-# Copy built-in SteamCMD (user populates this)
-# docker run -v ./steamcmd:/app/steamcmd ...
-VOLUME ["/app/steamcmd", "/app/mods"]
+# Volume mount points: built-in SteamCMD, mods, and the home/data directory.
+# They must be created and chowned *before* VOLUME is declared: Docker discards
+# image changes made to a path after VOLUME, which previously left the volumes
+# owned by root and made sqlite / SteamCMD fail at startup.
+# docker run -v ./steamcmd:/app/steamcmd -v ./mods:/app/mods ...
+RUN mkdir -p /app/data /app/steamcmd /app/mods && \
+    chown -R rwmod:rwmod /app/data /app/steamcmd /app/mods
 
-# Ensure the volume mount points are writable by the non-root user.
-# Host bind mounts (-v) default to root ownership, which would make
-# SteamCMD downloads and mod writes fail under USER rwmod.
-RUN mkdir -p /app/steamcmd /app/mods && \
-    chown -R rwmod:rwmod /app/steamcmd /app/mods
+# Declared after mkdir/chown on purpose — see the comment above.
+VOLUME ["/app/steamcmd", "/app/mods", "/app/data"]
 
 # Switch to non-root
 USER rwmod

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from rwmod.steamcmd import ErrorKind, SteamCMD
+from rwmod.steamcmd import ErrorKind, SteamCMD, _decide_download_result
 
 
 @pytest.fixture
@@ -50,6 +50,51 @@ class TestClassifyReason:
     def test_unknown(self):
         assert SteamCMD._classify_reason("SomeWeirdError") == ErrorKind.UNKNOWN
         assert SteamCMD._classify_reason("") == ErrorKind.UNKNOWN
+
+
+class TestDecideDownloadResult:
+    """The log verdict is authoritative; stale on-disk content must not mask it."""
+
+    def test_explicit_failure_with_content_is_still_failure(self):
+        result = _decide_download_result(
+            "123", ErrorKind.FAILURE, "SteamCMD: Failure", content_exists=True, lines=["out"]
+        )
+        assert result.success is False
+        assert result.error_kind == ErrorKind.FAILURE
+        assert result.error_detail == "SteamCMD: Failure"
+        assert result.output_lines == ["out"]
+
+    def test_file_not_found_with_content_is_still_failure(self):
+        result = _decide_download_result(
+            "123",
+            ErrorKind.FILE_NOT_FOUND,
+            "SteamCMD: File Not Found",
+            content_exists=True,
+            lines=[],
+        )
+        assert result.success is False
+        assert result.error_kind == ErrorKind.FILE_NOT_FOUND
+        assert result.error_detail == "SteamCMD: File Not Found"
+
+    def test_unknown_with_content_trusts_filesystem(self):
+        result = _decide_download_result(
+            "123", ErrorKind.UNKNOWN, "no log line", content_exists=True, lines=[]
+        )
+        assert result.success is True
+        assert result.error_kind == ErrorKind.OK
+        assert result.error_detail == ""
+
+    def test_ok_without_content_is_failure(self):
+        result = _decide_download_result("123", ErrorKind.OK, "", content_exists=False, lines=[])
+        assert result.success is False
+        assert result.error_kind == ErrorKind.FAILURE
+        assert result.error_detail == "SteamCMD 报告下载成功，但磁盘上找不到下载内容"
+
+    def test_ok_with_content_is_success(self):
+        result = _decide_download_result("123", ErrorKind.OK, "", content_exists=True, lines=[])
+        assert result.success is True
+        assert result.error_kind == ErrorKind.OK
+        assert result.error_detail == ""
 
 
 class TestErrorKind:
