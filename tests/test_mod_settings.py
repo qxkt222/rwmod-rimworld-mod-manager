@@ -477,8 +477,27 @@ class TestGameRunningProbe:
         def fake_run(*_args, **_kwargs):
             return SimpleNamespace(stdout="INFO: No tasks are running...", returncode=0)
 
+        # Pin the probe to the Windows/tasklist branch so a POSIX CI runner
+        # does not take the pgrep path (where returncode=0 means "running").
+        monkeypatch.setattr("rwmod.mod_settings.platform.system", lambda: "Windows")
         monkeypatch.setattr("rwmod.mod_settings.subprocess.run", fake_run)
         assert is_game_running() is False
+
+    def test_detects_no_game_on_posix_when_pgrep_finds_nothing(self, monkeypatch):
+        def fake_run(*_args, **_kwargs):
+            return SimpleNamespace(stdout="", returncode=1)
+
+        monkeypatch.setattr("rwmod.mod_settings.platform.system", lambda: "Linux")
+        monkeypatch.setattr("rwmod.mod_settings.subprocess.run", fake_run)
+        assert is_game_running() is False
+
+    def test_detects_game_on_posix_when_pgrep_matches(self, monkeypatch):
+        def fake_run(*_args, **_kwargs):
+            return SimpleNamespace(stdout="4242 RimWorld", returncode=0)
+
+        monkeypatch.setattr("rwmod.mod_settings.platform.system", lambda: "Linux")
+        monkeypatch.setattr("rwmod.mod_settings.subprocess.run", fake_run)
+        assert is_game_running() is True
 
     def test_probe_never_raises(self, monkeypatch):
         def boom(*_args, **_kwargs):

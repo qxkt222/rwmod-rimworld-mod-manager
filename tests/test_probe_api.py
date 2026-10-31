@@ -1340,7 +1340,9 @@ class TestSecurityHeaders:
 
     def test_non_api_response_has_no_store_excluded(self, client: TestClient):
         resp = client.get("/")
-        assert resp.status_code == 200
+        # 503 is the documented response when static/ is absent ("frontend not built"),
+        # which is the normal state on a CI runner that never built the frontend.
+        assert resp.status_code in (200, 503), resp.text
         assert resp.headers["x-content-type-options"] == "nosniff"
         assert resp.headers["x-frame-options"] == "DENY"
         assert resp.headers["referrer-policy"] == "no-referrer"

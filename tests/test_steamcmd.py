@@ -284,7 +284,14 @@ class TestCancelBatch:
             def kill(self) -> None:
                 self._done.set()
 
+            # cancel_download() uses a different primitive per platform:
+            # CTRL_BREAK_EVENT via send_signal() on Windows, terminate() on
+            # POSIX. The stub implements both so the same test covers either
+            # branch; all of them must release wait().
             def send_signal(self, sig) -> None:
+                self._done.set()
+
+            def terminate(self) -> None:
                 self._done.set()
 
         return _Proc()
@@ -408,7 +415,15 @@ class TestGlobalRunLock:
                     state["active"] -= 1
                 return 0
 
+            # Same cancel primitives as a real Popen: nothing cancels in this
+            # test, but a cancel path must never blow up on the stub either.
             def kill(self) -> None:
+                pass
+
+            def send_signal(self, sig) -> None:
+                pass
+
+            def terminate(self) -> None:
                 pass
 
         monkeypatch.setattr("rwmod.steamcmd.subprocess.Popen", lambda *args, **kwargs: _SlowProc())

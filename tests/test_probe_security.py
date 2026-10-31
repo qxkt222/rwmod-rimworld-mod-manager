@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import gzip
 import io
+import os
 import socket
 import struct
 import threading
@@ -127,6 +128,13 @@ class _FakeOpener:
 
 # ── safe_extract_zip: traversal spellings ──────────────────────────
 
+# Path semantics are platform-specific: ':'/drive letters are rejected as
+# unsafe only on Windows, and '\' is a separator only on Windows. Windows-only
+# cases are marked so Windows coverage stays intact, while POSIX gets an
+# explicit confinement assertion instead of a false rejection expectation.
+_WINDOWS_ONLY = pytest.mark.skipif(os.name != "nt", reason="Windows path semantics")
+_POSIX_ONLY = pytest.mark.skipif(os.name == "nt", reason="POSIX filename semantics")
+
 _TRAVERSAL_MEMBERS = [
     "../evil.txt",
     "..\\evil.txt",
@@ -136,9 +144,6 @@ _TRAVERSAL_MEMBERS = [
     "\\abs.txt",
     "//srv/share/evil.txt",
     "\\\\srv\\share\\evil.txt",
-    "C:/evil.txt",
-    "C:\\evil.txt",
-    "c:/windows/evil.txt",
     "./../evil.txt",
     ".\\..\\evil.txt",
     "a/./../../evil.txt",
@@ -151,13 +156,26 @@ _TRAVERSAL_MEMBERS = [
     "..\\..\\evil.txt ",
     "\\\\?\\D:\\evil.txt",
     "\\\\.\\NUL",
+]
+
+# ':' and drive letters are ordinary filename characters on POSIX, so these
+# spellings are not traversal there — only Windows rejects them as unsafe.
+_WINDOWS_TRAVERSAL_MEMBERS = [
+    "C:/evil.txt",
+    "C:\\evil.txt",
+    "c:/windows/evil.txt",
     "::",
     "a:b/evil.txt",
 ]
 
+_TRAVERSAL_MEMBER_PARAMS = [
+    *_TRAVERSAL_MEMBERS,
+    *[pytest.param(member, marks=_WINDOWS_ONLY) for member in _WINDOWS_TRAVERSAL_MEMBERS],
+]
+
 
 class TestSafeExtractZipTraversal:
-    @pytest.mark.parametrize("member", _TRAVERSAL_MEMBERS)
+    @pytest.mark.parametrize("member", _TRAVERSAL_MEMBER_PARAMS)
     def test_traversal_member_rejected_and_confined(self, tmp_path: Path, member: str) -> None:
         dest = tmp_path / "dest"
         dest.mkdir()
@@ -170,6 +188,24 @@ class TestSafeExtractZipTraversal:
         # the whole archive is validated before extractall runs).
         assert _all_files(tmp_path) - before == set()
         assert _all_files(dest) == set()
+
+    @_POSIX_ONLY
+    @pytest.mark.parametrize("member", _WINDOWS_TRAVERSAL_MEMBERS)
+    def test_colon_members_confined_on_posix(self, tmp_path: Path, member: str) -> None:
+        """The Windows-only spellings above are plain names on POSIX:
+        extraction may succeed or be rejected, but the result must never land
+        outside dest."""
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        z = _zip_with(tmp_path / "_probe.zip", [(member, b"pwn")])
+        before = _all_files(tmp_path)
+        try:
+            with zipfile.ZipFile(z) as zf:
+                safe_extract_zip(zf, dest)
+        except zipfile.BadZipFile:
+            pass
+        outside = _all_files(tmp_path) - _all_files(dest) - before
+        assert outside == set()
 
     @pytest.mark.parametrize(
         "member",
@@ -473,25 +509,47 @@ class TestConfigPathBlocklist:
 # ── backup / bundle path traversal ─────────────────────────────────
 
 
+_UNSAFE_BACKUP_NAMES = [
+    "../victim.zip",
+    "sub/victim.zip",
+    "/victim.zip",
+    "..",
+    ".",
+    "",
+]
+
+# '\' is a path separator only on Windows; on POSIX these are plain filenames.
+_WINDOWS_BACKUP_NAMES = [
+    "..\\victim.zip",
+    "sub\\victim.zip",
+    "C:\\victim.zip",
+]
+
+_UNSAFE_BACKUP_NAME_PARAMS = [
+    *_UNSAFE_BACKUP_NAMES,
+    *[pytest.param(name, marks=_WINDOWS_ONLY) for name in _WINDOWS_BACKUP_NAMES],
+]
+
+
 class TestBackupPathResolution:
-    @pytest.mark.parametrize(
-        "name",
-        [
-            "../victim.zip",
-            "..\\victim.zip",
-            "sub/victim.zip",
-            "sub\\victim.zip",
-            "/victim.zip",
-            "C:\\victim.zip",
-            "..",
-            ".",
-            "",
-        ],
-    )
+    @pytest.mark.parametrize("name", _UNSAFE_BACKUP_NAME_PARAMS)
     def test_unsafe_names_rejected(self, tmp_path: Path, name: str) -> None:
         backup_dir = tmp_path / "backups"
         backup_dir.mkdir()
         assert _resolve_backup_path(backup_dir, name) is None
+
+    @_POSIX_ONLY
+    @pytest.mark.parametrize("name", _WINDOWS_BACKUP_NAMES)
+    def test_backslash_names_confined_on_posix(self, tmp_path: Path, name: str) -> None:
+        """POSIX treats '\' as an ordinary filename character, so the resolver
+        may accept these names — but only directly inside backup_dir."""
+        backup_dir = tmp_path / "backups"
+        backup_dir.mkdir()
+        got = _resolve_backup_path(backup_dir, name)
+        if got is not None:
+            # relative_to() raises ValueError if the result escaped backup_dir.
+            relative = got.resolve().relative_to(backup_dir.resolve())
+            assert relative == Path(name)
 
     def test_plain_name_accepted(self, tmp_path: Path) -> None:
         backup_dir = tmp_path / "backups"
