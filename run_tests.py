@@ -75,8 +75,10 @@ def main() -> int:
                     r"""
 import sys, traceback
 fails = []
+checks = []
 
 def check(name, code):
+    checks.append(name)
     try:
         exec(code, {})
     except Exception as e:
@@ -86,15 +88,30 @@ check("errors",
     "from rwmod.errors import ConfigError; e=ConfigError('test'); assert e.detail=='test'")
 # 版本漂移检查：pyproject.toml 是唯一真源。这个断言过去两次写死后过期
 # （0.4.3、0.5.0 —— 见 CHANGELOG.md:165），所以改为跨文件比对而非硬编码。
+# The version check must NOT import rwmod.server: that module calls
+# init_logging() at import time and appends to the real ~/.rwmod.log, so every
+# gate run wrote to the developer's log (REV-017). pyproject.toml is parsed
+# directly with tomllib instead; the FastAPI app is asserted at the source
+# level (it must keep referencing __version__ rather than a second literal).
 check("version",
-    "import pathlib,re\n"
+    "import pathlib,re,tomllib\n"
     "import rwmod\n"
     "from rwmod import __version__\n"
     "root=pathlib.Path(rwmod.__file__).resolve().parents[2]\n"
-    "src=(root/'pyproject.toml').read_text(encoding='utf-8')\n"
-    "q=chr(34)\n"
-    "declared=re.search(r'^version = '+q+r'([0-9.]+)'+q, src, re.M).group(1)\n"
-    "assert __version__==declared, '__init__=%s pyproject=%s' % (__version__, declared)")
+    "declared=tomllib.loads((root/'pyproject.toml').read_text(encoding='utf-8'))"
+    "['project']['version']\n"
+    "assert __version__==declared, '__init__=%s pyproject=%s' % (__version__, declared)\n"
+    "# The web app used to carry its own literal, so /api/openapi.json could\n"
+    "# advertise a version the package never shipped. Checked without importing\n"
+    "# the app (import side effects would write the real log).\n"
+    "server_src=(root/'src'/'rwmod'/'server.py').read_text(encoding='utf-8')\n"
+    "assert 'version=__version__' in server_src, "
+    "'server.py no longer reuses __version__'\n"
+    "# The installer is hand-edited; this is the only place that catches it\n"
+    "# drifting from pyproject.toml before a release is built.\n"
+    "iss=(root/'rwmod.iss').read_text(encoding='utf-8')\n"
+    "iss_ver=re.search(r'^AppVersion=(.+)$', iss, re.M).group(1).strip()\n"
+    "assert iss_ver==declared, 'rwmod.iss=%s pyproject=%s' % (iss_ver, declared)")
 
 
 check("backup",
@@ -113,12 +130,30 @@ check("database_queue",
 check("schemas",
     "from rwmod.models.schemas import ConfigResponse,DownloadRequest,DownloadResultItem\n"
     "from rwmod.models.schemas import OkResponse,ErrorResponse")
+# The 0.7.0 extraction split downloader.py into a `download` package and
+# steamcmd.py into `steamcmd_support`. If either loses a module from the wheel
+# (or a name is renamed), that only shows up at runtime as an ImportError on
+# the first download — import every module here.
+check("download_pipeline",
+    "from rwmod.download import core, deps, install, locks, outcomes")
+check("steamcmd_support",
+    "from rwmod.steamcmd_support import logparse, procs, taxonomy")
+check("0.7.0_modules",
+    "from rwmod.mod_health_check import get_health\n"
+    "from rwmod.mod_rules import normalize_package_id, split_anchor_order\n"
+    "from rwmod.mod_settings import list_mod_settings\n"
+    "from rwmod.mod_sizes import get_sizes\n"
+    "from rwmod.modsconfig_edit import read_active_mods\n"
+    "from rwmod.steam_db import SteamDB\n"
+    "from rwmod.xmlutil import parse_about_field, parse_xml_root\n"
+    "from rwmod.cache_db import invalidate_all\n"
+    "from rwmod.deps import get_config")
 
 if fails:
     for f in fails:
         print(f'  ❌ {f}')
     sys.exit(1)
-print('  ✅ 全部 6 项导入通过')
+print(f'  ✅ 全部 {len(checks)} 项导入通过')
 """,
                 ],
                 "新模块导入 + 核心逻辑验证",
@@ -138,7 +173,10 @@ print('  ✅ 全部 6 项导入通过')
             )
         )
     else:
-        results.append(("ruff lint (跳过 — 安装失败)", True))
+        # A missing linter is a broken environment, not a passing check. The
+        # old `True` here let `python run_tests.py` print 6/6 with no linting
+        # at all when pip install failed offline.
+        results.append(("ruff lint (安装失败)", False))
 
     # ── 3. ruff format ──────────────────────────────────────
     if ensure_tool("ruff"):
@@ -152,7 +190,7 @@ print('  ✅ 全部 6 项导入通过')
             )
         )
     else:
-        results.append(("ruff format (跳过)", True))
+        results.append(("ruff format (安装失败)", False))
 
     # ── 4. pytest (no network) ──────────────────────────────
     results.append(
@@ -167,6 +205,9 @@ print('  ✅ 全部 6 项导入通过')
                     "not network",
                     "--cov=rwmod",
                     "--cov-report=term-missing",
+                    # Same floor as .github/workflows/ci.yml. The local gate and
+                    # CI must not disagree about what "too low" means.
+                    "--cov-fail-under=90",
                     "-v",
                     "--tb=short",
                 ],
@@ -187,7 +228,7 @@ print('  ✅ 全部 6 项导入通过')
             )
         )
     else:
-        results.append(("mypy (跳过 — 安装失败)", True))
+        results.append(("mypy (安装失败)", False))
 
     # ── 6. bandit ───────────────────────────────────────────
     if ensure_tool("bandit"):
@@ -201,7 +242,7 @@ print('  ✅ 全部 6 项导入通过')
             )
         )
     else:
-        results.append(("bandit (跳过 — 安装失败)", True))
+        results.append(("bandit (安装失败)", False))
 
     # ── summary ──────────────────────────────────────────────
     print(f"\n{'═' * 60}")

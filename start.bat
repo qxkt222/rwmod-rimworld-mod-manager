@@ -14,7 +14,6 @@ if not exist ".venv\Scripts\python.exe" (
 
 echo [1/2] Building frontend...
 set NPX_CMD=npx.cmd
-if exist "D:\DevTools\links\npx.cmd" set NPX_CMD=D:\DevTools\links\npx.cmd
 if not exist "%NPX_CMD%" (
     where /R "%APPDATA%\npm" npx.cmd >nul 2>&1 && set "NPX_CMD=npx.cmd"
 )

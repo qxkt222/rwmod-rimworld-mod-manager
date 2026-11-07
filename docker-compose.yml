@@ -1,6 +1,5 @@
 # rwmod — Docker Compose (production)
-version: "3.9"
-
+# No `version:` key: Compose v2 ignores it and warns that it is obsolete.
 services:
   rwmod:
     build: .

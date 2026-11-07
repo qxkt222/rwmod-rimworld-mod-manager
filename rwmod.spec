@@ -124,7 +124,16 @@ a = Analysis(
 # (downloaded mods, user data), userdata/, and other runtime caches/logs to
 # keep the EXE small. Excluded: steamapps (downloaded mods), userdata,
 # depotcache (download manifests), appcache (Steam cache), logs, siteserverui
-# (unrelated Steam site-server UI), *.old backups and update_hosts_cached.vdf.
+# (unrelated Steam site-server UI), package (the ~30 MB self-update zips — the
+# SteamCMD client re-downloads them on first run), *.old backups and
+# update_hosts_cached.vdf.
+#
+# Tree.excludes is NOT a glob matcher: PyInstaller compares each name against
+# the exact basename, and only a leading `*` is special — `*.ext` matches that
+# extension. The previous entry `steamcmd_siteserverui_win64.zip*` therefore
+# matched nothing (the real files are `...zip.vz.<hash>_<size>` in package/).
+# Exclude the whole `package` directory instead; that removes those archives
+# and the rest of the self-update cache in one rule.
 a.datas += Tree(
     'steamcmd',
     prefix='steamcmd',
@@ -135,7 +144,7 @@ a.datas += Tree(
         'appcache',
         'logs',
         'siteserverui',
-        'steamcmd_siteserverui_win64.zip*',
+        'package',
         '*.old',
         'update_hosts_cached.vdf',
     ],

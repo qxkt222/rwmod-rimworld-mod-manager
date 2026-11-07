@@ -1,11 +1,44 @@
-# Docker
-node_modules/
+# Docker build context is the repo root. Keep it small: the build only needs
+# `src/`, `pyproject.toml`, `uv.lock` and `frontend/` (see Dockerfile).
+
+# SteamCMD runtime payload — 7+ GB of downloaded binaries and mods, gitignored,
+# and never needed inside the image (the image builds its own steamcmd volume).
+steamcmd/
+
+# Git / scratch / generated artifacts
+.git/
+.github/
+.scratch/
+docs/
+tests/
+tools/
+internal_names.json
+save_*.json
+verify_fixes.py
+
+# Python
 .venv/
 __pycache__/
 *.pyc
 .egg-info/
 dist/
 build/
+htmlcov/
+.coverage
+coverage.xml
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Node / frontend
+node_modules/
+**/node_modules/
+frontend/tests/
+frontend/playwright-report/
+frontend/test-results/
+
+# Frontend build output — the image builds its own copy in stage 1.
+static/
 
 # IDE
 .vscode/
@@ -19,9 +52,6 @@ build/
 
 # Logs
 *.log
-
-# Frontend build (generated)
-static/assets/
 
 # OS
 Thumbs.db

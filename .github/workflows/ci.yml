@@ -47,9 +47,10 @@ jobs:
           python-version: "3.13"
       - run: uv sync
       # --cov-fail-under stops a new module from landing with no tests at all.
-      # Baseline when this was added: 57% (267 tests). Raise it as coverage
-      # improves; do not lower it to make a red build go away.
-      - run: uv run pytest -m "not network" --cov=rwmod --cov-report=xml --cov-report=term-missing --cov-fail-under=55
+      # The floor was 55% while actual coverage sat above 90%, so it could never
+      # fire; 90% tracks reality (measured 91% at the 0.7.0 tag) and matches the
+      # local gate in run_tests.py. Do not lower it to make a red build go away.
+      - run: uv run pytest -m "not network" --cov=rwmod --cov-report=xml --cov-report=term-missing --cov-fail-under=90
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
@@ -104,10 +105,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
       - name: Install & type-check
         working-directory: frontend
         run: |
-          npm install
+          # npm ci installs the committed lockfile exactly; npm install would
+          # re-resolve every range and let CI drift from what developers run.
+          npm ci
           npx tsc --noEmit
 
   # ── Docker Build ────────────────────────────────────────────────
@@ -128,3 +133,115 @@ jobs:
       # `-c` ("No such option"). Without the override this step tests nothing.
       - name: Smoke-test that the image can import the app
         run: docker run --rm --entrypoint python rwmod:ci -c "import rwmod.server; print('import ok')"
+
+  # ── Windows Packaging (PyInstaller + Inno Setup) ────────────────
+  # Until this job existed, a broken rwmod.spec or rwmod.iss could only be
+  # discovered by hand on a Windows machine — CI stayed green through the whole
+  # 0.7.0 cycle. This builds the real release artifacts and starts the exe.
+  windows-package:
+    runs-on: windows-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install Python dependencies
+        run: uv sync
+      - name: Build frontend (produces static/)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+      - name: Stage a placeholder steamcmd/ (real payload is gitignored)
+        shell: pwsh
+        run: |
+          # rwmod.spec walks steamcmd/ with Tree() and rwmod.iss globs
+          # steamcmd\*.*. Both abort on a missing directory, and the real 7 GB
+          # SteamCMD payload is gitignored, so stage an empty marker to
+          # exercise the packaging path without downloading anything.
+          New-Item -ItemType Directory -Force steamcmd | Out-Null
+          Set-Content -Path steamcmd/ci-placeholder.txt -Value "CI packaging placeholder"
+      - name: Build exe with PyInstaller
+        run: uv run pyinstaller --noconfirm rwmod.spec
+      - name: Assert the exe exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path dist/rwmod.exe)) { throw "dist/rwmod.exe missing" }
+          "dist/rwmod.exe = {0:N1} MB" -f ((Get-Item dist/rwmod.exe).Length / 1MB)
+      - name: Smoke-test the exe (serves / from the bundled static/)
+        shell: pwsh
+        run: |
+          # A bundled exe that cannot serve its own frontend is the classic
+          # packaging failure (static/ not collected, bundle_root() wrong).
+          # Give it a throwaway profile so it never touches the runner's home.
+          $env:USERPROFILE = Join-Path $env:RUNNER_TEMP "rwmod-home"
+          New-Item -ItemType Directory -Force $env:USERPROFILE | Out-Null
+          $proc = Start-Process -FilePath "dist/rwmod.exe" `
+                                -ArgumentList "web","--host","127.0.0.1","--port","8123" `
+                                -PassThru
+          try {
+            $ok = $false
+            for ($i = 0; $i -lt 60; $i++) {
+              Start-Sleep -Seconds 1
+              try {
+                $r = Invoke-WebRequest -Uri "http://127.0.0.1:8123/" -UseBasicParsing -TimeoutSec 2
+                if ($r.StatusCode -eq 200 -and $r.Content -match "(?i)<!doctype html") {
+                  $ok = $true
+                  break
+                }
+              } catch { }
+            }
+            if (-not $ok) { throw "exe did not serve / within 60s" }
+          } finally {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          }
+      - name: Compile installer (a broken rwmod.iss fails the job)
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          $iscc = Get-ChildItem "${env:ProgramFiles(x86)}\Inno Setup*\ISCC.exe" `
+                    -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $iscc) { throw "ISCC.exe not found after installing Inno Setup" }
+          & $iscc.FullName rwmod.iss
+          if (-not (Test-Path dist/rwmod_setup.exe)) { throw "dist/rwmod_setup.exe missing" }
+          "dist/rwmod_setup.exe = {0:N1} MB" -f ((Get-Item dist/rwmod_setup.exe).Length / 1MB)
+
+  # ── Frontend Tests (Vitest + Playwright) ────────────────────────
+  # Appended in the FE-TEST wave; no existing job was modified.
+  # E2E boots the real backend with a temp HOME and random port, so it needs
+  # both the Python dependencies (uv sync) and the built static/ bundle.
+  frontend-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.13"
+      - name: Install backend dependencies (uvicorn/fastapi for E2E)
+        run: uv sync
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Unit tests (Vitest + happy-dom + MSW)
+        working-directory: frontend
+        run: npm test
+      - name: Build frontend (produces static/)
+        working-directory: frontend
+        run: npm run build
+      - name: Install Playwright Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: E2E tests (real backend, temp HOME)
+        working-directory: frontend
+        run: npm run test:e2e
