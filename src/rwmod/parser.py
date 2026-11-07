@@ -67,8 +67,10 @@ def parse_collection_dir(collection_path: Path) -> list[str]:
     if not collection_path.exists():
         return ids
 
-    # Try legacy binary format first (steam workshop collection)
-    for f in collection_path.iterdir():
+    # Try legacy binary format first (steam workshop collection).
+    # iterdir() order is filesystem-dependent (Linux vs Windows differ), so sort
+    # the entries to keep the extracted id order deterministic across platforms.
+    for f in sorted(collection_path.iterdir()):
         if f.suffix == ".bin" or "_legacy" in f.name or f.suffix == "":
             try:
                 data = f.read_bytes()
@@ -78,8 +80,8 @@ def parse_collection_dir(collection_path: Path) -> list[str]:
             except OSError as e:
                 _log.debug("跳过不可读文件 %s: %s", f.name, e)
 
-    # Try JSON format as fallback
-    for f in collection_path.iterdir():
+    # Try JSON format as fallback (sorted for the same deterministic order)
+    for f in sorted(collection_path.iterdir()):
         if f.suffix == ".json":
             try:
                 data = json.loads(_read_text_any_encoding(f))

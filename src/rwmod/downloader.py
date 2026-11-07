@@ -35,7 +35,6 @@ from rwmod.download.install import (
     _verify_install,
 )
 from rwmod.download.locks import (
-    _MOD_LOCKS_MAX,
     _dest_lock_for,
     _lock_for,
     _mod_locks,
@@ -77,7 +76,6 @@ __all__ = [
     "_dest_lock_for",
     "_mod_locks",
     "_mod_locks_guard",
-    "_MOD_LOCKS_MAX",
     "_download_one_unlocked",
     "_retry_delay",
     "MAX_RETRIES",

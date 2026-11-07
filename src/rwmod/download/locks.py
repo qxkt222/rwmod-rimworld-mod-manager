@@ -5,17 +5,21 @@ from __future__ import annotations
 import os
 import threading
 from pathlib import Path
+from weakref import WeakValueDictionary
 
 # Per-key locks: concurrent downloads of the same mod are serialized so the
 # check-then-download sequence is atomic. Prevents TOCTOU races where two
 # workers download the same mod and corrupt each other.
-_mod_locks: dict[str, threading.Lock] = {}
+#
+# The registry holds *weak* references: a lock stays registered only while at
+# least one caller still references it. Once the last worker drops its
+# reference the entry disappears automatically, so a long-running server
+# handling thousands of distinct workshop ids cannot grow the dict without
+# bound. There is deliberately no eviction pass: an eviction pass raced with
+# callers that had already received a lock but had not acquired it yet and
+# could pop that live lock, handing the same key to two threads at once.
+_mod_locks: WeakValueDictionary[str, threading.Lock] = WeakValueDictionary()
 _mod_locks_guard = threading.Lock()
-
-
-# Cap on the lock dict so a long-running server (thousands of distinct
-# workshop IDs) does not grow it without bound.
-_MOD_LOCKS_MAX = 1024
 
 
 def _lock_for(key: str) -> threading.Lock:
@@ -25,15 +29,6 @@ def _lock_for(key: str) -> threading.Lock:
         if lock is None:
             lock = threading.Lock()
             _mod_locks[key] = lock
-            # Drop locks nobody is holding or waiting on when the dict grows
-            # past the cap. locked() is True while a thread holds OR waits on
-            # the lock, so in-use locks are never collected.
-            if len(_mod_locks) > _MOD_LOCKS_MAX:
-                stale = [k for k, lock2 in _mod_locks.items() if not lock2.locked()]
-                for k in stale:
-                    _mod_locks.pop(k, None)
-                    if len(_mod_locks) <= _MOD_LOCKS_MAX // 2:
-                        break
         return lock
 
 

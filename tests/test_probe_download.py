@@ -33,9 +33,9 @@ from rwmod import workshop as workshop_mod
 from rwmod.autoupdate import AutoUpdateManager
 from rwmod.config import Config, InstanceConfig
 from rwmod.downloader import (
-    _MOD_LOCKS_MAX,
     _auto_restore_backup,
     _collect_deps,
+    _dest_lock_for,
     _discard_stash,
     _download_one_unlocked,
     _find_existing,
@@ -355,15 +355,55 @@ class TestPerModLocks:
         assert _lock_for("same") is _lock_for("same")
         assert _lock_for("other") is not _lock_for("same")
 
-    def test_eviction_never_drops_held_lock(self):
-        held = _lock_for("held")
-        held.acquire()
+    def test_saturated_registry_keeps_a_returned_but_unacquired_lock(self):
+        """REV-001-adjacent: with the old 1024-key eviction pass this lock was
+        unlocked (returned to the caller but not acquired yet), so the flood
+        evicted it and the next lookup created a *second* lock for the same
+        key — two threads could then enter the critical section together."""
+        live = _lock_for("live-key")
+        flood = [_lock_for(f"probe-{i}") for i in range(1100)]
+        assert len(flood) == 1100
+        assert _lock_for("live-key") is live
+
+    def test_two_threads_with_same_key_serialize(self):
+        entered = threading.Event()
+        release = threading.Event()
+        events: list[str] = []
+
+        def worker(name: str) -> None:
+            with _lock_for("serialized"):
+                events.append(f"{name}-enter")
+                if name == "first":
+                    entered.set()
+                    release.wait(5)
+                events.append(f"{name}-exit")
+
+        t1 = threading.Thread(target=worker, args=("first",))
+        t2 = threading.Thread(target=worker, args=("second",))
+        t1.start()
+        assert entered.wait(5)
+        t2.start()
+        time.sleep(0.2)  # second must be blocked on the same lock here
+        assert events == ["first-enter"]
+        release.set()
+        t1.join(5)
+        t2.join(5)
+        assert not t1.is_alive() and not t2.is_alive()
+        assert events == ["first-enter", "first-exit", "second-enter", "second-exit"]
+
+    def test_dest_lock_is_independent_of_mod_id_lock(self, tmp_path: Path):
+        dest = tmp_path / "Mods" / "SomeMod"
+        dest_lock = _dest_lock_for(dest)
+        mod_lock = _lock_for("123")
+        assert dest_lock is not mod_lock
+        assert _dest_lock_for(dest) is dest_lock
+        mod_lock.acquire()
         try:
-            for i in range(_MOD_LOCKS_MAX + 20):
-                _lock_for(f"probe-{i}")
-            assert _lock_for("held") is held
+            assert dest_lock.acquire(timeout=0) is True
+            dest_lock.release()
         finally:
-            held.release()
+            mod_lock.release()
+        assert _lock_for("123") is mod_lock
 
     def test_concurrent_same_mod_downloads_are_serialized(self, tmp_path: Path, monkeypatch):
         cfg = _cfg(tmp_path)

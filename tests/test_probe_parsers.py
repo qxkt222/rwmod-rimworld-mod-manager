@@ -216,6 +216,15 @@ class TestCollectionDirEdges:
         (d / "b.json").write_text(json.dumps(["111", {"publishedfileid": "222"}]))
         assert parse_collection_dir(d) == ["333", "111"]
 
+    def test_files_created_in_reverse_name_order_still_sort_by_name(self, tmp_path: Path):
+        """iterdir() yields creation order on NTFS but not on ext4, so the
+        result must be ordered by file name on every platform."""
+        d = tmp_path / "coll"
+        d.mkdir()
+        (d / "z.json").write_text(json.dumps({"items": ["333"]}))
+        (d / "a.json").write_text(json.dumps(["111"]))
+        assert parse_collection_dir(d) == ["111", "333"]
+
     def test_json_syntax_error_is_skipped(self, tmp_path: Path):
         d = tmp_path / "coll"
         d.mkdir()
