@@ -1,0 +1,63 @@
+/* ═══════════════════════════════════════════════════════════════
+   rwmod design tokens — migrated from the legacy src/style.css.
+   The Vanilla entry keeps importing style.css; React imports this file.
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+  color-scheme: light;
+
+  /* surfaces & text */
+  --bg:         #F2F3F5;
+  --card:       #FFFFFF;
+  --text:       #2C3E50;
+  --text-dim:   #5A6D7E;
+  --gray:       #E8ECF0;
+  --gray-hover: #D8DCE0;
+  --gray-text:  #8899A6;
+  --border:     #E8ECF0;
+
+  /* accents */
+  --blue:        #1A6FB5;
+  --blue-deep:   #155D93;
+  --blue-bright: #1E80CF;
+  --blue-dim:    #98BEDE;
+  --green:       #27AE60;
+  --yellow:      #F39C12;
+  --orange:      #E67E22;
+  --red:         #E74C3C;
+
+  /* geometry */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --shadow:    0 1px 3px rgba(0, 0, 0, 0.06);
+
+  /* layout */
+  --sidebar-w:  220px;
+  --sidebar-w-collapsed: 56px;
+  --topbar-h:   48px;
+  --nav-h:      var(--topbar-h);
+  --status-h:   32px;
+
+  /* typography */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg:         #1a1b1e;
+  --card:       #25262b;
+  --text:       #c1c2c5;
+  --text-dim:   #909296;
+  --gray:       #2c2e33;
+  --gray-hover: #373a40;
+  --gray-text:  #909296;
+  --border:     #2c2e33;
+  --blue:       #1A6FB5;
+  --blue-deep:  #155D93;
+  --blue-dim:   #5a8ab5;
+  --shadow:     0 1px 3px rgba(0, 0, 0, 0.3);
+}

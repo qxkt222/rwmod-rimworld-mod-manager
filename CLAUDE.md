@@ -24,11 +24,11 @@ Invariants that are invisible from the code layout and expensive to rediscover:
 - **Version and dependencies have one source: `pyproject.toml`.** `run_tests.py`
   asserts `rwmod.__version__` matches it, and the Dockerfile derives its dependency
   list from it — so neither needs a hand-kept second copy.
-- **HTML strings must escape every interpolated value: `esc()` in text position,
-  `escAttr()` in attribute position (`href`/`src`/`data-*` included) — never a bare
-  `${dataValue}`.** `esc()` leaves quotes intact, so in an attribute it lets the value
-  break out; `escAttr()` in text only over-escapes. Both live in `frontend/src/dom.ts`;
-  numbers, literals and internal ids (not user/server data) are exempt.
+- **React escapes interpolated values automatically — never assemble HTML strings by
+  hand.** `dangerouslySetInnerHTML` is forbidden except for static constants with an
+  explicit justification comment. The legacy `esc()` / `escAttr()` rule died with the
+  Vanilla frontend; `frontend/src/dom.ts` survives only as shared formatters
+  (`fmtBytes`, `formatTs`) imported by React panels.
 - **Shared state is injected through the module-level singletons in `deps.py`**
   (config, queue, autoupdate). New shared state belongs there. `app_state.py` claimed
   that job while never being consumed; it was deleted rather than left as a decoy.
@@ -51,3 +51,19 @@ Invariants that are invisible from the code layout and expensive to rediscover:
   and `/` answers 503 with that instruction when the build is missing.
 - **`python run_tests.py` is the local gate** — import smoke, ruff, ruff format,
   pytest, mypy strict and bandit in one shot.
+
+## Definition of Done
+
+A task is done only when all of these hold:
+
+1. `python run_tests.py` is green — import smoke, ruff, ruff format, pytest, mypy
+   strict and bandit all pass.
+2. **The main agent runs the gate itself.** A subagent reporting "all tests pass"
+   is not evidence and does not close the task.
+3. Behavior changed by the task is covered by a test. No new untested branch.
+4. If the gate was not run, the task is not done and must not be reported as done.
+
+## Long task briefs
+
+When a task description exceeds ~800 characters, write it to a scratch brief
+file first and reference the path in the session instead of pasting the text.

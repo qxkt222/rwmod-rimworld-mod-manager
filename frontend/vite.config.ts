@@ -1,19 +1,47 @@
+import react from "@vitejs/plugin-react";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
+
+/**
+ * Version single source: `pyproject.toml` (the same value the backend exposes).
+ * Injected at build time so the React bundle never hardcodes a version.
+ */
+function readAppVersion(): string {
+  try {
+    const pyproject = readFileSync(
+      fileURLToPath(new URL("../pyproject.toml", import.meta.url)),
+      "utf8",
+    );
+    return /^version\s*=\s*"([^"]+)"/m.exec(pyproject)?.[1] ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
+const APP_VERSION = readAppVersion();
 
 export default defineConfig({
   root: ".",
+  define: {
+    __APP_VERSION__: JSON.stringify(APP_VERSION),
+  },
+  // React is the only frontend entry (cutover 2026-11-07): index.html loads
+  // src/app/main.tsx and is the single HTML page emitted to ../static.
+  plugins: [react()],
   build: {
     outDir: "../static",
     emptyOutDir: true,
-    // Code splitting: separate vendor chunks for better caching
+    // Single entry: the FastAPI bundle serves static/ at /static/** and
+    // assets/ at /assets/**, and `/` returns index.html.
     rollupOptions: {
+      input: "index.html",
+      // Keep the React runtime in its own vendor chunk. Dynamic `import()`
+      // still splits every panel; the former panel-registry chunk existed
+      // only to isolate the two entries and is no longer needed.
       output: {
         manualChunks(id: string) {
-          // Put panel modules in separate chunks — loaded on demand
-          if (id.includes("/panels/")) {
-            const name = id.split("/panels/")[1].split(".")[0];
-            return `panel-${name}`;
-          }
+          if (id.includes("node_modules")) return "vendor-react";
         },
       },
     },
