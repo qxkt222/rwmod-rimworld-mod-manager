@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.8.0] - 2026-11-07
+
+### Changed
+
+- **前端全量重写为 React 19** — 15 个面板、Zustand 状态、自写 hash router、
+  OpenAPI 自动生成 TS 类型、单一左侧栏 5 组导航、应用内弹窗替代原生 prompt/confirm
+- **后端清债** — 安全（steamcmd 执行链 / 上传上限 / WS Origin / body 上限）、
+  失败契约统一、多实例隔离、原子写、下载内核修复
+- **拆包** — `downloader.py` 1122→642 行 + `download/`；`steamcmd.py` 667→392 行 +
+  `steamcmd_support/`，历史 import 路径兼容
+- **打包** — exe 82.5→51.9MB、安装包 121→70.7MB；版本单一来源；Docker 可复现
+- **CSP** — HTML 文档响应加 `Content-Security-Policy`
+
+### Added
+
+- 前端测试体系：Vitest 31 例 + Playwright 82 条（真实后端、临时 HOME）
+- CI Windows 打包 job 与 Windows pytest
+- 标签管理 UI（创建 / 重命名 / 删除）
+- 更新检查 `partial` 语义；合集预览区分不可达 / 空
+
+### Removed
+
+- 旧 Vanilla TypeScript 前端（24 个文件）
+- `rwmod-web` 入口（执行即 TypeError）
+
 ## [0.7.0] - 2026-10-24
 
 ### Added

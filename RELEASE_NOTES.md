@@ -1,282 +1,58 @@
-# rwmod v0.7.0 发布说明
+# rwmod v0.8.0 发布说明
 
 > 全离线 RimWorld Mod 管理器 — 无需 Steam 客户端即可匿名下载、更新、备份与管理 Mod。
-> 本次发布集中加固下载/更新内核、Mod 管理与排序冲突检测，并修复了 ModsConfig 误写
-> 事故的根因。定位于个人本机 / 局域网自用，**不是公网软件**，请勿直接暴露到公网。
+> 本次是重构版本：前端从 Vanilla TypeScript 全量重写为 React 19，后端清掉 0.7.0 审查
+> 遗留的债务，打包体积下降 41%。定位于个人本机 / 局域网自用，**不是公网软件**，
+> 请勿直接暴露到公网。
 
-## 🛡 发布前修复（2026-10-31）
+## 🎨 前端重写（React 19）
 
-- **批量删除路径穿越** — `C:Windows` 这类驱动器相对路径不含分隔符，可绕过守卫删除
-  任意目录。现在拒绝 `:` / 驱动器 / 非裸文件夹名，并断言解析后的目标仍在 `mods_dir` 内。
-- **下载失败被旧内容改判成功** — SteamCMD 日志明确 `Failure` / `File Not Found` /
-  `Access Denied` 时，不再因磁盘上残留旧内容而返回成功；更新不会再静默失效。
-- **安装版写权限** — 安装时为 `{app}\steamcmd` 授予 `users-modify`；普通用户从快捷方式
-  启动也能让 SteamCMD 正常写入 `logs/`、`steamapps/`。
-- **Docker 启动** — 设置 `HOME=/app/data`、把 `VOLUME` 移到 `mkdir/chown` 之后、
-  SteamCMD 改为读写挂载，修复非 root 用户无法建库导致容器启动失败的问题。
+- **15 个面板全部 React 化**：状态走 Zustand 切片 + revision bus，取代每个面板手动刷新。
+- **导航重做**：顶部 15 个平铺 tab 与侧栏重复，现统一为左侧栏 5 组
+  （概览 / 获取 / 整理 / 数据 / 系统）。
+- **自写 hash router**：零运行时依赖，修复 `#updates` 别名地址栏不回写的问题。
+- **API 类型自动生成**：从 FastAPI OpenAPI 生成 TypeScript 类型（31 → 78 schemas），
+  不再手写 40 个 interface 与后端漂移。
+- **危险操作改应用内弹窗**：实例删除、档案保存/删除、标签删除不再用原生 `prompt/confirm`。
+- **标签管理补 UI**：创建 / 重命名 / 删除（此前只有只读列表，接口早已存在）。
+- **CSP**：HTML 文档响应加 `Content-Security-Policy`（`script-src 'self'`），
+  `connect-src` 放行 WebSocket。
 
----
+## 🛡 后端
 
-## ⚡ 下载与更新内核
+- **安全**：堵住 steamcmd 任意可执行链（`mods_dir` 植入也会被 `Config.validate()` 拦截）、
+  2GB zip 全量入内存、分块上传绕过上限、WebSocket Origin 未校验、JSON body 无上限。
+- **失败契约统一**：失败抛 `errors.py` 异常，移除 `200 + {ok:false}`；高频端点补
+  `response_model`。
+- **多实例隔离**：队列、数据库、标签、备份、Mod 设置全部按 `(instance_id, id)` 隔离。
+  取消下载不再误杀另一实例的同 ID 任务。
+- **原子写**：ModsConfig / profile / undo 全部改 `mkstemp` + `os.replace`，消除截断窗口。
+- **下载内核**：stash 失败不再裸删旧版；取消检查点前置到等待锁 / 探测阶段；
+  安装锁改为按目标文件夹；Steam API 失败不再伪装「全部最新」。
+- **更新检查支持部分失败**：返回 `partial` + 失败批次数，不再因为一批网络抖动整体报错。
+- **合集预览**：区分「不可达 502」与「确认空 404」，不再把网络失败说成合集不存在。
+- **BOM 直传**：RimSort 写回不再经过字符串层，BOM 只出现一次。
 
-- 合集 ID 不再交给 SteamCMD；合集探测失败时明确判失败
-- 结构化下载错误（`DownloadOutcome` / `BatchResult`）经队列 / WebSocket / SSE /
-  前端 / 下载历史透出
-- 取消隔离：被取消的项与同批兄弟项互不影响，未完成项重新排队
-- force 更新前持久备份（默认开启、保留 3 份）、安装校验、失败按 stash → backup 回滚
-- SteamCMD 全局运行锁：下载串行，安装校验与合集探测并行
-- 5/15/45 秒退避（±20% jitter）；新增队列重试 / 暂停 / 恢复
-- Skymods 默认关闭，失败后熔断 10 分钟
+## 📦 打包
 
-## 🚀 性能
+- **exe 82.5 → 51.9 MB**；安装包 **121 → 70.7 MB**（排除 SteamCMD 自更新缓存）。
+- 版本号统一到 `pyproject.toml`，移除执行即报错的 `rwmod-web` 入口。
+- Dockerfile 改用 `package-lock.json` + `uv.lock`，构建可复现。
+- 卸载时清理 `steamapps`，不再残留数 GB。
 
-- Mod 大小后台快照（10 分钟 TTL，不阻塞请求）
-- 健康检查持久缓存（6 小时 TTL、single-flight、允许 stale）
-- 553 Mod 实测：`/api/mods` 11ms（旧 5.2–8.6s）、`/api/dashboard` 6–8ms（旧 25s）、
-  `/api/mods/health` 11ms（旧 14s）
+## 🧪 测试
 
-## 🧩 排序与冲突
+- 后端 **1496 passed / 0 failed**（0.7.0 为 1388 + 2 红），覆盖率 91.7%（阈值 90）。
+- 前端 **31 个单元测试 + 82 条 Playwright E2E**（真实后端、临时 HOME、随机端口），
+  此前前端测试数为 0。
+- CI 新增 Windows 打包 job（PyInstaller + exe 探活 + Inno Setup）与 Windows pytest。
 
-- `supported_versions` 持久化（SQLite migration v2）
-- packageId 全链路大小写归一；真实存档 missing 420 → 6
-- 官方内容锚定（Harmony → Core → Royalty → Ideology → Biotech → Anomaly → Odyssey）
-- 富格式 `modDependencies` / `alternativePackageIds` / DLC 豁免
-- Community Rules（CC0）+ 用户 `~/.rwmod/rules.json`（用户 > 社区 > 内置）
-- 「声明规则 vs 实际顺序」诊断
+## ⚠️ 已知限制
 
-## 🛠 Mod 管理
-
-- Mod 列表批量启用/停用，写入 ModsConfig.xml 前自动备份并可撤销
-- 独立「Mod 设置」页：查看/编辑/备份/恢复 `Config/Mod_*.xml`，写入前需确认游戏已关闭
-
-## 🔒 安全
-
-- `Config.config_dir` + `profile.modsconfig_target`：写入不再隐式扫描 LocalLow
-- `RWMOD_TEST_SANDBOX_HOME` 测试沙箱守卫（resolve 后越界即 fail-closed）
-
-## ⚠️ 事故记录
-
-- 2026-10-24 15:47:28，独立验证脚本在未 patch `Path.home()` 的情况下调用
-  `rimsort_apply`，覆盖了真实 `Config/ModsConfig.xml` 的 activeMods 顺序。未丢失 Mod，
-  未改动数据库 / 日志 / 配置 / 游戏目录。已用 Player.log 与事故前记录重建 522 项，
-  证据备份保留；两个 Mod 的原始位置无法精确恢复，仍需进游戏确认。根因已按上述路径
-  显式化与沙箱守卫修复。
-
-## 🧪 质量
-
-- 离线测试套件 **1382 passed / 0 xfailed**；`run_tests.py` 门禁 **6/6**；
-  原有 33 个 xfail 已全部转正
-- `ruff format --check src/ tests/` 96 个文件通过
+- 安装包体积主要来自内置 SteamCMD，与业务代码无关。
+- 真实 SteamCMD 下载 / Workshop 搜索在 CI 中为 mock，未做真实网络压测。
+- Docker 镜像未在本机实跑（Hypervisor 未启用），`docker compose config` 已校验。
 
 ---
 
-# rwmod v0.6.0 发布说明
-
-> 全离线 RimWorld Mod 管理器 — 无需 Steam 客户端即可匿名下载、更新、备份与管理 Mod。
-> 本版本包含一项**破坏性变更**（移除登录鉴权）与下载性能改进。定位于个人本机 /
-> 局域网自用，**不是公网软件**，请勿直接暴露到公网。
-
----
-
-## ⚠️ 破坏性变更
-
-- **移除登录鉴权** — 项目定位为个人本机 / 局域网自用，已删除 JWT 认证与密钥管理：
-  不再有 `~/.rwmod.secret`、`RWMOD_SECRET` 与登录弹窗；API 对同一网段客户端开放，
-  **请勿直接暴露公网**（如需公网访问，请在反向代理上自行加认证 / HTTPS）。
-  涉及删除 `src/rwmod/auth.py`、`src/rwmod/routers/auth.py`、`frontend/src/auth.ts`
-  并移除 `pyjwt` 依赖。
-
-## ⚡ 下载改进
-
-- **SteamCMD 批量下载** — 每批 6 个 Mod 共用一个 SteamCMD 进程，减少反复启动与
-  重复目录扫描的开销，大合集下载更快
-- **实时下载进度** — 解析 SteamCMD 输出并经 SSE / WebSocket 推送，下载 / 合集面板
-  新增进度条与速率显示
-- **Skymods 流式落盘** — 备用源改为分块流式写盘，不再整包读入内存
-
-## 🧪 质量
-
-- 离线测试套件 **267 通过**
-
----
-
-# rwmod v0.5.0 发布说明
-
-> 全离线 RimWorld Mod 管理器 — 无需 Steam 客户端即可匿名下载、更新、备份与管理 Mod。
-> 本版本是一次面向**公开发布与局域网部署**的安全加固 + 行为改进 + 架构清理。
-
----
-
-## 🔒 安全加固
-
-- **上传限制强制生效** — 修复 chunked 上传（无 Content-Length）时大小检查被跳过、
-  请求体被整体读入内存的问题；所有上传端点按字节硬上限读取，`.rwmod` 导入改为流式写盘
-- **配置路径校验** — `/api/config` 拒绝相对路径、磁盘根目录、程序运行目录与 Windows
-  系统目录，防止备份/删除接口触碰系统路径
-- **`.rwmod` 导出默认脱敏** — Steam API 密钥默认不再随包导出；如需自机迁移，在配置面板
-  勾选「包含 Steam API 密钥」
-- **WS 认证令牌改走子协议** — 不再出现在 URL 查询参数中，避免泄漏到访问日志/浏览器历史
-
-## ⚡ 行为改进
-
-- **force 覆盖原子化** — 旧版先暂存再下载，失败自动回滚，不再有"先删后下、失败即丢"
-- **取消下载真正终止** — 队列取消会终止正在运行的 SteamCMD 进程（Windows 下信号覆盖
-  其子进程），不再是"标记取消但后台继续跑"
-
-## 🏗 架构与数据
-
-- **SQLite 迁移框架** — 老数据库原地升级，不丢数据
-- **更新时间戳入库** — `.rwmod_last_updated` 标记文件迁入数据库（老文件自动迁移并清理），
-  不再污染游戏目录
-- **配置修正** — `steamcmd_path` 尊重用户配置；仅当配置路径失效时回退内置副本
-- **DB 访问收敛 + 死代码清理** — `get_conn` 公开、移除未使用的 `get_db`、删除 no-op 钩子
-
-## 🧪 质量
-
-- 离线测试套件 **254 通过**；ruff / mypy（strict）全绿
-- 新增安全/迁移/回滚专项测试
-
----
-
-# rwmod v0.4.5 发布说明
-
-> 全离线 RimWorld Mod 管理器 — 无需 Steam 客户端即可匿名下载、更新、备份与管理 Mod。
-> 本版本在 0.4.4 基础上完成了**一轮全面代码审查与修复**（安全、并发、前端），并汇总
-> **0.4.1 → 0.4.5** 之间的累积改动（含 0.4.3 与 0.4.4 合并发布）。
-
----
-
-## ✨ 新功能
-
-- **📦 一键迁移** — 将配置档案、备份、标签与设置打包为 `.rwmod` 文件，可跨机器一键导出/导入（配置面板 → 一键迁移）
-- **↩️ 操作撤销** — 破坏性操作（排序/恢复）前自动快照 `ModsConfig.xml`，可一键回滚（配置档案面板 → 操作撤销）
-- **🔌 WebSocket 实时队列广播** — 队列状态变化通过 `/ws` 实时推送到前端，队列面板无需手动刷新
-- **� 存档文件解析** — 上传 `.rws` 存档文件，自动检测缺少哪些 Mod
-- **🏷 Mod 标签分组** — 自定义标签、按标签筛选 Mod
-- **🎯 合集 3 层降级拉取** — Steam Web API → 网页爬取 → 用户自定义 API Key，支持翻页，大合集（500+ Mod）不再丢项
-- **�🛡 备份回滚** — 更新前自动备份旧版，支持一键恢复
-- **📊 健康检查** — Mod 活跃度（维持/停更/废弃/下架）
-- **✅ 兼容检测** — 对比 RimWorld 版本，标出不兼容 Mod
-- **📐 排序分析** — Harmony 位置、Core/DLC 顺序、已知冲突检测
-- **💿 配置档案** — 保存/切换 ModsConfig.xml 快照
-- **📤 合集导出** — 从已安装 Mod 反向生成 Workshop ID 列表
-
-## 🔒 安全修复 (P1)
-
-- **全新鉴权模型（重写）** — 取消公开默认密钥。本机访问（localhost）**免密钥直接可用**——本机用户本就能直接读写 Mods 目录，API 权限不更大；只有**局域网**客户端需要密钥。设置强 `RWMOD_SECRET` 环境变量可启用严格模式（本机也要求登录）
-- **认证失效根因修复** — `get_current_user` 缺 `return user` 导致 `/api/auth/verify` 返回 `user: null`、前端显示 `undefined`；已修复
-- **登录死锁修复** — 未配置 `RWMOD_SECRET` 时自动生成随机密钥并**持久化到 `~/.rwmod.secret`**（跨重启有效），登录采用恒定时间比较 + 失败限速（10 次/5 分钟）
-- **workshop_id 校验链修复** — `PublishedFileId.txt`/URL 参数读取的 workshop_id 全部强制 `^\d+$`，堵住：备份 zip 写出 backup_dir（任意文件创建）、restore 目录穿越、SteamCMD 命令 token 注入三条路径
-- **Skymods SSRF 防护** — 下载 URL 强制白名单域名（smods.ru/modsbase.com）+ 拒绝私网/回环/云元数据 IP + 响应/页面大小上限
-- **zip 炸弹防护** — `safe_extract_zip` 增加成员数上限、解压总大小上限（4GB）、重复路径校验；全部上传端点统一大小上限
-- **鉴权收紧** — `/ws` WebSocket、`/api/onboarding/check`、`/api/metrics` 现在需要认证（本机免密钥策略下本机仍免登录）
-- **备份接口路径穿越防护** — 拒绝 `../`、子目录等非法路径，zip 解压前校验成员路径
-- **SteamCMD 超时失效修复** — 卡死进程 10 分钟后被真正终止，不再永久挂起
-- **Skymods 解压同样启用 zip 路径穿越防护**
-- **config API 脱敏** — 不再向前端返回 `steam_api_key`，改为 `has_steam_api_key`
-
-## 🛠 稳定性 / 功能修复 (P2)
-
-- **下载队列 worker 崩溃修复** — 一次磁盘满/权限错误不再杀死常驻 worker，失败项标记 `failed` 后继续
-- **下载锁死锁修复** — per-mod 锁在依赖/合集子项上改为「锁外收集后下载」，环形依赖不再互等导致队列永久停摆
-- **`_find_existing` 快路径修复** — 数据库查询返回值与调用方类型不匹配，导致快路径每次抛异常回退全目录扫描；现已真正生效
-- **数据库连接生命周期修复** — `init_db` 重入 `_init_lock` 死锁（首次启动卡死）+ `close_db` 后其他线程拿到已关闭连接报错；均已修复
-- **SSE 心跳** — 下载流每 30s 发心跳，nginx 反代 60s 超时不再中途掐断；客户端断线语义修正（不提前释放信号量）
-- **WebSocket 背压 + 鉴权** — 慢/卡死客户端超出发送积压（200 条）即断开，不再无界缓冲；连接需 `?token=`
-- **WebSocket 广播任务引用** — 修复 `Task was destroyed but it is pending` 通知丢失
-- **合集 SSE 性能** — 500+ 子项的一次性目录映射替代逐项全目录扫描
-- **事件循环阻塞清理** — dashboard 磁盘统计/健康检查、import-local 解压、`_find_existing` 全部移入 `to_thread`；mods 列表缓存 TTL 3s→30s
-- **批量下载并发上限** — `/api/mods/batch/download` 复用全局信号量，与队列/SSE 叠加不再超 SteamCMD 并发预算
-- **备份恢复原子交换** — rmtree→rename 改为 rename 交换 + 失败回滚，RimWorld 锁文件时不再毁 mod
-- **Profile/RimSort 原子写** — ModsConfig.xml 先写临时文件再替换，写一半崩溃不再留截断 XML
-- **force 覆盖失败自动回滚** — 覆盖下载失败时自动从备份恢复旧版
-- **transfer 导出临时文件** — 唯一文件名 + 响应完成后自动清理，不再泄漏 `%TEMP%`/同秒覆盖
-- **合集下载彻底修复** — 改用专用端点 `GetCollectionDetails`/`GetPublishedFileDetails`，合集识别与依赖检测真正生效
-- **合集 ID 不再遗漏** — 「API + 精确 HTML 爬取」双源合并（并集），任一来源的子项都不丢
-- **合集预览接口异常兜底 + 性能优化** — 不再 500，593 个子项由全目录扫描改为一次元数据扫描 + 一次历史查询
-- **SSE 实时推送卡死修复** — 改为带心跳的 `asyncio` 事件循环
-- **异步端点不再阻塞事件循环** — 下载/导入/流式下载统一用 `asyncio.to_thread`，下载期间其他 API 不再无响应
-- **下载队列并发竞态修复** — 运行中新增的待下载项不再被静默丢弃
-- **WebSocket 广播解阻塞** — 慢/卡死客户端不再阻塞事件循环
-- **Profile 重命名崩溃修复** — 带 `.xml` 后缀的路径解析错误修复
-- **磁盘统计低估修复** — 递归统计子目录大小
-- **SQLite 写并发锁** — 多线程写库不再触发 `database is locked`（含 `PRAGMA busy_timeout=5000`）
-- **备份恢复原子性** — 先写临时目录再原子替换，中途失败不丢数据
-- **依赖 BFS 与健康检查误判** — 依赖遍历保证顺序，Core 不再误判为缺失
-- **备份恢复目录匹配修复** — 含 `:`/`?` 等非法字符的 mod 目录恢复失败修复
-- **Skymods 重定向递归限制** — 加深度上限，避免 A→B→A 循环栈溢出
-- **ModsConfig 对比误报** — 内置 Core 不再误算为 extra
-- **Docker 只读挂载修复** — Mods 目录可正常写入
-- **移除首页自动触发更新检查** — 仅由「一键更新」按钮显式触发
-- **队列取消语义** — 取消下载中的项目后状态保持 cancelled，不再被改回 done/failed
-- **`Config.validate()` 放宽** — 仅要求 SteamCMD 存在；RimWorld 游戏目录为可选
-
-## 🎨 前端修复
-
-- **认证流程重写** — 删除硬编码默认密钥；本机打开直接进主界面，登录框仅局域网场景弹出（提示密钥见 `~/.rwmod.secret` 或启动日志）
-- **401 统一拦截** — token 失效自动清 token + 弹登录框，不再各面板显示 `undefined`
-- **SSE 下载流** — 检查 `resp.ok` + 2 分钟超时兜底，失败不再永久挂起
-- **面板补齐** — Saves/Tags 面板 HTML 骨架、RimSort 拖拽/生成、History 统计/自动更新区（原缺失导致按钮静默失效）
-- **队列"检查更新/全部更新"** — 按钮绑定修复，不再永不触发
-- **WS 断线 REST 轮询兜底** — 重连失败后每 5s 轮询 `/api/queue`，恢复后自动切回
-- **轮询 interval 泄漏** — 队列为空/切面板时清理
-- **undefined 修复** — dashboard 一键更新、mods 兼容摘要、错误 toast 不再显示 `undefined`
-- **XSS 转义** — queue/collection 面板模板拼接改用 `esc()`
-
-## 📦 打包 / 体积优化
-
-- **安装包体积大幅优化（0.4.4）** — 修复 steamcmd 目录误打包 1.4GB Mod 缓存的问题，并排除 torch/cv2/pandas 等无关 AI 库；安装包从 1.4GB+ 降至 **114 MB**
-- **全新 PyInstaller + Inno Setup 安装包（0.4.1）** — 单文件 EXE + 内置 SteamCMD + 桌面快捷方式
-
-## 🧹 清理 (P3)
-
-- **前端接入 hash 路由** — 支持 `#saves`/`#tags` 深链接与浏览器前进/后退
-- **缓存隔离** — mods/dashboard 缓存按 `mods_dir` 区分，切换目录不再串数据
-- **仓库更名** — 更名为 `rwmod-rimworld-mod-manager`，同步更新 CI 徽章与项目链接
-- 测试断言更新至 0.4.5，全套 **223 项测试通过**（覆盖率 49% → 56%）
-- mypy 0 错误，ruff 全量格式化，dead code 清理
-- CI — bandit 使用 `-ll` 作为硬性门禁
-
----
-
-## 📦 安装简介
-
-### 方式一：Windows 安装包（推荐）
-1. 下载本 Release 的 `rwmod_setup.exe` 安装程序
-2. 双击运行，按向导完成安装
-3. 启动后浏览器打开 **http://localhost:8000** 即可使用
-
-### 方式二：源码运行
-```bash
-# 1. 安装依赖（需 Python 3.13+ 与 uv）
-uv sync
-
-# 2. 构建前端（需 bun 或 npm）
-cd frontend && bun install && bun run build && cd ..
-# 或：cd frontend && npm install && npm run build && cd ..
-
-# 3. 启动服务
-uv run uvicorn rwmod.server:app --host 0.0.0.0 --port 8000
-# 或直接运行 start.bat
-```
-
-### 方式三：Docker
-```bash
-docker build -t rwmod .
-docker run -p 8000:8000 -v /path/to/mods:/mods rwmod
-```
-
-### 升级说明
-- 直接覆盖安装即可，配置与数据自动保留
-- 首次启动会自动创建数据库与默认配置
-
-### 系统要求
-- Windows 10/11（安装包方式）
-- Python 3.13+（源码方式）
-- **无需安装 SteamCMD** — 安装包已内置 SteamCMD，开箱即用；源码方式在设置中指定路径即可（或留空走 Skymods 备用源）
-
----
-
-## 完整变更日志
-
-见 [CHANGELOG.md](CHANGELOG.md)
+**下载**：`rwmod_setup.exe`（安装版）或 `rwmod.exe`（免安装）。
