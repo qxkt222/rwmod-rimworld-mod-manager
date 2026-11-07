@@ -10,6 +10,7 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from typing import TypedDict
 
 from rwmod.errors import WorkshopError
 from rwmod.offline import mark_offline, mark_online
@@ -90,8 +91,12 @@ class ModSearchResult:
 STEAM_APP_ID = "294100"
 
 
-def search_workshop(query: str, page: int = 1, count: int = 20) -> list[ModSearchResult]:
-    """Search RimWorld workshop using Steam's JSON API (no auth required)."""
+def search_workshop(query: str, page: int = 1, count: int = 20) -> list[ModSearchResult] | None:
+    """Search RimWorld workshop using Steam's JSON API (no auth required).
+
+    Returns ``None`` when Steam could not be reached, and ``[]`` when Steam
+    answered but had no matches — callers must not conflate the two.
+    """
     url = (
         f"https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/?"
         f"key=anonymous&format=json&appid={STEAM_APP_ID}"
@@ -102,7 +107,7 @@ def search_workshop(query: str, page: int = 1, count: int = 20) -> list[ModSearc
 
     data = _request_json(url)
     if data is None:
-        return []
+        return None
 
     results: list[ModSearchResult] = []
     published_files = data.get("response", {}).get("publishedfiledetails", [])
@@ -197,7 +202,7 @@ def is_collection(workshop_id: str) -> bool:
     return bool(details) and details[0].get("result") == 1
 
 
-def fetch_collection_children(collection_id: str) -> list[str]:
+def fetch_collection_children(collection_id: str) -> list[str] | None:
     """Fetch every mod ID in a Steam Workshop collection — nothing may be missed.
 
     Layer 1: GetCollectionDetails API — authoritative, returns the complete
@@ -207,6 +212,9 @@ def fetch_collection_children(collection_id: str) -> list[str]:
              a child present in either source is never dropped.
     Layer 3: User API Key — for private/friends-only collections.
 
+    Returns ``None`` when both primary sources failed (Steam unreachable), and
+    ``[]`` when at least one of them answered with an empty collection. A
+    failed source is never turned into "the collection is empty".
     Results are deduplicated while preserving order.
     """
     log = __import__("logging").getLogger(__name__)
@@ -217,8 +225,15 @@ def fetch_collection_children(collection_id: str) -> list[str]:
     # Layer 2 — precise, noise-free scrape; merge (union) so no child is missed
     # even if a very large collection were ever truncated by the API.
     scraped = _scrape_collection_page(collection_id, timeout=12)
-    if scraped:
-        if result:
+
+    if result is None and scraped is None:
+        log.warning("Collection %s: API and scraping both unreachable", collection_id)
+        return None
+
+    # A None layer means that source failed; the other source still answers.
+    merged = _dedup_ids([*(result or []), *(scraped or [])])
+    if merged:
+        if result is not None and scraped is not None:
             log.info(
                 "Collection %s: API %d + scrape %d → merged",
                 collection_id,
@@ -226,36 +241,32 @@ def fetch_collection_children(collection_id: str) -> list[str]:
                 len(scraped),
             )
         else:
-            log.info(
-                "Collection %s: found %d mods via HTML scraping",
-                collection_id,
-                len(scraped),
-            )
-        result = _dedup_ids([*result, *scraped])
+            log.info("Collection %s: found %d mods", collection_id, len(merged))
+        return merged
 
     # Layer 3 — user API key (private/friends-only collections)
-    if not result:
-        log.warning("Collection %s: HTML scraping failed, trying user API key", collection_id)
-        try:
-            from rwmod.config import Config
+    log.warning(
+        "Collection %s: no children from anonymous API/scrape, trying user API key",
+        collection_id,
+    )
+    try:
+        from rwmod.config import Config
 
-            cfg = Config.load()
-            if cfg.steam_api_key:
-                result = _fetch_collection_api(collection_id, cfg.steam_api_key)
-                if result:
-                    log.info(
-                        "Collection %s: found %d mods via user API key",
-                        collection_id,
-                        len(result),
-                    )
-        except Exception:  # nosec B110 — user API key layer is best-effort
-            pass
+        cfg = Config.load()
+        if cfg.steam_api_key:
+            keyed = _fetch_collection_api(collection_id, cfg.steam_api_key)
+            if keyed:
+                log.info(
+                    "Collection %s: found %d mods via user API key",
+                    collection_id,
+                    len(keyed),
+                )
+                return _dedup_ids(keyed)
+    except Exception:  # nosec B110 — user API key layer is best-effort
+        pass
 
-    if not result:
-        log.warning("Collection %s: all methods failed", collection_id)
-        return []
-
-    return _dedup_ids(result)
+    log.info("Collection %s: no children (at least one source answered)", collection_id)
+    return merged
 
 
 def _dedup_ids(ids: list[str]) -> list[str]:
@@ -269,16 +280,19 @@ def _dedup_ids(ids: list[str]) -> list[str]:
     return out
 
 
-def _fetch_collection_api(collection_id: str, api_key: str = "anonymous") -> list[str]:
+def _fetch_collection_api(collection_id: str, api_key: str = "anonymous") -> list[str] | None:
     """Fetch every child ID of a collection via the dedicated GetCollectionDetails API.
 
     Returns the complete child list in one shot — the endpoint returns all
     children regardless of collection size (verified: 593/593 children against
     the page's declared ``childCount``), so no pagination is required.
+
+    Returns ``None`` when the API call failed, and ``[]`` when it answered
+    without children (including non-collection ids).
     """
     response = _get_collection_details(collection_id, api_key)
-    if not response:
-        return []
+    if response is None:
+        return None
     details = response.get("collectiondetails", [])
     if not details or details[0].get("result") != 1:
         return []
@@ -291,7 +305,7 @@ def _fetch_collection_api(collection_id: str, api_key: str = "anonymous") -> lis
     return ids
 
 
-def _scrape_collection_page(collection_id: str, timeout: int = 30) -> list[str]:
+def _scrape_collection_page(collection_id: str, timeout: int = 30) -> list[str] | None:
     """Scrape the public Steam Community collection page for mod IDs.
 
     Fallback when the API returns empty. Extracts the collection's *own* child
@@ -300,6 +314,9 @@ def _scrape_collection_page(collection_id: str, timeout: int = 30) -> list[str]:
 
     Verified: the precise pattern returns exactly the same set as the API and
     the page's declared ``childCount`` (593 == 593 == 593).
+
+    Returns ``None`` when the page could not be fetched, and ``[]`` when it was
+    fetched but contains no child rows.
     """
     url = f"https://steamcommunity.com/sharedfiles/filedetails/?id={collection_id}"
     try:
@@ -312,7 +329,7 @@ def _scrape_collection_page(collection_id: str, timeout: int = 30) -> list[str]:
         with _shared_opener.open(req, timeout=timeout) as resp:  # nosec B310 — HTTPS-only Steam URL
             html = resp.read().decode("utf-8", errors="replace")
     except Exception:
-        return []
+        return None
 
     ids = []
     for m in re.finditer(r'id="sharedfile_(\d+)"', html):
@@ -322,14 +339,14 @@ def _scrape_collection_page(collection_id: str, timeout: int = 30) -> list[str]:
     return _dedup_ids(ids)
 
 
-def fetch_item_details(mod_ids: list[str]) -> dict[str, dict]:
+def fetch_item_details(mod_ids: list[str]) -> dict[str, dict] | None:
     """Fetch updated timestamp for a batch of mod IDs (used for update detection).
 
-    An API failure is an empty mapping here (the historical contract); callers
-    that must tell "no data" from "could not ask" use ``check_mod_updates``,
-    which raises ``WorkshopError`` instead.
+    Returns ``None`` when the API call failed and ``{}`` when Steam answered
+    without data for these ids. Callers must not report "not found" for a
+    lookup that could not be made.
     """
-    return _fetch_batch(mod_ids) or {}
+    return _fetch_batch(mod_ids)
 
 
 def fetch_item_dependencies(mod_ids: list[str]) -> dict[str, list[str]]:
@@ -383,29 +400,31 @@ def _fetch_batch(mod_ids: list[str]) -> dict[str, dict] | None:
 
 
 class _BatchDetails(dict[str, dict]):
-    """Details map plus the number of API batches that failed outright.
+    """Details map plus the batch counters the update checker reports.
 
     A ``dict`` subclass so existing callers/tests that treat the result as a
     plain mapping keep working.
     """
 
     failed_batches: int = 0
+    total_batches: int = 0
 
 
-def _fetch_batch_parallel(mod_ids: list[str], batch_size: int = 100) -> dict[str, dict]:
+def _fetch_batch_parallel(mod_ids: list[str], batch_size: int = 100) -> _BatchDetails:
     """Fetch mod details in parallel batches via ThreadPoolExecutor.
 
     For 300 mods → 3 concurrent API calls instead of 3 sequential ones,
     reducing total network wait by ~60-70%.
     A single batch goes directly to _fetch_batch with no executor overhead.
 
-    The returned mapping counts API failures in ``failed_batches`` so the
+    The returned mapping records ``failed_batches`` / ``total_batches`` so the
     caller can distinguish "no updates" from "could not check".
     """
     if not mod_ids:
         return _BatchDetails()
     if len(mod_ids) <= batch_size:
         result = _BatchDetails()
+        result.total_batches = 1
         batch = _fetch_batch(mod_ids)
         if batch is None:
             result.failed_batches = 1
@@ -415,6 +434,7 @@ def _fetch_batch_parallel(mod_ids: list[str], batch_size: int = 100) -> dict[str
 
     batches = [mod_ids[i : i + batch_size] for i in range(0, len(mod_ids), batch_size)]
     result = _BatchDetails()
+    result.total_batches = len(batches)
     with ThreadPoolExecutor(max_workers=min(len(batches), _MAX_WORKERS)) as executor:
         futures = {executor.submit(_fetch_batch, b): b for b in batches}
         for future in as_completed(futures):
@@ -430,11 +450,31 @@ def _fetch_batch_parallel(mod_ids: list[str], batch_size: int = 100) -> dict[str
     return result
 
 
-def check_mod_updates(mods_dir: str) -> list[dict]:
+class UpdateCheckResult(TypedDict):
+    """Outcome of one update check.
+
+    ``partial`` is True when at least one Steam API batch failed, so the
+    update list is incomplete rather than authoritative. When *every* batch
+    failed there is no result at all and :func:`check_mod_updates` raises
+    :class:`~rwmod.errors.WorkshopError` instead.
+    """
+
+    updates: list[dict]
+    partial: bool
+    failed_batches: int
+    total_batches: int
+
+
+def check_mod_updates(mods_dir: str) -> UpdateCheckResult:
     """Compare local mod timestamps with Steam Workshop.
 
     Uses the shared mod metadata cache to avoid re-parsing About.xml
     on every check — the cache is refreshed if stale (>30s or dir changed).
+
+    A single failed batch does not discard the other batches' results: the
+    return value marks the check ``partial``. Only a check where every batch
+    failed raises ``WorkshopError`` — "could not ask" must never look like
+    "everything is up to date".
     """
     from pathlib import Path
 
@@ -442,7 +482,7 @@ def check_mod_updates(mods_dir: str) -> list[dict]:
 
     mods_path = Path(mods_dir)
     if not mods_path.exists():
-        return []
+        return {"updates": [], "partial": False, "failed_batches": 0, "total_batches": 0}
 
     # Reuse cached metadata instead of re-parsing About.xml for every mod
     metas = get_cached_mods(mods_path)
@@ -456,7 +496,7 @@ def check_mod_updates(mods_dir: str) -> list[dict]:
             }
 
     if not local_mods:
-        return []
+        return {"updates": [], "partial": False, "failed_batches": 0, "total_batches": 0}
 
     # Fetch remote data in parallel batches — uses ThreadPoolExecutor
     # for concurrent API calls. 300 mods = 3 parallel batches instead of
@@ -464,10 +504,13 @@ def check_mod_updates(mods_dir: str) -> list[dict]:
     ids = list(local_mods.keys())
     all_details = _fetch_batch_parallel(ids)
     failed_batches = int(getattr(all_details, "failed_batches", 0))
-    if failed_batches:
-        # Never report "no updates" for a check that could not be completed:
+    total_batches = int(getattr(all_details, "total_batches", 0))
+    if total_batches > 0 and failed_batches == total_batches:
+        # Never report "no updates" for a check that asked nobody:
         # that silently told the user everything was current.
-        raise WorkshopError(f"Steam API 请求失败（{failed_batches} 个批次），无法确认更新状态")
+        raise WorkshopError(
+            f"Steam API 请求失败（{failed_batches}/{total_batches} 个批次），无法确认更新状态"
+        )
 
     import time as _time
 
@@ -518,4 +561,9 @@ def check_mod_updates(mods_dir: str) -> list[dict]:
             }
         )
 
-    return updates
+    return {
+        "updates": updates,
+        "partial": failed_batches > 0,
+        "failed_batches": failed_batches,
+        "total_batches": total_batches,
+    }

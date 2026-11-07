@@ -20,6 +20,7 @@ from rwmod.downloader import (
     download_one,
     explain_outcome,
 )
+from rwmod.errors import WorkshopError
 from rwmod.logger import get_log
 from rwmod.models.schemas import CollectionImportRequest, DownloadRequest
 from rwmod.parser import (
@@ -224,8 +225,12 @@ async def _collection_event_stream(cfg: Config, mid: str, force: bool):
     """
     yield f"data: {_sse_event('info', msg='检测到合集，通过 Web API 获取内容...')}\n\n"
     collection_ids = await asyncio.to_thread(fetch_collection_children, mid)
+    if collection_ids is None:
+        yield f"data: {_sse_event('warn', msg='Steam 不可用，未能获取合集内容')}\n\n"
+        yield f"data: {_sse_event('done', id=mid)}\n\n"
+        return
     if not collection_ids:
-        yield f"data: {_sse_event('warn', msg='未能获取合集内容')}\n\n"
+        yield f"data: {_sse_event('warn', msg='合集为空')}\n\n"
         yield f"data: {_sse_event('done', id=mid)}\n\n"
         return
     yield f"data: {_sse_event('info', msg=f'合集包含 {len(collection_ids)} 个 Mod，批量下载中...', total=len(collection_ids))}\n\n"
@@ -450,6 +455,8 @@ async def import_collection_api(
         raise HTTPException(400, f"无效的合集 ID: {raw_id}")
     cfg.validate()
     mod_ids = await asyncio.to_thread(fetch_collection_children, collection_id)
+    if mod_ids is None:
+        raise WorkshopError("Steam Workshop 不可用，未能获取合集内容")
     if not mod_ids:
         raise HTTPException(404, "未能获取合集内容")
     _log.info("合集 %s 包含 %s 个 Mod", collection_id, len(mod_ids))

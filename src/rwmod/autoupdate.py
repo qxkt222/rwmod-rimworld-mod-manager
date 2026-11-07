@@ -77,7 +77,14 @@ class AutoUpdateManager:
             cfg = Config.load()
             from rwmod.workshop import check_mod_updates
 
-            updates = await asyncio.to_thread(check_mod_updates, str(cfg.mods_dir))
+            result = await asyncio.to_thread(check_mod_updates, str(cfg.mods_dir))
+            if result["partial"]:
+                _log.warning(
+                    "更新检查部分失败：%d/%d 批未取到，结果可能不完整",
+                    result["failed_batches"],
+                    result["total_batches"],
+                )
+            updates = result["updates"]
 
             self._check_result.clear()
             self._check_result.extend(updates)
@@ -124,7 +131,14 @@ class AutoUpdateManager:
                 cfg = Config.load()
                 from rwmod.workshop import check_mod_updates
 
-                updates = await asyncio.to_thread(check_mod_updates, str(cfg.mods_dir))
+                result = await asyncio.to_thread(check_mod_updates, str(cfg.mods_dir))
+                if result["partial"]:
+                    _log.warning(
+                        "更新检查部分失败：%d/%d 批未取到，结果可能不完整",
+                        result["failed_batches"],
+                        result["total_batches"],
+                    )
+                updates = result["updates"]
                 if updates:
                     _log.info("发现 %s 个可用更新", len(updates))
                     self._check_result.clear()

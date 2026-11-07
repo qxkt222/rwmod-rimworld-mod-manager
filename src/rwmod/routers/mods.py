@@ -240,7 +240,9 @@ def set_active_mods(
 def check_updates(
     cfg: Config = Depends(get_config),
 ):
-    return {"updates": check_mod_updates(str(cfg.mods_dir))}
+    # The result dict already has the wire shape: updates / partial /
+    # failed_batches / total_batches. A fully failed check raises (502).
+    return check_mod_updates(str(cfg.mods_dir))
 
 
 # ── health (persistent cache — hits Steam API for 600+ mods) ──────

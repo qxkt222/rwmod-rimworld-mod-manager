@@ -15,6 +15,7 @@ import { ToastViewport } from "../../src/components/ToastViewport";
 import { Sidebar } from "../../src/layout/Sidebar";
 import { DashboardPanel } from "../../src/panels/DashboardPanel";
 import { DownloadPanel } from "../../src/panels/DownloadPanel";
+import { QueuePanel } from "../../src/panels/QueuePanel";
 import { useConfigStore } from "../../src/store/config";
 import { useModsStore } from "../../src/store/mods";
 import { useQueueStore } from "../../src/store/queue";
@@ -59,7 +60,15 @@ beforeEach(() => {
   useTransferStore.getState().clear("download");
   useQueueStore.setState({ items: [], paused: false, status: "idle", error: null });
   useModsStore.setState({ items: [], status: "idle", error: null, selectedIds: [] });
-  useUpdatesStore.setState({ autoUpdateRunning: false, error: null, checkStatus: "idle" });
+  useUpdatesStore.setState({
+    autoUpdateRunning: false,
+    error: null,
+    checkStatus: "idle",
+    outdated: [],
+    partial: false,
+    failedBatches: 0,
+    totalBatches: 0,
+  });
   useConfigStore.setState({ steamOnline: null });
 });
 
@@ -215,6 +224,77 @@ describe("REV-009 sidebar mod badge", () => {
     });
 
     await waitFor(() => expect(document.getElementById("mod-count")).toHaveTextContent("3"));
+  });
+});
+
+describe("BE-FIX3 partial update check", () => {
+  it("stores partial batch metadata from the check response", async () => {
+    server.use(
+      http.get("*/api/mods/check-updates", () =>
+        HttpResponse.json({
+          updates: [{ workshop_id: "777", name: "Old Mod", folder: "OldMod" }],
+          partial: true,
+          failed_batches: 1,
+          total_batches: 6,
+        }),
+      ),
+    );
+
+    await useUpdatesStore.getState().check();
+
+    const state = useUpdatesStore.getState();
+    expect(state.outdated).toHaveLength(1);
+    expect(state.partial).toBe(true);
+    expect(state.failedBatches).toBe(1);
+    expect(state.totalBatches).toBe(6);
+  });
+
+  it("renders an info partial banner instead of claiming everything is current", async () => {
+    server.use(
+      http.get("*/api/mods/check-updates", () =>
+        HttpResponse.json({
+          updates: [],
+          partial: true,
+          failed_batches: 2,
+          total_batches: 6,
+        }),
+      ),
+      http.get("*/api/queue", () => HttpResponse.json({ items: [], paused: false })),
+      http.get("*/api/auto-update/status", () => HttpResponse.json({ running: false })),
+    );
+
+    render(<QueuePanel />);
+    fireEvent.click(screen.getByTestId("action-check-updates"));
+
+    const banner = await screen.findByTestId("status-updates-partial");
+    expect(banner).toHaveTextContent("2/6 批未取到，结果可能不完整");
+    expect(screen.queryByTestId("status-updates-current")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("status-updates-error")).not.toBeInTheDocument();
+  });
+
+  it("does not show the partial banner when every batch answered", async () => {
+    server.use(
+      http.get("*/api/mods/check-updates", () =>
+        HttpResponse.json({
+          updates: [],
+          partial: false,
+          failed_batches: 0,
+          total_batches: 6,
+        }),
+      ),
+      http.get("*/api/queue", () => HttpResponse.json({ items: [], paused: false })),
+      http.get("*/api/auto-update/status", () => HttpResponse.json({ running: false })),
+    );
+
+    render(<QueuePanel />);
+    fireEvent.click(screen.getByTestId("action-check-updates"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("status-updates-current")).toHaveTextContent(
+        "所有 Mod 均为最新版本",
+      ),
+    );
+    expect(screen.queryByTestId("status-updates-partial")).not.toBeInTheDocument();
   });
 });
 

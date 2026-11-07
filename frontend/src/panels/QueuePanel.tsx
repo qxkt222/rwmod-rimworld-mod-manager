@@ -117,6 +117,9 @@ function UpdateSection() {
   const outdated = useUpdatesStore((state) => state.outdated);
   const checkStatus = useUpdatesStore((state) => state.checkStatus);
   const checkError = useUpdatesStore((state) => state.error);
+  const partial = useUpdatesStore((state) => state.partial);
+  const failedBatches = useUpdatesStore((state) => state.failedBatches);
+  const totalBatches = useUpdatesStore((state) => state.totalBatches);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [allBusy, setAllBusy] = useState(false);
   const [allText, setAllText] = useState("⬇ 全部更新");
@@ -201,6 +204,17 @@ function UpdateSection() {
       </div>
       <div id="update-results" data-testid="list-update-results">
         {allMessage ? <div data-testid="status-update-all">{allMessage}</div> : null}
+        {partial ? (
+          // Incomplete, not wrong: warn-coloured line, never the error state.
+          <div
+            className="status-banner"
+            data-testid="status-updates-partial"
+            role="status"
+            style={{ color: "var(--yellow)" }}
+          >
+            {failedBatches}/{totalBatches} 批未取到，结果可能不完整
+          </div>
+        ) : null}
         {checkStatus === "checking" ? (
           <LoadingState message="正在检查更新..." testid="status-updates-loading" />
         ) : checkStatus === "error" ? (
@@ -212,9 +226,13 @@ function UpdateSection() {
         ) : checkStatus === "idle" ? (
           <span className="muted">点击「检查更新」</span>
         ) : outdated.length === 0 ? (
-          <span className="update-ok" data-testid="status-updates-current">
-            ✅ 所有 Mod 均为最新版本
-          </span>
+          // A partial check cannot claim "everything is current" — the
+          // missing batches may contain updates, so only the banner shows.
+          partial ? null : (
+            <span className="update-ok" data-testid="status-updates-current">
+              ✅ 所有 Mod 均为最新版本
+            </span>
+          )
         ) : (
           outdated.map((item, index) => {
             const desc = (item.file_description ?? "").trim();

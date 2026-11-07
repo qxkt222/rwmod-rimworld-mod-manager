@@ -420,8 +420,15 @@ def download_batch(
             kids = fetch_collection_children(mid)
         except Exception as e:  # noqa: BLE001 — fail closed on fetch errors too
             return True, [], KIND_COLLECTION_EMPTY, f"无法获取合集子项: {e}"
+        if kids is None:
+            return (
+                True,
+                [],
+                KIND_COLLECTION_PROBE_FAILED,
+                "无法获取合集子项（Steam API 不可用）",
+            )
         if not kids:
-            return True, [], KIND_COLLECTION_EMPTY, "合集为空或无法获取子项"
+            return True, [], KIND_COLLECTION_EMPTY, "合集为空"
         return True, list(kids), "", ""
 
     try:

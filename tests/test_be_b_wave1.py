@@ -282,6 +282,82 @@ class TestUpdateCheckFailure:
             finally:
                 close_db()
 
+    def _make_mods(self, mods_dir: Path, count: int) -> None:
+        for i in range(count):
+            mod = mods_dir / f"Mod{i}"
+            (mod / "About").mkdir(parents=True)
+            (mod / "About" / "About.xml").write_text(
+                f"<ModMetaData><name>Mod{i}</name><packageId>a.mod{i}</packageId></ModMetaData>",
+                encoding="utf-8",
+            )
+            (mod / "About" / "PublishedFileId.txt").write_text(str(1000 + i), encoding="utf-8")
+
+    def test_one_failed_batch_is_partial_not_an_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """One flaky batch must not throw away the other batches' answer."""
+        from unittest.mock import patch
+
+        from rwmod import workshop
+        from rwmod.database import close_db, init_db
+
+        mods_dir = tmp_path / "Mods"
+        self._make_mods(mods_dir, 101)  # 2 batches at the default batch_size
+
+        def fake_fetch_batch(ids: list[str]) -> dict[str, dict] | None:
+            # Fail exactly the batch that owns id 1050; every other batch answers.
+            if "1050" in ids:
+                return None
+            return {wid: {"time_updated": 1, "title": wid} for wid in ids}
+
+        monkeypatch.setattr(workshop, "_fetch_batch", fake_fetch_batch)
+
+        db_path = tmp_path / "updates.db"
+        with patch("rwmod.database.DB_PATH", db_path):
+            init_db()
+            try:
+                result = workshop.check_mod_updates(str(mods_dir))
+            finally:
+                close_db()
+
+        assert result["partial"] is True
+        assert result["failed_batches"] == 1
+        assert result["total_batches"] == 2
+        # The surviving batch only answered with timestamps, and first-time
+        # checks seed instead of reporting; nothing is falsely "updated".
+        assert result["updates"] == []
+
+    def test_all_batches_succeed_reports_complete_result(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        from unittest.mock import patch
+
+        from rwmod import workshop
+        from rwmod.database import close_db, init_db
+
+        mods_dir = tmp_path / "Mods"
+        self._make_mods(mods_dir, 101)
+
+        def fake_fetch_batch(ids: list[str]) -> dict[str, dict]:
+            return {wid: {"time_updated": 1, "title": wid} for wid in ids}
+
+        monkeypatch.setattr(workshop, "_fetch_batch", fake_fetch_batch)
+
+        db_path = tmp_path / "updates.db"
+        with patch("rwmod.database.DB_PATH", db_path):
+            init_db()
+            try:
+                result = workshop.check_mod_updates(str(mods_dir))
+            finally:
+                close_db()
+
+        assert result == {
+            "updates": [],
+            "partial": False,
+            "failed_batches": 0,
+            "total_batches": 2,
+        }
+
     def test_autoupdate_surfaces_failure_instead_of_all_latest(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
@@ -307,7 +383,15 @@ class TestUpdateCheckFailure:
 
         cfg = _cfg(tmp_path)
         monkeypatch.setattr("rwmod.autoupdate.Config.load", lambda: cfg)
-        monkeypatch.setattr("rwmod.workshop.check_mod_updates", lambda _d: [])
+        monkeypatch.setattr(
+            "rwmod.workshop.check_mod_updates",
+            lambda _d: {
+                "updates": [],
+                "partial": False,
+                "failed_batches": 0,
+                "total_batches": 0,
+            },
+        )
 
         manager = AutoUpdateManager()
         manager._last_error = "stale failure"

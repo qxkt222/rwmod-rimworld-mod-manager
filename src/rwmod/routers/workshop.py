@@ -8,7 +8,6 @@ from rwmod.deps import get_config
 from rwmod.errors import ModNotFoundError, WorkshopError
 from rwmod.mod_cache import get_cached_mods
 from rwmod.models.schemas import ModIdsRequest, SearchResponse
-from rwmod.offline import get_status
 from rwmod.utils import extract_mod_id
 from rwmod.workshop import (
     fetch_collection_children,
@@ -17,28 +16,6 @@ from rwmod.workshop import (
 )
 
 router = APIRouter(prefix="/api", tags=["workshop"])
-
-#: A Steam call counts as "just failed" only while the observation is this
-#: young. workshop.py's network layer records the outcome of every real
-#: request, so a stale offline state from minutes ago never taints a request
-#: that was answered from a mock/empty result.
-_STEAM_FAULT_WINDOW_SEC = 1.0
-
-
-def _steam_fault() -> bool:
-    """True when the call that just returned nothing failed to reach Steam.
-
-    ``search_workshop`` / ``fetch_item_details`` report a network failure as an
-    empty result, so without this check an unreachable Steam API looked exactly
-    like "no matching mods" and the UI silently showed an empty list.
-    """
-    status = get_status()
-    if status.get("online", True):
-        return False
-    try:
-        return float(status.get("last_check_ago_sec", 0)) < _STEAM_FAULT_WINDOW_SEC
-    except (TypeError, ValueError):  # pragma: no cover — defensive
-        return False
 
 
 @router.get("/search", response_model=SearchResponse)
@@ -55,7 +32,7 @@ def search(
         # A Steam/API failure is a 502, never an empty 200 that pretends the
         # catalog has no matches.
         raise WorkshopError(f"Workshop 搜索失败: {e}") from e
-    if not results and _steam_fault():
+    if results is None:
         raise WorkshopError("Steam Workshop 不可用，搜索结果未知")
     installed_ids: set[str] = set()
     if cfg.mods_dir.exists():
@@ -87,7 +64,7 @@ def workshop_detail(mod_id: str):
         details = fetch_item_details([mod_id])
     except Exception as e:
         raise WorkshopError(f"获取 Workshop 详情失败: {e}") from e
-    if not details and _steam_fault():
+    if details is None:
         # "cannot ask" must not be reported as "does not exist".
         raise WorkshopError("Steam Workshop 不可用，无法确认该 Mod")
     if mod_id in details:
@@ -105,9 +82,10 @@ def collection_preview(
         mod_ids = fetch_collection_children(cid)
     except Exception as e:
         raise WorkshopError(f"获取合集失败: {e}") from e
+    if mod_ids is None:
+        # "could not ask" must not be reported as "the collection is empty".
+        raise WorkshopError("Steam Workshop 不可用，未能获取合集内容")
     if not mod_ids:
-        if _steam_fault():
-            raise WorkshopError("Steam Workshop 不可用，未能获取合集内容")
         raise ModNotFoundError("未能获取合集内容")
 
     # Build the installed workshop-id → folder map with a single metadata scan
@@ -167,8 +145,11 @@ def mod_dependencies(
     remote_names: dict[str, str] = {}
     if unknown:
         details = fetch_item_details(unknown)
-        for wid, info in details.items():
-            remote_names[wid] = info.get("title", wid)
+        # A failed lookup leaves the ids as their own display names; the
+        # dependency graph itself came from the (separate) dependencies call.
+        if details:
+            for wid, info in details.items():
+                remote_names[wid] = info.get("title", wid)
     result: dict[str, list[dict]] = {}
     for mid in ids:
         dep_ids = raw_deps.get(mid, [])

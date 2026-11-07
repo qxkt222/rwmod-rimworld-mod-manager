@@ -212,7 +212,12 @@ def test_run_check_queued_count_reflects_dedupe(env: SimpleNamespace, monkeypatc
     monkeypatch.setattr("rwmod.autoupdate.Config.load", lambda: env.cfg)
     monkeypatch.setattr(
         "rwmod.workshop.check_mod_updates",
-        lambda mods_dir: [{"workshop_id": "111", "name": "A"}],
+        lambda mods_dir: {
+            "updates": [{"workshop_id": "111", "name": "A"}],
+            "partial": False,
+            "failed_batches": 0,
+            "total_batches": 1,
+        },
     )
     sink: list[dict] = []
     monkeypatch.setattr("rwmod.queue.download_batch", _fake_batch(sink))

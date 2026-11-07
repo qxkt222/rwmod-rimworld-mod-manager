@@ -332,7 +332,9 @@ def rimsort_apply(
     # keeps the microsecond-stamped backup with a collision suffix, so two
     # applies inside the same wall-clock second cannot destroy the pre-sort
     # backup (0.7.0 incident).
-    backup = write_modsconfig_target(path, new_data.decode("utf-8"), label="sort")
+    # Pass the bytes through untouched: the writer accepts bytes verbatim, so
+    # a BOM-prefixed file never round-trips through a Python str.
+    backup = write_modsconfig_target(path, new_data, label="sort")
     backup_name = backup.name if backup is not None else ""
 
     return {

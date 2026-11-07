@@ -364,3 +364,22 @@ class TestWriteModsconfigTarget:
         assert backup is None
         assert target.read_text(encoding="utf-8").startswith(_HEADER)
         assert not os.listdir(sandbox / "undo") if (sandbox / "undo").exists() else True
+
+    def test_writes_bytes_verbatim_without_reencoding(self, sandbox: Path):
+        """A BOM-prefixed payload must reach disk byte-for-byte."""
+        target = sandbox / "Config" / "ModsConfig.xml"
+        payload = b"\xef\xbb\xbf" + _xml(["a.b"]).encode("utf-8")
+
+        backup = write_modsconfig_target(target, payload)
+
+        assert backup is None
+        assert target.read_bytes() == payload
+        assert target.read_bytes().count(b"\xef\xbb\xbf") == 1
+
+    def test_writes_str_as_utf8_unchanged(self, sandbox: Path):
+        target = sandbox / "Config" / "ModsConfig.xml"
+        text = _xml(["a.b"])
+
+        write_modsconfig_target(target, text)
+
+        assert target.read_bytes() == text.encode("utf-8")

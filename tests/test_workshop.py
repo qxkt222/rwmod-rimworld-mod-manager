@@ -152,6 +152,10 @@ class TestFetchCollectionApi:
         monkeypatch.setattr(workshop, "_shared_opener", _FakeOpener([payload]))
         assert _fetch_collection_api("x") == []
 
+    def test_network_failure_returns_none(self, monkeypatch):
+        monkeypatch.setattr(workshop, "_request_json", lambda *a, **k: None)
+        assert _fetch_collection_api("x") is None
+
 
 class TestFetchCollectionChildren:
     """Children must never be missed — API and scrape results are unioned."""
@@ -180,10 +184,27 @@ class TestFetchCollectionChildren:
         )
         assert fetch_collection_children("3760470751") == ["111", "222"]
 
-    def test_all_methods_fail_returns_empty(self, monkeypatch):
+    def test_both_layers_answer_empty_returns_empty(self, monkeypatch):
         monkeypatch.setattr(workshop, "_fetch_collection_api", lambda cid, api_key="anonymous": [])
         monkeypatch.setattr(workshop, "_scrape_collection_page", lambda cid, timeout=30: [])
         assert fetch_collection_children("3760470751") == []
+
+    def test_both_layers_unreachable_returns_none(self, monkeypatch):
+        """A total outage must not be reported as an empty collection."""
+        monkeypatch.setattr(
+            workshop, "_fetch_collection_api", lambda cid, api_key="anonymous": None
+        )
+        monkeypatch.setattr(workshop, "_scrape_collection_page", lambda cid, timeout=30: None)
+        assert fetch_collection_children("3760470751") is None
+
+    def test_failed_layer_is_skipped_in_the_union(self, monkeypatch):
+        monkeypatch.setattr(
+            workshop, "_fetch_collection_api", lambda cid, api_key="anonymous": None
+        )
+        monkeypatch.setattr(
+            workshop, "_scrape_collection_page", lambda cid, timeout=30: ["111", "222"]
+        )
+        assert fetch_collection_children("3760470751") == ["111", "222"]
 
 
 class TestDedupIds:
@@ -266,11 +287,13 @@ class TestCheckModUpdates:
             init_db()
             self._mock_remote(monkeypatch, old_ts + 3600)  # remote is newer
 
-            updates = workshop.check_mod_updates(str(tmp_path / "Mods"))
+            result = workshop.check_mod_updates(str(tmp_path / "Mods"))
+            updates = result["updates"]
 
             # Mod is correctly reported as outdated AND the marker migrated.
             assert len(updates) == 1
             assert updates[0]["workshop_id"] == "100"
+            assert result["partial"] is False
             assert not (mod / ".rwmod_last_updated").exists()
             assert get_last_updated("Some Mod") == old_ts
         close_db()
@@ -288,6 +311,7 @@ class TestCheckModUpdates:
             self._mock_remote(monkeypatch, now - 100)  # remote older than install
             # Seed the DB timestamp via a fresh check (no marker file).
             workshop.check_mod_updates(str(tmp_path / "Mods"))
-            updates = workshop.check_mod_updates(str(tmp_path / "Mods"))
-            assert updates == []
+            result = workshop.check_mod_updates(str(tmp_path / "Mods"))
+            assert result["updates"] == []
+            assert result["partial"] is False
         close_db()

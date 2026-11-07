@@ -265,22 +265,94 @@ class TestWorkshopFailureContract:
     def test_search_network_failure_is_502_not_empty_200(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ):
-        """``search_workshop`` reports an unreachable Steam as ``[]``.
+        """``search_workshop`` returns ``None`` when Steam is unreachable.
 
-        An empty list is also "no matches", so the router consults the
-        connectivity state the just-finished call wrote and only reports
-        "no results" when Steam actually answered.
+        ``[]`` means "Steam answered, no matches"; the router must not render
+        "could not ask" as an empty 200.
         """
-        from rwmod import offline
         from rwmod.routers import workshop as ws_router
 
-        def failing_search(_query: str, page: int = 1) -> list:
-            offline.mark_offline()
-            return []
+        def failing_search(_query: str, page: int = 1) -> None:
+            return None
 
         monkeypatch.setattr(ws_router, "search_workshop", failing_search)
 
         resp = client.get("/api/search?q=harmony")
+
+        assert resp.status_code == 502
+        assert resp.json()["error"] == "WorkshopError"
+
+    def test_search_empty_answer_is_a_200_empty_list(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Steam answering "no matches" is a successful empty result."""
+        from rwmod.routers import workshop as ws_router
+
+        monkeypatch.setattr(ws_router, "search_workshop", lambda _q, page=1: [])
+
+        resp = client.get("/api/search?q=harmony")
+
+        assert resp.status_code == 200
+        assert resp.json() == {"results": []}
+
+    def test_workshop_detail_network_failure_is_502_not_not_found(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        from rwmod.routers import workshop as ws_router
+
+        monkeypatch.setattr(ws_router, "fetch_item_details", lambda _ids: None)
+
+        resp = client.get("/api/workshop/123")
+
+        assert resp.status_code == 502
+        assert resp.json()["error"] == "WorkshopError"
+
+    def test_workshop_detail_empty_answer_is_found_false(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        from rwmod.routers import workshop as ws_router
+
+        monkeypatch.setattr(ws_router, "fetch_item_details", lambda _ids: {})
+
+        resp = client.get("/api/workshop/123")
+
+        assert resp.status_code == 200
+        assert resp.json() == {"found": False}
+
+    def test_collection_preview_network_failure_is_502(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        """An unreachable Steam is a 502 — never "the collection is empty"."""
+        from rwmod.routers import workshop as ws_router
+
+        monkeypatch.setattr(ws_router, "fetch_collection_children", lambda _cid: None)
+
+        resp = client.get("/api/collection/preview/123456")
+
+        assert resp.status_code == 502
+        assert resp.json()["error"] == "WorkshopError"
+
+    def test_collection_preview_confirmed_empty_is_404(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        from rwmod.routers import workshop as ws_router
+
+        monkeypatch.setattr(ws_router, "fetch_collection_children", lambda _cid: [])
+
+        resp = client.get("/api/collection/preview/123456")
+
+        assert resp.status_code == 404
+        assert resp.json()["error"] == "ModNotFoundError"
+
+    def test_collection_import_network_failure_is_502(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The collection import endpoint must not 404 on a lookup it never made."""
+        from rwmod.routers import download as dl_router
+
+        monkeypatch.setattr(dl_router, "fetch_collection_children", lambda _cid: None)
+
+        resp = client.post("/api/import/collection", json={"collection_id": "123456"})
 
         assert resp.status_code == 502
         assert resp.json()["error"] == "WorkshopError"
@@ -555,6 +627,42 @@ class TestRimsortApply:
         assert not list(config_dir.glob("*.rwmod.tmp"))
         # A timestamped backup of the original survives.
         assert list(config_dir.glob("ModsConfig.xml.bak_*"))
+
+    def test_apply_keeps_exactly_one_bom_and_never_adds_one(self, cfg: Config, tmp_path: Path):
+        from rwmod.routers.rimsort import rimsort_apply
+
+        config_dir = self._config_dir(cfg, tmp_path)
+        target = config_dir / "ModsConfig.xml"
+        target.write_bytes(
+            b"\xef\xbb\xbf"
+            b'<?xml version="1.0" encoding="utf-8"?>\r\n'
+            b"<ModsConfigData>\r\n"
+            b"  <activeMods>\r\n"
+            b"    <li>b.mod</li>\r\n"
+            b"    <li>a.mod</li>\r\n"
+            b"  </activeMods>\r\n"
+            b"</ModsConfigData>\r\n"
+        )
+        _make_mod(cfg.mods_dir, "A", "a.mod")
+        _make_mod(cfg.mods_dir, "B", "b.mod")
+
+        rimsort_apply(cfg=cfg)
+
+        raw = target.read_bytes()
+        assert raw.count(b"\xef\xbb\xbf") == 1
+        assert raw.index(b"<li>a.mod</li>") < raw.index(b"<li>b.mod</li>")
+
+        # A BOM-less file must stay BOM-less after a sort.
+        target.write_bytes(
+            b'<?xml version="1.0" encoding="utf-8"?>\n'
+            b"<ModsConfigData>\n"
+            b"  <activeMods>\n"
+            b"    <li>b.mod</li>\n"
+            b"  </activeMods>\n"
+            b"</ModsConfigData>\n"
+        )
+        rimsort_apply(cfg=cfg)
+        assert not target.read_bytes().startswith(b"\xef\xbb\xbf")
 
     def test_refresh_rules_failure_is_a_502(
         self, client: TestClient, cfg: Config, monkeypatch: pytest.MonkeyPatch

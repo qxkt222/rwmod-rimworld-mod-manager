@@ -125,10 +125,19 @@ def _download_one_unlocked(
         if is_coll:
             _log.info("检测到合集 ID: %s，获取子项...", mod_id)
             children = fetch_collection_children(mod_id)
-            if not children:
-                _log.warning("合集 %s 为空或无法获取子项", mod_id)
+            if children is None:
+                _log.warning("合集 %s：Steam API 不可用，无法获取子项", mod_id)
                 _restore_old_copy()
-                _record(False, KIND_COLLECTION_EMPTY, "合集为空或无法获取子项")
+                _record(
+                    False,
+                    KIND_COLLECTION_PROBE_FAILED,
+                    "无法获取合集子项（Steam API 不可用）",
+                )
+                return False
+            if not children:
+                _log.warning("合集 %s 为空", mod_id)
+                _restore_old_copy()
+                _record(False, KIND_COLLECTION_EMPTY, "合集为空")
                 return False
             _log.info("合集包含 %s 个 Mod，交给锁外队列下载...", len(children))
             if deferred is None:

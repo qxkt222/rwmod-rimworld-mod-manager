@@ -65,9 +65,18 @@ export interface UpdateItem {
   file_description?: string;
 }
 
-/** `GET /api/mods/check-updates` — `{ updates?: UpdateItem[] }`. */
+/**
+ * `GET /api/mods/check-updates`.
+ *
+ * A check whose Steam batches partially failed still answers 200: `partial`
+ * marks the list as incomplete and the batch counters say how incomplete.
+ * Only a check where every batch failed is a 502.
+ */
 export interface CheckUpdatesResult {
   updates?: UpdateItem[];
+  partial?: boolean;
+  failed_batches?: number;
+  total_batches?: number;
 }
 
 /** `GET /api/mods/health` — `{ mods?: { folder, status }[] }`. */

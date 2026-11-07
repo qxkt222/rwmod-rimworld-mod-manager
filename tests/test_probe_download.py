@@ -1448,7 +1448,15 @@ class TestAutoUpdateManager:
         cfg = self._run_cfg(tmp_path)
         updates = [{"workshop_id": "111", "name": "A"}, {"workshop_id": "222", "name": "B"}]
         monkeypatch.setattr("rwmod.autoupdate.Config.load", lambda: cfg)
-        monkeypatch.setattr("rwmod.workshop.check_mod_updates", lambda mods_dir: updates)
+        monkeypatch.setattr(
+            "rwmod.workshop.check_mod_updates",
+            lambda mods_dir: {
+                "updates": updates,
+                "partial": False,
+                "failed_batches": 0,
+                "total_batches": 1,
+            },
+        )
         queue = MagicMock()
         queue.start = AsyncMock()
         # run_check() reports len(add(...)) -- the real queue returns the items
@@ -1483,7 +1491,13 @@ class TestAutoUpdateManager:
         )
         monkeypatch.setattr("rwmod.autoupdate.Config.load", lambda: cfg)
         monkeypatch.setattr(
-            "rwmod.workshop.check_mod_updates", lambda mods_dir: [{"workshop_id": "111"}]
+            "rwmod.workshop.check_mod_updates",
+            lambda mods_dir: {
+                "updates": [{"workshop_id": "111"}],
+                "partial": False,
+                "failed_batches": 0,
+                "total_batches": 1,
+            },
         )
         queue = MagicMock()
         queue.start = AsyncMock()
@@ -1501,10 +1515,10 @@ class TestAutoUpdateManager:
         entered = threading.Event()
         release = threading.Event()
 
-        def slow_check(mods_dir: str) -> list[dict]:
+        def slow_check(mods_dir: str) -> dict:
             entered.set()
             release.wait(5)
-            return []
+            return {"updates": [], "partial": False, "failed_batches": 0, "total_batches": 0}
 
         monkeypatch.setattr("rwmod.workshop.check_mod_updates", slow_check)
         m = AutoUpdateManager()
@@ -1558,7 +1572,15 @@ class TestAutoUpdateManager:
 
     def test_background_loop_records_updates(self, tmp_path: Path, monkeypatch):
         updates = [{"workshop_id": "111", "name": "A"}]
-        monkeypatch.setattr("rwmod.workshop.check_mod_updates", lambda mods_dir: updates)
+        monkeypatch.setattr(
+            "rwmod.workshop.check_mod_updates",
+            lambda mods_dir: {
+                "updates": updates,
+                "partial": False,
+                "failed_batches": 0,
+                "total_batches": 1,
+            },
+        )
         calls = {"n": 0}
 
         async def fake_sleep(seconds: float) -> None:
@@ -1686,6 +1708,13 @@ class TestWorkshopHelpers:
         monkeypatch.setattr("rwmod.workshop._request_json", lambda *a, **k: None)
         assert workshop_mod.fetch_item_dependencies(["111"]) == {}
 
+    def test_scrape_collection_page_network_failure_is_none(self, monkeypatch):
+        def boom(*_args: object, **_kwargs: object) -> None:
+            raise OSError("offline")
+
+        monkeypatch.setattr("rwmod.workshop._shared_opener", SimpleNamespace(open=boom))
+        assert workshop_mod._scrape_collection_page("999") is None
+
     def test_scrape_collection_page_excludes_self_and_dedupes(self, monkeypatch):
         html = (
             '<a id="sharedfile_999" href="#">self</a>'
@@ -1718,7 +1747,7 @@ class TestWorkshopHelpers:
         assert len(results) == 1
         assert results[0].preview_url == ""
         monkeypatch.setattr("rwmod.workshop._request_json", lambda *a, **k: None)
-        assert workshop_mod.search_workshop("q") == []
+        assert workshop_mod.search_workshop("q") is None
 
 
 # ── skymods SSRF guard (fallback source for the download chain) ────

@@ -21,6 +21,10 @@ export const AUTO_UPDATE_CONFLICT_MESSAGE = "更新检查已在运行中";
 interface UpdatesState {
   checkStatus: CheckStatus;
   outdated: UpdateItem[];
+  /** True when at least one Steam batch failed — `outdated` is incomplete. */
+  partial: boolean;
+  failedBatches: number;
+  totalBatches: number;
   autoUpdateRunning: boolean;
   error: string | null;
 
@@ -34,14 +38,29 @@ interface UpdatesState {
 export const useUpdatesStore = create<UpdatesState>()((set) => ({
   checkStatus: "idle",
   outdated: [],
+  partial: false,
+  failedBatches: 0,
+  totalBatches: 0,
   autoUpdateRunning: false,
   error: null,
 
   check: async () => {
-    set({ checkStatus: "checking", error: null });
+    set({
+      checkStatus: "checking",
+      error: null,
+      partial: false,
+      failedBatches: 0,
+      totalBatches: 0,
+    });
     try {
       const result = await api.checkUpdates();
-      set({ outdated: result.updates ?? [], checkStatus: "done" });
+      set({
+        outdated: result.updates ?? [],
+        partial: result.partial ?? false,
+        failedBatches: result.failed_batches ?? 0,
+        totalBatches: result.total_batches ?? 0,
+        checkStatus: "done",
+      });
       bump("updates");
       bump("dashboard");
     } catch (error) {
@@ -50,8 +69,24 @@ export const useUpdatesStore = create<UpdatesState>()((set) => ({
     }
   },
 
-  markOutdated: (outdated) => set({ outdated, checkStatus: "done" }),
-  clearOutdated: () => set({ outdated: [], checkStatus: "idle" }),
+  // A WS update notification only carries the list — drop any stale partial
+  // banner rather than keep showing counters for a different check.
+  markOutdated: (outdated) =>
+    set({
+      outdated,
+      partial: false,
+      failedBatches: 0,
+      totalBatches: 0,
+      checkStatus: "done",
+    }),
+  clearOutdated: () =>
+    set({
+      outdated: [],
+      partial: false,
+      failedBatches: 0,
+      totalBatches: 0,
+      checkStatus: "idle",
+    }),
 
   refreshStatus: async () => {
     try {

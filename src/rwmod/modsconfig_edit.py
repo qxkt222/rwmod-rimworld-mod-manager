@@ -283,8 +283,14 @@ def _item_indent(old_inner: str, base_indent: str) -> str:
 _WRITE_LOCK = threading.Lock()
 
 
-def write_modsconfig_target(target: Path, text: str, *, label: str = "batch-active") -> Path | None:
+def write_modsconfig_target(
+    target: Path, text: str | bytes, *, label: str = "batch-active"
+) -> Path | None:
     """Write *text* to *target* after backing it up and snapshotting it.
+
+    *text* may be ``str`` (encoded as UTF-8, unchanged behaviour) or raw
+    ``bytes`` (written verbatim, so a caller that preserved a BOM keeps it
+    byte-for-byte instead of round-tripping it through a Python string).
 
     *target* must be the path returned by
     :func:`rwmod.profile.modsconfig_target` — the sandbox guard is re-applied
@@ -322,7 +328,7 @@ def write_modsconfig_target(target: Path, text: str, *, label: str = "batch-acti
         tmp = Path(tmp_name)
         try:
             with os.fdopen(fd, "wb") as fh:
-                fh.write(text.encode("utf-8"))
+                fh.write(text if isinstance(text, bytes) else text.encode("utf-8"))
             os.replace(tmp, target)
         finally:
             tmp.unlink(missing_ok=True)
