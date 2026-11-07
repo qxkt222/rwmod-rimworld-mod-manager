@@ -29,7 +29,7 @@ export function AppShell({ version, status }: AppShellProps) {
   return (
     <>
       <Topbar version={version} status={status} />
-      <div id="main" className="main">
+      <div className="main">
         <Sidebar />
         <PanelHost />
       </div>

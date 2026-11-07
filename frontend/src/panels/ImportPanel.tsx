@@ -6,8 +6,9 @@
  * never call `fetch`). Results land as toasts, and the bus invalidates the
  * panels whose data changed (mods/queue/history/dashboard).
  *
- * Legacy anchors kept for `import.spec.ts`: `#import-file` (inside
- * `#drop-zone`), `#import-sort` (inside `#drop-zone-xml`).
+ * Anchors are canonical testids: `dropzone-import-file`,
+ * `field-import-file`, `dropzone-import-sort` and `field-import-sort`.
+ * The legacy ids are gone.
  */
 import { useRef, useState } from "react";
 
@@ -29,8 +30,6 @@ interface ImportSortResult {
 }
 
 interface DropZoneProps {
-  zoneId: string;
-  inputId: string;
   testid: string;
   inputTestid: string;
   accept: string;
@@ -40,24 +39,13 @@ interface DropZoneProps {
   onFile: (file: File) => void;
 }
 
-function DropZone({
-  zoneId,
-  inputId,
-  testid,
-  inputTestid,
-  accept,
-  busy,
-  title,
-  hint,
-  onFile,
-}: DropZoneProps) {
+function DropZone({ testid, inputTestid, accept, busy, title, hint, onFile }: DropZoneProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
 
   return (
     <label
       className={`file-drop${dragOver ? " drag-over" : ""}`}
-      id={zoneId}
       data-testid={testid}
       aria-busy={busy}
       onDragOver={(event) => {
@@ -80,7 +68,6 @@ function DropZone({
       <input
         ref={inputRef}
         type="file"
-        id={inputId}
         data-testid={inputTestid}
         accept={accept}
         onChange={(event) => {
@@ -148,8 +135,6 @@ export function ImportPanel() {
       <div className="card">
         <div className="card-header">📋 导入 Mod 列表</div>
         <DropZone
-          zoneId="drop-zone"
-          inputId="import-file"
           testid="dropzone-import-file"
           inputTestid="field-import-file"
           accept=".txt"
@@ -163,8 +148,6 @@ export function ImportPanel() {
       <div className="card">
         <div className="card-header">📄 导入 ModsConfig.xml</div>
         <DropZone
-          zoneId="drop-zone-xml"
-          inputId="import-sort"
           testid="dropzone-import-sort"
           inputTestid="field-import-sort"
           accept=".xml"

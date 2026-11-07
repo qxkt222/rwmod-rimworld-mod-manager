@@ -50,12 +50,12 @@ test.describe("react shell", () => {
   }) => {
     await page.goto(`${backend.baseURL}/#dashboard`);
 
-    await expect(page.locator("#db-mods-count")).toHaveText("0");
-    await expect(page.locator("#db-updates-count")).toHaveText("0");
-    await expect(page.locator("#db-disk-usage")).toHaveText("0 MB");
-    await expect(page.locator("#db-activity")).toContainText("暂无活动记录");
     await expect(page.getByTestId("status-dashboard-mods")).toHaveText("0");
-    await expect(page.locator("#queue-count")).toHaveText("0");
+    await expect(page.getByTestId("status-dashboard-updates")).toHaveText("0");
+    await expect(page.getByTestId("status-dashboard-disk")).toHaveText("0 MB");
+    await expect(page.getByTestId("list-activity")).toContainText("暂无活动记录");
+    await expect(page.getByTestId("status-dashboard-mods")).toHaveText("0");
+    await expect(page.getByTestId("status-sidebar-queue-count")).toHaveText("0");
   });
 
   test("dashboard quick action navigates to the search panel", async ({ page, backend }) => {
@@ -80,19 +80,20 @@ test.describe("react shell", () => {
     await page.goto(`${backend.baseURL}/#dashboard`);
 
     await page.keyboard.press("Control+k");
-    await expect(page.locator("#cmd-palette")).toHaveClass(/open/);
+    const palette = page.getByTestId("dialog-command-palette");
+    await expect(palette).toBeVisible();
 
-    const rows = page.locator("#cmd-results .cmd-result");
+    const rows = page.locator('[data-testid^="item-command-"]');
     await expect(rows.first()).toBeVisible();
     expect(await rows.count()).toBeGreaterThan(5);
 
-    await page.locator("#cmd-input").fill("下载");
+    await page.getByTestId("field-command-input").fill("下载");
     await expect(rows).toHaveCount(3);
     await expect(rows.nth(0)).toContainText("下载 Mod");
     await expect(rows.nth(1)).toContainText("下载合集");
     await expect(rows.nth(2)).toContainText("下载队列");
 
     await page.keyboard.press("Escape");
-    await expect(page.locator("#cmd-palette")).not.toHaveClass(/open/);
+    await expect(palette).toBeHidden();
   });
 });

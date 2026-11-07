@@ -6,9 +6,10 @@
  * `store/queue` so the sidebar badge, dashboard and queue panel see the change
  * immediately.
  *
- * Legacy anchors kept for `search.spec.ts`: `#search-input`, `#btn-search`,
- * `#search-results`, `.search-hit`, `.search-hit-title`, `.search-hit-author`,
- * `button[data-id]`.
+ * Anchors are canonical testids: `field-search-query`, `action-search`,
+ * `list-search-results`, `item-search-<id>`,
+ * `status-search-hit-title-<id>` and `action-add-queue-<id>`.
+ * The legacy ids/classes are gone.
  */
 import { useCallback, useState } from "react";
 
@@ -71,7 +72,6 @@ export function SearchPanel() {
         <div className="form-row">
           <input
             type="text"
-            id="search-input"
             data-testid="field-search-query"
             placeholder="搜索 RimWorld Mod..."
             aria-label="搜索关键词"
@@ -84,7 +84,6 @@ export function SearchPanel() {
           <button
             type="button"
             className="btn btn-primary"
-            id="btn-search"
             data-testid="action-search"
             disabled={status === "searching"}
             onClick={() => void submit()}
@@ -95,7 +94,7 @@ export function SearchPanel() {
       </div>
 
       <div className="card" style={{ flex: 1, overflowY: "auto" }}>
-        <div id="search-results" data-testid="list-search-results">
+        <div data-testid="list-search-results">
           {status === "searching" ? (
             <span className="muted">搜索中...</span>
           ) : status === "error" ? (
@@ -112,7 +111,12 @@ export function SearchPanel() {
             results.map((hit) => (
               <div className="search-hit" key={hit.id} data-testid={`item-search-${hit.id}`}>
                 <div className="search-hit-header">
-                  <span className="search-hit-title">{hit.title}</span>
+                  <span
+                    className="search-hit-title"
+                    data-testid={`status-search-hit-title-${hit.id}`}
+                  >
+                    {hit.title}
+                  </span>
                   {hit.installed ? (
                     <span style={{ color: "var(--green)", fontSize: 11, fontWeight: 600 }}>
                       ✓ 已安装
@@ -129,7 +133,6 @@ export function SearchPanel() {
                   <button
                     type="button"
                     className="btn btn-primary btn-sm"
-                    data-id={hit.id}
                     data-testid={`action-add-queue-${hit.id}`}
                     onClick={() => void addToQueue(hit.id)}
                   >

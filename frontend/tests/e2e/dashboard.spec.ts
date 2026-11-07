@@ -10,11 +10,11 @@ test.describe("dashboard panel", () => {
   }) => {
     await gotoPanel(page, backend, "dashboard");
 
-    await expect(page.locator("#db-mods-count")).toHaveText("0");
-    await expect(page.locator("#db-updates-count")).toHaveText("0");
-    await expect(page.locator("#db-disk-usage")).toHaveText("0 MB");
-    await expect(page.locator("#db-activity")).toContainText("暂无活动记录");
-    await expect(page.locator("#queue-count")).toHaveText("0");
+    await expect(page.getByTestId("status-dashboard-mods")).toHaveText("0");
+    await expect(page.getByTestId("status-dashboard-updates")).toHaveText("0");
+    await expect(page.getByTestId("status-dashboard-disk")).toHaveText("0 MB");
+    await expect(page.getByTestId("list-activity")).toContainText("暂无活动记录");
+    await expect(page.getByTestId("status-sidebar-queue-count")).toHaveText("0");
   });
 
   test("quick action navigates to the search panel", async ({ page, backend }) => {

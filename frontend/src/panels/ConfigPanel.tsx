@@ -2,13 +2,13 @@
  * Config panel — paths, SteamCMD probe, multi-instance management and the
  * `.rwmod` transfer bundle.
  *
- * Parity contract with the legacy `src/panels/config.ts` and `config.spec.ts`:
- * `#config-display`, `#cfg-steamcmd`, `#cfg-mods`, `#cfg-rimworld`,
- * `#cfg-backup`, `#btn-save-config`, `#btn-check-steamcmd`, `#steamcmd-status`,
- * `#instance-card`, `#instance-list`, `#btn-add-instance`, `#new-instance-*`,
- * `button[data-action="activate"|"delete"]`, `#btn-export-bundle`,
- * `#import-bundle`, `#export-include-backups`, `#export-include-secrets`,
- * `#transfer-status`.
+ * Anchors are canonical testids: `list-instances`, `item-instance-<id>`,
+ * `action-instance-activate-<id>`, `action-instance-delete-<id>`,
+ * `field-new-instance-*`, `action-add-instance`, `status-config`,
+ * `field-steamcmd-path`, `field-mods-dir`, `field-rimworld-dir`,
+ * `field-backup-dir`, `action-save-config`, `action-check-steamcmd`,
+ * `status-steamcmd`, `action-export-bundle`, `field-import-bundle`,
+ * `field-export-include-*` and `status-transfer`. The legacy ids are gone.
  *
  * The shared config slice owns loading/saving; instance deletion uses the
  * in-app `ConfirmDialog` instead of the legacy native `confirm()`.
@@ -198,10 +198,9 @@ export function ConfigPanel() {
 
   return (
     <>
-      <div className="card" id="instance-card">
+      <div className="card">
         <div className="card-header">🗂 游戏实例</div>
         <div
-          id="instance-list"
           data-testid="list-instances"
           style={{ fontSize: 12, color: "var(--gray-text)", marginBottom: 10 }}
         >
@@ -241,9 +240,6 @@ export function ConfigPanel() {
                             <button
                               type="button"
                               className="btn btn-ghost btn-sm"
-                              data-action="activate"
-                              data-instance={instance.id}
-                              data-name={instance.name}
                               data-testid={`action-instance-activate-${instance.id}`}
                               onClick={() => void onActivate(instance)}
                             >
@@ -252,9 +248,6 @@ export function ConfigPanel() {
                             <button
                               type="button"
                               className="btn btn-ghost btn-sm"
-                              data-action="delete"
-                              data-instance={instance.id}
-                              data-name={instance.name}
                               data-testid={`action-instance-delete-${instance.id}`}
                               onClick={() => setDeleteTarget(instance)}
                             >
@@ -273,42 +266,44 @@ export function ConfigPanel() {
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
           <div className="form-group">
-            <label htmlFor="new-instance-name">名称</label>
-            <input
-              id="new-instance-name"
-              data-testid="field-new-instance-name"
-              type="text"
-              placeholder="例如：测试环境"
-              value={newName}
-              onChange={(event) => setNewName(event.target.value)}
-            />
+            <label>
+              名称
+              <input
+                data-testid="field-new-instance-name"
+                type="text"
+                placeholder="例如：测试环境"
+                value={newName}
+                onChange={(event) => setNewName(event.target.value)}
+              />
+            </label>
           </div>
           <div className="form-group">
-            <label htmlFor="new-instance-mods">Mods 目录</label>
-            <input
-              id="new-instance-mods"
-              data-testid="field-new-instance-mods"
-              type="text"
-              placeholder="D:/RimWorld2/Mods"
-              value={newMods}
-              onChange={(event) => setNewMods(event.target.value)}
-            />
+            <label>
+              Mods 目录
+              <input
+                data-testid="field-new-instance-mods"
+                type="text"
+                placeholder="D:/RimWorld2/Mods"
+                value={newMods}
+                onChange={(event) => setNewMods(event.target.value)}
+              />
+            </label>
           </div>
           <div className="form-group">
-            <label htmlFor="new-instance-rimworld">游戏目录</label>
-            <input
-              id="new-instance-rimworld"
-              data-testid="field-new-instance-rimworld"
-              type="text"
-              placeholder="D:/RimWorld2"
-              value={newRimworld}
-              onChange={(event) => setNewRimworld(event.target.value)}
-            />
+            <label>
+              游戏目录
+              <input
+                data-testid="field-new-instance-rimworld"
+                type="text"
+                placeholder="D:/RimWorld2"
+                value={newRimworld}
+                onChange={(event) => setNewRimworld(event.target.value)}
+              />
+            </label>
           </div>
           <button
             type="button"
             className="btn btn-ghost"
-            id="btn-add-instance"
             data-testid="action-add-instance"
             onClick={() => void onCreateInstance()}
           >
@@ -320,7 +315,6 @@ export function ConfigPanel() {
       <div className="card">
         <div className="card-header">⚙ 配置</div>
         <div
-          id="config-display"
           data-testid="status-config"
           style={{ fontSize: 12, color: "var(--gray-text)", marginBottom: 12 }}
         >
@@ -347,51 +341,54 @@ export function ConfigPanel() {
         </div>
 
         <div className="form-group">
-          <label htmlFor="cfg-steamcmd">SteamCMD 路径</label>
-          <input
-            id="cfg-steamcmd"
-            data-testid="field-steamcmd-path"
-            type="text"
-            value={form.steamcmd_path}
-            onChange={patch("steamcmd_path")}
-          />
+          <label>
+            SteamCMD 路径
+            <input
+              data-testid="field-steamcmd-path"
+              type="text"
+              value={form.steamcmd_path}
+              onChange={patch("steamcmd_path")}
+            />
+          </label>
         </div>
         <div className="form-group">
-          <label htmlFor="cfg-mods">Mods 目录</label>
-          <input
-            id="cfg-mods"
-            data-testid="field-mods-dir"
-            type="text"
-            value={form.mods_dir}
-            onChange={patch("mods_dir")}
-          />
+          <label>
+            Mods 目录
+            <input
+              data-testid="field-mods-dir"
+              type="text"
+              value={form.mods_dir}
+              onChange={patch("mods_dir")}
+            />
+          </label>
         </div>
         <div className="form-group">
-          <label htmlFor="cfg-rimworld">游戏目录</label>
-          <input
-            id="cfg-rimworld"
-            data-testid="field-rimworld-dir"
-            type="text"
-            value={form.rimworld_dir}
-            onChange={patch("rimworld_dir")}
-          />
+          <label>
+            游戏目录
+            <input
+              data-testid="field-rimworld-dir"
+              type="text"
+              value={form.rimworld_dir}
+              onChange={patch("rimworld_dir")}
+            />
+          </label>
         </div>
         <div className="form-group">
-          <label htmlFor="cfg-backup">备份目录</label>
-          <input
-            id="cfg-backup"
-            data-testid="field-backup-dir"
-            type="text"
-            value={form.backup_dir}
-            onChange={patch("backup_dir")}
-          />
+          <label>
+            备份目录
+            <input
+              data-testid="field-backup-dir"
+              type="text"
+              value={form.backup_dir}
+              onChange={patch("backup_dir")}
+            />
+          </label>
         </div>
 
         <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
           <button
             type="button"
             className="btn btn-primary"
-            id="btn-save-config"
             data-testid="action-save-config"
             onClick={() => void onSave()}
           >
@@ -400,7 +397,6 @@ export function ConfigPanel() {
           <button
             type="button"
             className="btn btn-ghost"
-            id="btn-check-steamcmd"
             data-testid="action-check-steamcmd"
             onClick={() => void checkSteamcmd()}
           >
@@ -408,7 +404,6 @@ export function ConfigPanel() {
           </button>
         </div>
         <div
-          id="steamcmd-status"
           data-testid="status-steamcmd"
           style={{ marginTop: 8, fontSize: 12 }}
         >
@@ -431,7 +426,6 @@ export function ConfigPanel() {
           <button
             type="button"
             className="btn btn-primary"
-            id="btn-export-bundle"
             data-testid="action-export-bundle"
             disabled={transferring}
             onClick={() => void onExport()}
@@ -446,7 +440,6 @@ export function ConfigPanel() {
             📥 导入 .rwmod
             <input
               type="file"
-              id="import-bundle"
               data-testid="field-import-bundle"
               accept=".rwmod"
               style={{ display: "none" }}
@@ -457,7 +450,6 @@ export function ConfigPanel() {
         <label className="check-label" style={{ marginTop: 8, display: "block" }}>
           <input
             type="checkbox"
-            id="export-include-backups"
             data-testid="field-export-include-backups"
             checked={includeBackups}
             onChange={(event) => setIncludeBackups(event.target.checked)}
@@ -467,7 +459,6 @@ export function ConfigPanel() {
         <label className="check-label" style={{ marginTop: 4, display: "block" }}>
           <input
             type="checkbox"
-            id="export-include-secrets"
             data-testid="field-export-include-secrets"
             checked={includeSecrets}
             onChange={(event) => setIncludeSecrets(event.target.checked)}
@@ -475,7 +466,6 @@ export function ConfigPanel() {
           包含 Steam API 密钥（仅限自己迁移用，打包分享时勿勾选）
         </label>
         <div
-          id="transfer-status"
           data-testid="status-transfer"
           style={{ marginTop: 8, fontSize: 12 }}
         >

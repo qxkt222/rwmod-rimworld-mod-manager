@@ -37,14 +37,16 @@ test.describe("search panel", () => {
     );
 
     await gotoPanel(page, backend, "search");
-    await page.locator("#search-input").fill("vanilla expanded");
-    await page.locator("#btn-search").click();
+    await page.getByTestId("field-search-query").fill("vanilla expanded");
+    await page.getByTestId("action-search").click();
 
-    await expect(page.locator(".search-hit-title")).toHaveText("Vanilla Expanded Framework");
-    await expect(page.locator(".search-hit")).toContainText("✓ 已安装");
-    await expect(page.locator(".search-hit")).toContainText("by Oskar Potocki");
+    await expect(page.getByTestId("status-search-hit-title-2009463077")).toHaveText(
+      "Vanilla Expanded Framework",
+    );
+    await expect(page.getByTestId("item-search-2009463077")).toContainText("✓ 已安装");
+    await expect(page.getByTestId("item-search-2009463077")).toContainText("by Oskar Potocki");
 
-    await page.locator('.search-hit button[data-id="2009463077"]').click();
+    await page.getByTestId("action-add-queue-2009463077").click();
     await expectToast(page, "已加入队列: 2009463077");
   });
 
@@ -61,10 +63,10 @@ test.describe("search panel", () => {
     );
 
     await gotoPanel(page, backend, "search");
-    await page.locator("#search-input").fill("nothing matches");
-    await page.locator("#btn-search").click();
+    await page.getByTestId("field-search-query").fill("nothing matches");
+    await page.getByTestId("action-search").click();
 
-    await expect(page.locator("#search-results")).toContainText("无结果");
+    await expect(page.getByTestId("list-search-results")).toContainText("无结果");
   });
 
   test("search failure renders an error message", async ({ page, backend }) => {
@@ -77,9 +79,11 @@ test.describe("search panel", () => {
     );
 
     await gotoPanel(page, backend, "search");
-    await page.locator("#search-input").fill("x");
-    await page.locator("#btn-search").click();
+    await page.getByTestId("field-search-query").fill("x");
+    await page.getByTestId("action-search").click();
 
-    await expect(page.locator("#search-results")).toContainText("搜索失败: steam down");
+    await expect(page.getByTestId("list-search-results")).toContainText(
+      "搜索失败: steam down",
+    );
   });
 });

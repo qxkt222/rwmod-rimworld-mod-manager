@@ -6,9 +6,11 @@
  * version uses in-app dialogs (ui-redesign §5.4 says the old spec keeps
  * running against the legacy entry, so switching here is safe).
  *
- * Legacy anchors kept for `profiles.spec.ts`: `#btn-profile-save`,
- * `#profile-list`, `.profile-item`, `[data-delete]`, `[data-restore]`,
- * `#profile-modsconfig-path`, `#undo-status`, `#btn-undo`.
+ * Anchors are canonical testids: `action-profile-save`, `list-profiles`,
+ * `item-profile-<name>`, `action-profile-restore-<name>`,
+ * `action-profile-delete-<name>`, `status-profile-path`, `status-undo`,
+ * `action-undo`, `dialog-profile-save`, `field-profile-name` and
+ * `action-profile-save-confirm`. The legacy ids/classes are gone.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -204,7 +206,6 @@ export function ProfilesPanel() {
           <button
             type="button"
             className="btn btn-primary btn-sm"
-            id="btn-profile-save"
             data-testid="action-profile-save"
             onClick={() => setSaveOpen(true)}
           >
@@ -213,14 +214,13 @@ export function ProfilesPanel() {
         </div>
 
         <div
-          id="profile-modsconfig-path"
           data-testid="status-profile-path"
           style={{ fontSize: 11, color: "var(--gray-text)", padding: "4px 16px" }}
         >
           {modsconfigPath ? `ModsConfig.xml: ${modsconfigPath}` : "未找到 ModsConfig.xml"}
         </div>
 
-        <div id="profile-list" data-testid="list-profiles">
+        <div data-testid="list-profiles">
           {status === "loading" && profiles.length === 0 ? (
             <LoadingState message="加载中..." testid="status-profiles-loading" />
           ) : status === "error" && profiles.length === 0 ? (
@@ -239,7 +239,7 @@ export function ProfilesPanel() {
           ) : (
             profiles.map((profile) => (
               <div
-                className="mod-row profile-item"
+                className="mod-row"
                 key={profile.name}
                 data-testid={`item-profile-${profile.name}`}
               >
@@ -256,7 +256,6 @@ export function ProfilesPanel() {
                   <button
                     type="button"
                     className="btn btn-primary btn-sm"
-                    data-restore={profile.name}
                     data-testid={`action-profile-restore-${profile.name}`}
                     onClick={() => setPending({ kind: "restore", name: profile.name })}
                   >
@@ -265,7 +264,6 @@ export function ProfilesPanel() {
                   <button
                     type="button"
                     className="btn btn-ghost btn-sm"
-                    data-delete={profile.name}
                     data-testid={`action-profile-delete-${profile.name}`}
                     onClick={() => setPending({ kind: "delete", name: profile.name })}
                   >
@@ -284,7 +282,6 @@ export function ProfilesPanel() {
           <button
             type="button"
             className="btn btn-ghost btn-sm"
-            id="btn-undo"
             data-testid="action-undo"
             onClick={() => setPending({ kind: "undo" })}
           >
@@ -292,7 +289,6 @@ export function ProfilesPanel() {
           </button>
         </div>
         <div
-          id="undo-status"
           data-testid="status-undo"
           style={{ fontSize: 12, color: "var(--gray-text)", padding: "4px 16px" }}
         >

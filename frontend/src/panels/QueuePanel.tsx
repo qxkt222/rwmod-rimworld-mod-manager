@@ -8,10 +8,12 @@
  * its actions, so the legacy "double stream / stale badge" class of bugs
  * cannot come back.
  *
- * Legacy anchors kept for `queue.spec.ts`: `#queue-list`, `.queue-item`,
- * `[data-remove]`, `[data-retry]`, `.queue-bar`, `#btn-queue-start`,
- * `#btn-queue-pause`, `#btn-queue-clear`, `#btn-check-updates`,
- * `#btn-update-all`, `#update-results`, `.changelog-toggle`, `.changelog-full`.
+ * Anchors are canonical testids: `list-queue`, `item-queue-<id>`,
+ * `action-queue-remove-<id>`, `action-queue-retry-<id>`, `action-queue-start`,
+ * `action-queue-pause`, `action-queue-clear`, `action-check-updates`,
+ * `action-update-all`, `list-update-results`, `item-update-<workshopId>`,
+ * `action-changelog-toggle-<workshopId>` and
+ * `status-changelog-full-<workshopId>`. The legacy ids/classes are gone.
  */
 import { useCallback, useEffect, useState } from "react";
 
@@ -78,7 +80,6 @@ function QueueRow({ item, onRemove, onRetry }: QueueRowProps) {
           <button
             type="button"
             className="btn btn-ghost btn-sm"
-            data-retry={item.id}
             data-testid={`action-queue-retry-${item.id}`}
             title="重新排队"
             onClick={() => onRetry(item.id)}
@@ -90,7 +91,6 @@ function QueueRow({ item, onRemove, onRetry }: QueueRowProps) {
           <button
             type="button"
             className="btn btn-ghost btn-sm"
-            data-remove={item.id}
             data-testid={`action-queue-remove-${item.id}`}
             title="从队列移除"
             onClick={() => onRemove(item.id)}
@@ -181,7 +181,6 @@ function UpdateSection() {
           <button
             type="button"
             className="btn btn-ghost btn-sm"
-            id="btn-check-updates"
             data-testid="action-check-updates"
             disabled={checkStatus === "checking"}
             onClick={() => void check()}
@@ -192,7 +191,6 @@ function UpdateSection() {
             <button
               type="button"
               className="btn btn-primary btn-sm"
-              id="btn-update-all"
               data-testid="action-update-all"
               disabled={allBusy}
               onClick={() => void updateAll()}
@@ -202,7 +200,7 @@ function UpdateSection() {
           ) : null}
         </div>
       </div>
-      <div id="update-results" data-testid="list-update-results">
+      <div data-testid="list-update-results">
         {allMessage ? <div data-testid="status-update-all">{allMessage}</div> : null}
         {partial ? (
           // Incomplete, not wrong: warn-coloured line, never the error state.
@@ -269,12 +267,17 @@ function UpdateSection() {
                       </div>
                       {hasMore ? (
                         <>
-                          <div className="changelog-full" hidden={!isExpanded}>
+                          <div
+                            className="changelog-full"
+                            data-testid={`status-changelog-full-${item.workshop_id}`}
+                            hidden={!isExpanded}
+                          >
                             {desc}
                           </div>
                           <button
                             type="button"
                             className="btn btn-ghost btn-sm changelog-toggle"
+                            data-testid={`action-changelog-toggle-${item.workshop_id}`}
                             onClick={() =>
                               setExpanded((state) => ({ ...state, [uid]: !state[uid] }))
                             }
@@ -289,7 +292,6 @@ function UpdateSection() {
                 <button
                   type="button"
                   className="btn btn-primary btn-sm"
-                  data-id={item.workshop_id}
                   data-testid={`action-update-one-${item.workshop_id}`}
                   style={{ flexShrink: 0 }}
                   onClick={() => void updateOne(item.workshop_id)}
@@ -408,7 +410,6 @@ export function QueuePanel() {
             <button
               type="button"
               className="btn btn-primary btn-sm"
-              id="btn-queue-start"
               data-testid="action-queue-start"
               disabled={starting}
               onClick={() => void handleStart()}
@@ -418,7 +419,6 @@ export function QueuePanel() {
             <button
               type="button"
               className="btn btn-ghost btn-sm"
-              id="btn-queue-pause"
               data-testid="action-queue-pause"
               title={paused ? "继续处理队列" : "当前批次完成后暂停"}
               onClick={() => void handlePause()}
@@ -428,7 +428,6 @@ export function QueuePanel() {
             <button
               type="button"
               className="btn btn-ghost btn-sm"
-              id="btn-queue-clear"
               data-testid="action-queue-clear"
               onClick={() => void handleClear()}
             >
@@ -443,7 +442,7 @@ export function QueuePanel() {
           </div>
         ) : null}
 
-        <div id="queue-list" data-testid="list-queue">
+        <div data-testid="list-queue">
           {status === "loading" && items.length === 0 ? (
             <LoadingState message="加载队列…" testid="status-queue-loading" />
           ) : status === "error" && items.length === 0 ? (

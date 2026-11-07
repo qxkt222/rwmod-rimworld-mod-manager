@@ -5,9 +5,8 @@
  * the six most recent activity rows, quick links and the 一键更新 runner that
  * polls `/api/queue` every 2s until the queue drains.
  *
- * Transition contract: every legacy id used by `dashboard.spec.ts` is emitted
- * (`#db-mods-count`, `#db-updates-count`, `#db-disk-usage`, `#db-activity`,
- * `#btn-auto-update-dashboard`) alongside the canonical testids.
+ * All anchors are canonical testids (`status-dashboard-*`, `list-activity`,
+ * `action-auto-update`); the legacy ids are gone.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -162,31 +161,19 @@ export function DashboardPanel() {
 
         <div className="stat-grid">
           <div className="card stat">
-            <div
-              className="stat__value stat__value--blue"
-              id="db-mods-count"
-              data-testid="status-dashboard-mods"
-            >
+            <div className="stat__value stat__value--blue" data-testid="status-dashboard-mods">
               {modsCount}
             </div>
             <div className="stat__label">已安装 Mod</div>
           </div>
           <div className="card stat">
-            <div
-              className="stat__value stat__value--yellow"
-              id="db-updates-count"
-              data-testid="status-dashboard-updates"
-            >
+            <div className="stat__value stat__value--yellow" data-testid="status-dashboard-updates">
               {updatesCount}
             </div>
             <div className="stat__label">待更新</div>
           </div>
           <div className="card stat">
-            <div
-              className="stat__value"
-              id="db-disk-usage"
-              data-testid="status-dashboard-disk"
-            >
+            <div className="stat__value" data-testid="status-dashboard-disk">
               {diskUsage}
             </div>
             <div className="stat__label">磁盘占用</div>
@@ -196,7 +183,7 @@ export function DashboardPanel() {
 
       <div className="card">
         <div className="card-header">最近活动</div>
-        <div className="dashboard__activity" id="db-activity" data-testid="list-activity">
+        <div className="dashboard__activity" data-testid="list-activity">
           {loading && !data ? (
             <LoadingState message="加载中..." testid="status-activity-loading" />
           ) : error && !data ? (
@@ -243,7 +230,6 @@ export function DashboardPanel() {
           <button
             type="button"
             className="btn btn-accent"
-            id="btn-auto-update-dashboard"
             data-testid="action-auto-update"
             disabled={autoDisabled}
             onClick={() => void runAutoUpdate()}

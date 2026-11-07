@@ -23,10 +23,10 @@ test.describe("collection panel", () => {
     );
 
     await gotoPanel(page, backend, "collection");
-    await page.locator("#collection-input").fill("3721899704");
-    await page.locator("#btn-collection-preview").click();
+    await page.getByTestId("field-collection-input").fill("3721899704");
+    await page.getByTestId("action-collection-preview").click();
 
-    const log = page.locator("#log-collection");
+    const log = page.getByTestId("list-collection-log");
     await expect(log).toContainText("合集 3721899704: 3 个 Mod");
     await expect(log).toContainText("已安装 1");
     await expect(log).toContainText("新发现 2");
@@ -42,7 +42,7 @@ test.describe("collection panel", () => {
     });
 
     await gotoPanel(page, backend, "collection");
-    await page.locator("#btn-collection-preview").click();
+    await page.getByTestId("action-collection-preview").click();
     await page.waitForTimeout(300);
     expect(requested).toBe(false);
   });

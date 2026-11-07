@@ -1,11 +1,9 @@
 /**
  * History panel — download history, aggregate stats and the auto-update runner.
  *
- * Parity contract with the legacy `src/panels/history.ts` and
- * `history.spec.ts`: `#history-list`, `#history-stats`, `#btn-history-refresh`,
- * `#btn-clear-history`, `#btn-auto-update`, `#auto-update-status`. The
- * canonical testids (`list-history`, `status-history-stats`, …) are emitted
- * alongside them.
+ * Anchors are canonical testids: `list-history`, `status-history-stats`,
+ * `action-history-refresh`, `action-history-clear`, `action-auto-update`,
+ * `status-auto-update`. The legacy ids are gone.
  *
  * Auto-update state lives in the shared `updates` slice (FE-1); this panel
  * only mirrors its running flag into the legacy status line.
@@ -113,7 +111,6 @@ export function HistoryPanel() {
             <button
               type="button"
               className="btn btn-ghost btn-sm"
-              id="btn-history-refresh"
               data-testid="action-history-refresh"
               onClick={refresh}
             >
@@ -122,7 +119,6 @@ export function HistoryPanel() {
             <button
               type="button"
               className="btn btn-ghost btn-sm"
-              id="btn-clear-history"
               data-testid="action-history-clear"
               onClick={() => void onClear()}
             >
@@ -131,7 +127,7 @@ export function HistoryPanel() {
           </div>
         </div>
 
-        <div id="history-list" data-testid="list-history" style={{ fontSize: 12 }}>
+        <div data-testid="list-history" style={{ fontSize: 12 }}>
           {status === "loading" && items.length === 0 ? (
             <LoadingState message="加载中..." testid="status-history-loading" />
           ) : status === "error" && items.length === 0 ? (
@@ -173,7 +169,6 @@ export function HistoryPanel() {
       <div className="card">
         <div className="card-header">📊 统计</div>
         <div
-          id="history-stats"
           data-testid="status-history-stats"
           style={{ display: "flex", gap: 16, fontSize: 12, color: "var(--gray-text)" }}
         >
@@ -195,7 +190,6 @@ export function HistoryPanel() {
           <button
             type="button"
             className="btn btn-primary btn-sm"
-            id="btn-auto-update"
             data-testid="action-auto-update"
             disabled={autoBusy}
             onClick={() => void onAutoUpdate()}
@@ -204,7 +198,6 @@ export function HistoryPanel() {
           </button>
         </div>
         <div
-          id="auto-update-status"
           data-testid="status-auto-update"
           style={{ fontSize: 12, color: "var(--gray-text)" }}
         >

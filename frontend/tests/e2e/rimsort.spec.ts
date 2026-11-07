@@ -19,9 +19,9 @@ const COMPARE_XML = `<?xml version="1.0" encoding="utf-8"?>
 test.describe("RimSort panel", () => {
   test("generates ModsConfig.xml from the installed mods", async ({ page, backend }) => {
     await gotoPanel(page, backend, "rimsort");
-    await page.locator("#btn-rimsort-generate").click();
+    await page.getByTestId("action-rimsort-generate").click();
 
-    const output = page.locator("#rimsort-output");
+    const output = page.getByTestId("status-rimsort-output");
     await expect(output).toBeVisible();
     await expect(output).toContainText("ModsConfigData");
     await expect(output).toContainText("activeMods");
@@ -32,13 +32,13 @@ test.describe("RimSort panel", () => {
     backend,
   }) => {
     await gotoPanel(page, backend, "rimsort");
-    await page.locator("#rimsort-file").setInputFiles({
+    await page.getByTestId("field-rimsort-file").setInputFiles({
       name: "ModsConfig.xml",
       mimeType: "application/xml",
       buffer: Buffer.from(COMPARE_XML, "utf8"),
     });
 
-    const result = page.locator("#rimsort-compare-result");
+    const result = page.getByTestId("status-rimsort-compare");
     await expect(result).toContainText("对比结果");
     await expect(result).toContainText("配置中有 3 个 Mod");
     await expect(result).toContainText("✅ 已安装 0");
@@ -50,9 +50,9 @@ test.describe("RimSort panel", () => {
 
   test("load order analysis flags the missing Harmony anchor", async ({ page, backend }) => {
     await gotoPanel(page, backend, "rimsort");
-    await page.locator("#btn-rimsort-order").click();
+    await page.getByTestId("action-rimsort-order").click();
 
-    const result = page.locator("#rimsort-order-result");
+    const result = page.getByTestId("status-rimsort-order");
     await expect(result).toContainText("排序分析");
     await expect(result).toContainText("1 个 Mod");
     await expect(result).toContainText("未检测到 Harmony");

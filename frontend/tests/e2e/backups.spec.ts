@@ -15,7 +15,7 @@ test.describe("backups panel", () => {
   test("renders the empty state before any backup exists", async ({ page, backend }) => {
     await gotoPanel(page, backend, "backups");
 
-    await expect(page.locator("#backup-list")).toContainText(
+    await expect(page.getByTestId("list-backups")).toContainText(
       "暂无备份。更新 Mod 时会自动创建备份。",
     );
   });
@@ -28,15 +28,15 @@ test.describe("backups panel", () => {
     try {
       await gotoPanel(page, backend, "backups");
 
-      const group = page.locator(".backup-group");
+      const group = page.getByTestId("item-backup-123456789");
       await expect(group).toHaveCount(1);
-      await expect(group.locator(".mod-name")).toHaveText("CoolMod");
+      await expect(group.getByTestId("status-backup-folder")).toHaveText("CoolMod");
       await expect(group).toContainText("ID: 123456789");
       await expect(group).toContainText("1 个版本");
-      await expect(page.locator("#backup-group-label")).toContainText("备份目录:");
+      await expect(page.getByTestId("status-backup-dir")).toContainText("备份目录:");
 
       // Versions panel starts hidden; the "1版" button toggles it.
-      const versions = page.locator("#versions-123456789");
+      const versions = page.getByTestId("list-backup-versions-123456789");
       await expect(versions).toBeHidden();
       await group.getByRole("button", { name: /1版/ }).click();
       await expect(versions).toBeVisible();
@@ -48,8 +48,8 @@ test.describe("backups panel", () => {
 
   test("refresh button reloads the list", async ({ page, backend }) => {
     await gotoPanel(page, backend, "backups");
-    await page.locator("#btn-backup-refresh").click();
-    await expect(page.locator("#backup-list")).toContainText(
+    await page.getByTestId("action-backup-refresh").click();
+    await expect(page.getByTestId("list-backups")).toContainText(
       "暂无备份。更新 Mod 时会自动创建备份。",
     );
   });

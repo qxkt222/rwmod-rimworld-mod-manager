@@ -27,23 +27,23 @@ test.describe("queue panel", () => {
     await apiPost(request, backend, "/api/queue/add", { ids: ["999999"], force: false });
 
     await gotoPanel(page, backend, "queue");
-    const row = page.locator(".queue-item", { hasText: "999999" });
+    const row = page.getByTestId("item-queue-999999");
     await expect(row).toBeVisible();
     await expect(row).toContainText("pending");
 
-    await row.locator('[data-remove="999999"]').click();
-    await expect(page.locator("#queue-list")).toContainText(
+    await page.getByTestId("action-queue-remove-999999").click();
+    await expect(page.getByTestId("list-queue")).toContainText(
       "队列为空，去「搜索」或「下载」添加 Mod",
     );
   });
 
   test("empty queue renders the instruction empty state", async ({ page, backend }) => {
     await gotoPanel(page, backend, "queue");
-    await expect(page.locator("#queue-list")).toContainText(
+    await expect(page.getByTestId("list-queue")).toContainText(
       "队列为空，去「搜索」或「下载」添加 Mod",
     );
-    await expect(page.locator("#btn-queue-start")).toBeVisible();
-    await expect(page.locator("#btn-queue-pause")).toBeVisible();
+    await expect(page.getByTestId("action-queue-start")).toBeVisible();
+    await expect(page.getByTestId("action-queue-pause")).toBeVisible();
   });
 
   test("update check renders changelog rows and expands the full text (backend mocked)", async ({
@@ -71,17 +71,17 @@ test.describe("queue panel", () => {
     );
 
     await gotoPanel(page, backend, "queue");
-    await page.locator("#btn-check-updates").click();
+    await page.getByTestId("action-check-updates").click();
 
-    const results = page.locator("#update-results");
+    const results = page.getByTestId("list-update-results");
     await expect(results).toContainText("Old Mod");
     await expect(results).toContainText("Workshop 777");
-    await expect(page.locator("#btn-update-all")).toBeVisible();
+    await expect(page.getByTestId("action-update-all")).toBeVisible();
 
-    await results.locator(".changelog-toggle").click();
-    await expect(results.locator(".changelog-full")).toBeVisible();
-    await expect(results.locator(".changelog-full")).toContainText("第一条更新说明");
-    await expect(results.locator(".changelog-toggle")).toHaveText("📖 收起");
+    await page.getByTestId("action-changelog-toggle-777").click();
+    await expect(page.getByTestId("status-changelog-full-777")).toBeVisible();
+    await expect(page.getByTestId("status-changelog-full-777")).toContainText("第一条更新说明");
+    await expect(page.getByTestId("action-changelog-toggle-777")).toHaveText("📖 收起");
   });
 
   test("no updates renders the all-up-to-date state (backend mocked)", async ({
@@ -97,17 +97,19 @@ test.describe("queue panel", () => {
     );
 
     await gotoPanel(page, backend, "queue");
-    await page.locator("#btn-check-updates").click();
-    await expect(page.locator("#update-results")).toContainText("✅ 所有 Mod 均为最新版本");
+    await page.getByTestId("action-check-updates").click();
+    await expect(page.getByTestId("list-update-results")).toContainText(
+      "✅ 所有 Mod 均为最新版本",
+    );
   });
 
   test("clear-completed button only clears finished items", async ({ page, request, backend }) => {
     await apiPost(request, backend, "/api/queue/add", { ids: ["888888"], force: false });
     await gotoPanel(page, backend, "queue");
-    await expect(page.locator(".queue-item", { hasText: "888888" })).toBeVisible();
+    await expect(page.getByTestId("item-queue-888888")).toBeVisible();
 
-    await page.locator("#btn-queue-clear").click();
+    await page.getByTestId("action-queue-clear").click();
     // Pending rows must survive a "clear completed" pass.
-    await expect(page.locator(".queue-item", { hasText: "888888" })).toBeVisible();
+    await expect(page.getByTestId("item-queue-888888")).toBeVisible();
   });
 });

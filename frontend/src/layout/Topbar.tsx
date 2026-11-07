@@ -3,8 +3,7 @@
  * command palette and refresh (docs/ui-redesign.md §1.3).
  *
  * The legacy 15-tab row is intentionally gone — navigation lives only in the
- * sidebar. Legacy ids used by E2E (`#btn-cmd`, `#btn-dark`, `#btn-refresh`,
- * `#online-indicator`) are kept while the old entry still runs the old specs.
+ * sidebar. Every control is addressed by its canonical testid.
  */
 import { refreshCurrentPanel } from "../app/commands";
 import { useRoute } from "../router/hashRouter";
@@ -33,10 +32,9 @@ export function Topbar({ version, status }: TopbarProps) {
     steamOnline === null ? "Steam API 状态未知" : steamOnline ? "Steam API 在线" : "Steam API 离线（使用本地缓存）";
 
   return (
-    <header id="topbar" className="topbar" data-testid="topbar">
+    <header className="topbar" data-testid="topbar">
       <button
         type="button"
-        id="btn-sidebar"
         className="nav-btn topbar__menu"
         aria-label="切换侧栏"
         onClick={toggleSidebar}
@@ -58,7 +56,6 @@ export function Topbar({ version, status }: TopbarProps) {
 
       <div className="topbar__actions">
         <span
-          id="online-indicator"
           data-testid="status-steam"
           className="topbar__indicator"
           title={steamLabel}
@@ -77,7 +74,6 @@ export function Topbar({ version, status }: TopbarProps) {
         </span>
         <button
           type="button"
-          id="btn-cmd"
           className="nav-btn"
           data-testid="action-command-palette"
           title="命令面板 Ctrl+K"
@@ -88,7 +84,6 @@ export function Topbar({ version, status }: TopbarProps) {
         </button>
         <button
           type="button"
-          id="btn-dark"
           className="nav-btn"
           data-testid="action-theme"
           title="切换主题"
@@ -99,7 +94,6 @@ export function Topbar({ version, status }: TopbarProps) {
         </button>
         <button
           type="button"
-          id="btn-refresh"
           className="nav-btn"
           data-testid="action-refresh"
           title="刷新当前面板"

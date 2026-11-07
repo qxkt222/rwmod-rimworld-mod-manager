@@ -9,7 +9,7 @@
  * typo, or a shared helper named `*Panel.tsx`) are ignored and the panel keeps
  * its placeholder.
  *
- * The wrapper keeps the legacy anchor contract (`.panel.active`,
+ * The wrapper keeps the stable structural contract (`.panel.active`,
  * `#panel-<name>`) *and* the canonical testid (`panel-<name>`, `data-active`).
  */
 import { lazy, Suspense, type ComponentType, type LazyExoticComponent } from "react";
@@ -61,7 +61,7 @@ export function PanelHost() {
   const Panel = PANELS[panel];
 
   return (
-    <main id="workspace" className="panel-host" data-testid="panel-host">
+    <main className="panel-host" data-testid="panel-host">
       <section
         className="panel active"
         id={`panel-${panel}`}

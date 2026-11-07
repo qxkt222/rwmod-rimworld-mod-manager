@@ -29,14 +29,13 @@ test.describe("react panels b — queue", () => {
 
     await page.goto(`${backend.baseURL}${REACT}#queue`);
 
-    const row = page.locator(".queue-item", { hasText: "999999" });
+    const row = page.getByTestId("item-queue-999999");
     await expect(row).toBeVisible();
     await expect(row).toContainText("pending");
-    await expect(page.getByTestId("item-queue-999999")).toBeVisible();
-    await expect(page.locator("#btn-queue-pause")).toBeVisible();
+    await expect(page.getByTestId("action-queue-pause")).toBeVisible();
 
-    await row.locator('[data-remove="999999"]').click();
-    await expect(page.locator("#queue-list")).toContainText(
+    await page.getByTestId("action-queue-remove-999999").click();
+    await expect(page.getByTestId("list-queue")).toContainText(
       "队列为空，去「搜索」或「下载」添加 Mod",
     );
   });
@@ -66,17 +65,19 @@ test.describe("react panels b — queue", () => {
     );
 
     await page.goto(`${backend.baseURL}${REACT}#queue`);
-    await page.locator("#btn-check-updates").click();
+    await page.getByTestId("action-check-updates").click();
 
-    const results = page.locator("#update-results");
+    const results = page.getByTestId("list-update-results");
     await expect(results).toContainText("Old Mod");
     await expect(results).toContainText("Workshop 777");
-    await expect(page.locator("#btn-update-all")).toBeVisible();
+    await expect(page.getByTestId("action-update-all")).toBeVisible();
 
-    await results.locator(".changelog-toggle").click();
-    await expect(results.locator(".changelog-full")).toBeVisible();
-    await expect(results.locator(".changelog-full")).toContainText("第一条更新说明");
-    await expect(results.locator(".changelog-toggle")).toHaveText("📖 收起");
+    await page.getByTestId("action-changelog-toggle-777").click();
+    await expect(page.getByTestId("status-changelog-full-777")).toBeVisible();
+    await expect(page.getByTestId("status-changelog-full-777")).toContainText(
+      "第一条更新说明",
+    );
+    await expect(page.getByTestId("action-changelog-toggle-777")).toHaveText("📖 收起");
   });
 });
 
@@ -114,14 +115,16 @@ test.describe("react panels b — search", () => {
     );
 
     await page.goto(`${backend.baseURL}${REACT}#search`);
-    await page.locator("#search-input").fill("vanilla expanded");
-    await page.locator("#btn-search").click();
+    await page.getByTestId("field-search-query").fill("vanilla expanded");
+    await page.getByTestId("action-search").click();
 
-    await expect(page.locator(".search-hit-title")).toHaveText("Vanilla Expanded Framework");
-    await expect(page.locator(".search-hit")).toContainText("✓ 已安装");
-    await expect(page.locator(".search-hit")).toContainText("by Oskar Potocki");
+    await expect(page.getByTestId("status-search-hit-title-2009463077")).toHaveText(
+      "Vanilla Expanded Framework",
+    );
+    await expect(page.getByTestId("item-search-2009463077")).toContainText("✓ 已安装");
+    await expect(page.getByTestId("item-search-2009463077")).toContainText("by Oskar Potocki");
 
-    await page.locator('.search-hit button[data-id="2009463077"]').click();
+    await page.getByTestId("action-add-queue-2009463077").click();
     await expectToast(page, "已加入队列: 2009463077");
   });
 
@@ -135,10 +138,12 @@ test.describe("react panels b — search", () => {
     );
 
     await page.goto(`${backend.baseURL}${REACT}#search`);
-    await page.locator("#search-input").fill("x");
-    await page.locator("#btn-search").click();
+    await page.getByTestId("field-search-query").fill("x");
+    await page.getByTestId("action-search").click();
 
-    await expect(page.locator("#search-results")).toContainText("搜索失败: steam down");
+    await expect(page.getByTestId("list-search-results")).toContainText(
+      "搜索失败: steam down",
+    );
   });
 });
 
@@ -146,26 +151,26 @@ test.describe("react panels b — profiles", () => {
   test("saves a profile through the in-app dialog and deletes it", async ({ page, backend }) => {
     await page.goto(`${backend.baseURL}${REACT}#profiles`);
 
-    await expect(page.locator("#profile-modsconfig-path")).toContainText("ModsConfig.xml");
-    await expect(page.locator("#profile-list")).toContainText("暂无存档");
-    await expect(page.locator("#undo-status")).toContainText("暂无撤销快照");
+    await expect(page.getByTestId("status-profile-path")).toContainText("ModsConfig.xml");
+    await expect(page.getByTestId("list-profiles")).toContainText("暂无存档");
+    await expect(page.getByTestId("status-undo")).toContainText("暂无撤销快照");
 
-    await page.locator("#btn-profile-save").click();
+    await page.getByTestId("action-profile-save").click();
     await expect(page.getByTestId("dialog-profile-save")).toBeVisible();
     await page.getByTestId("field-profile-name").fill("React Profile B");
     await page.getByTestId("action-profile-save-confirm").click();
 
     await expectToast(page, "已保存 'React Profile B'");
-    const item = page.locator(".profile-item", { hasText: "React Profile B" });
+    const item = page.getByTestId("item-profile-React Profile B");
     await expect(item).toBeVisible();
     await expect(item).toContainText("1 个 Mod");
 
-    await item.locator('[data-delete="React Profile B"]').click();
+    await page.getByTestId("action-profile-delete-React Profile B").click();
     await expect(page.getByTestId("dialog-profile-confirm")).toBeVisible();
     await page.getByTestId("dialog-profile-confirm").getByRole("button", { name: "删除" }).click();
 
     await expectToast(page, "已删除");
-    await expect(page.locator("#profile-list")).toContainText("暂无存档");
+    await expect(page.getByTestId("list-profiles")).toContainText("暂无存档");
   });
 });
 
@@ -183,9 +188,9 @@ const COMPARE_XML = `<?xml version="1.0" encoding="utf-8"?>
 test.describe("react panels b — rimsort", () => {
   test("generates ModsConfig.xml from the installed mods", async ({ page, backend }) => {
     await page.goto(`${backend.baseURL}${REACT}#rimsort`);
-    await page.locator("#btn-rimsort-generate").click();
+    await page.getByTestId("action-rimsort-generate").click();
 
-    const output = page.locator("#rimsort-output");
+    const output = page.getByTestId("status-rimsort-output");
     await expect(output).toBeVisible();
     await expect(output).toContainText("ModsConfigData");
     await expect(output).toContainText("activeMods");
@@ -196,13 +201,13 @@ test.describe("react panels b — rimsort", () => {
     backend,
   }) => {
     await page.goto(`${backend.baseURL}${REACT}#rimsort`);
-    await page.locator("#rimsort-file").setInputFiles({
+    await page.getByTestId("field-rimsort-file").setInputFiles({
       name: "ModsConfig.xml",
       mimeType: "application/xml",
       buffer: Buffer.from(COMPARE_XML, "utf8"),
     });
 
-    const result = page.locator("#rimsort-compare-result");
+    const result = page.getByTestId("status-rimsort-compare");
     await expect(result).toContainText("对比结果");
     await expect(result).toContainText("配置中有 3 个 Mod");
     await expect(result).toContainText("✅ 已安装 0");
@@ -211,8 +216,8 @@ test.describe("react panels b — rimsort", () => {
     await expect(result).toContainText("SomeAuthor.TestMod");
     await expect(result).toContainText("无法解析 Workshop ID");
 
-    await page.locator("#btn-rimsort-order").click();
-    const order = page.locator("#rimsort-order-result");
+    await page.getByTestId("action-rimsort-order").click();
+    const order = page.getByTestId("status-rimsort-order");
     await expect(order).toContainText("排序分析");
     await expect(order).toContainText("1 个 Mod");
     await expect(order).toContainText("未检测到 Harmony");
@@ -246,16 +251,16 @@ test.describe("react panels b — download", () => {
     );
 
     await page.goto(`${backend.baseURL}${REACT}#download`);
-    await page.locator("#mod-input").fill("123456");
-    await page.locator("#btn-download").click();
+    await page.getByTestId("field-mod-input").fill("123456");
+    await page.getByTestId("action-download").click();
 
-    await expect(page.locator("#log")).toContainText("▶ 开始下载 123456");
-    await expect(page.locator("#log")).toContainText("正在解析 Workshop ID");
-    await expect(page.locator("#log")).toContainText("下载成功");
-    await expect(page.locator("#log")).toContainText("✅ 完成 123456");
+    await expect(page.getByTestId("list-log")).toContainText("▶ 开始下载 123456");
+    await expect(page.getByTestId("list-log")).toContainText("正在解析 Workshop ID");
+    await expect(page.getByTestId("list-log")).toContainText("下载成功");
+    await expect(page.getByTestId("list-log")).toContainText("✅ 完成 123456");
 
-    await page.locator("#btn-clear-log").click();
-    await expect(page.locator("#log")).toHaveText("");
+    await page.getByTestId("action-clear-log").click();
+    await expect(page.getByTestId("list-log")).toHaveText("");
   });
 
   test("dependency preview renders installed and missing deps (backend mocked)", async ({
@@ -278,12 +283,14 @@ test.describe("react panels b — download", () => {
     );
 
     await page.goto(`${backend.baseURL}${REACT}#download`);
-    await page.locator("#mod-input").fill("123456");
+    await page.getByTestId("field-mod-input").fill("123456");
 
-    await expect(page.locator("#dep-preview")).toContainText("Harmony", { timeout: 5_000 });
-    await expect(page.locator("#dep-preview")).toContainText("HugsLib");
-    await expect(page.locator("#dep-preview")).toContainText("未安装");
-    await expect(page.locator("#dep-preview")).toContainText("1 个依赖缺失");
+    await expect(page.getByTestId("status-dependency-preview")).toContainText("Harmony", {
+      timeout: 5_000,
+    });
+    await expect(page.getByTestId("status-dependency-preview")).toContainText("HugsLib");
+    await expect(page.getByTestId("status-dependency-preview")).toContainText("未安装");
+    await expect(page.getByTestId("status-dependency-preview")).toContainText("1 个依赖缺失");
   });
 });
 
@@ -304,10 +311,10 @@ test.describe("react panels b — collection", () => {
     );
 
     await page.goto(`${backend.baseURL}${REACT}#collection`);
-    await page.locator("#collection-input").fill("3721899704");
-    await page.locator("#btn-collection-preview").click();
+    await page.getByTestId("field-collection-input").fill("3721899704");
+    await page.getByTestId("action-collection-preview").click();
 
-    const log = page.locator("#log-collection");
+    const log = page.getByTestId("list-collection-log");
     await expect(log).toContainText("合集 3721899704: 3 个 Mod");
     await expect(log).toContainText("已安装 1");
     await expect(log).toContainText("新发现 2");
@@ -336,7 +343,7 @@ test.describe("react panels b — import", () => {
     );
 
     await page.goto(`${backend.baseURL}${REACT}#import`);
-    await page.locator("#import-file").setInputFiles({
+    await page.getByTestId("field-import-file").setInputFiles({
       name: "mods.txt",
       mimeType: "text/plain",
       buffer: Buffer.from("111\n222\n", "utf8"),
@@ -364,7 +371,7 @@ test.describe("react panels b — import", () => {
     );
 
     await page.goto(`${backend.baseURL}${REACT}#import`);
-    await page.locator("#import-sort").setInputFiles({
+    await page.getByTestId("field-import-sort").setInputFiles({
       name: "ModsConfig.xml",
       mimeType: "application/xml",
       buffer: Buffer.from("<ModsConfigData />", "utf8"),

@@ -2,10 +2,9 @@
  * Saves panel — scan the configured Saves directory and analyse an uploaded
  * .rws file.
  *
- * Parity contract with the legacy `src/panels/saves.ts` and `saves.spec.ts`:
- * `#saves-results`, `#btn-scan-saves`, `#saves-file-upload`, `#drop-zone-saves`.
- * Empty scans read exactly "No save files found"; the upload toast reads
- * "Found <n> mods in <file>" like the legacy panel.
+ * Anchors are canonical testids: `list-saves`, `action-scan-saves`,
+ * `field-saves-upload`, `drop-saves-file`. Empty scans read exactly
+ * "No save files found"; the upload toast reads "Found <n> mods in <file>".
  */
 import { useCallback, useEffect, useRef, type ChangeEvent } from "react";
 
@@ -67,7 +66,6 @@ export function SavesPanel() {
         <button
           type="button"
           className="btn btn-primary btn-sm"
-          id="btn-scan-saves"
           data-testid="action-scan-saves"
           disabled={status === "loading"}
           onClick={rescan}
@@ -80,19 +78,18 @@ export function SavesPanel() {
         检测存档所需的 Mod 是否已安装；可上传 .rws 存档文件进行分析。
       </div>
 
-      <label className="file-drop" id="drop-zone-saves" data-testid="drop-saves-file">
+      <label className="file-drop" data-testid="drop-saves-file">
         <div>{analyzing ? "分析中..." : "上传 .rws 存档文件"}</div>
         <input
           ref={inputRef}
           type="file"
-          id="saves-file-upload"
           data-testid="field-saves-upload"
           accept=".rws"
           onChange={(event) => void onUpload(event)}
         />
       </label>
 
-      <div id="saves-results" data-testid="list-saves" style={{ fontSize: 12, marginTop: 8 }}>
+      <div data-testid="list-saves" style={{ fontSize: 12, marginTop: 8 }}>
         {status === "loading" && saves.length === 0 ? (
           <LoadingState message="Scanning..." testid="status-saves-loading" />
         ) : status === "error" && saves.length === 0 ? (

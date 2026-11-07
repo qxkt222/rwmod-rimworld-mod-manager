@@ -2,11 +2,10 @@
  * Tags panel — tag list, per-tag mod folders and (new in the React rewrite)
  * create / rename / delete management.
  *
- * Parity contract with the legacy `src/panels/tags.ts` and `tags.spec.ts`:
- * `#tags-list`, `#tags-detail`, `.tag-row`, `.tag`. The legacy UI was read-only
- * and `tags.spec.ts` carries a skipped management case; the backend already
- * exposes POST/DELETE `/api/tags/...`, so this panel closes that gap with
- * `#btn-add-tag`, `#btn-rename-tag` and `#btn-delete-tag`.
+ * Anchors are canonical testids: `list-tags`, `item-tag-<tag>`,
+ * `status-tags-detail`, `field-tag-folder`, `field-tag-name`,
+ * `action-tag-add`, `field-tag-rename`, `action-tag-rename` and
+ * `action-tag-delete`. The legacy ids/classes are gone.
  */
 import { useCallback, useEffect, useState } from "react";
 
@@ -120,7 +119,7 @@ export function TagsPanel() {
     <>
       <div className="card" style={{ flex: 1, overflowY: "auto" }}>
         <div className="card-header">🏷 Mod 标签</div>
-        <div id="tags-list" data-testid="list-tags" style={{ fontSize: 12 }}>
+        <div data-testid="list-tags" style={{ fontSize: 12 }}>
           {status === "loading" && tags.length === 0 ? (
             <LoadingState message="加载中..." testid="status-tags-loading" />
           ) : status === "error" && tags.length === 0 ? (
@@ -137,8 +136,6 @@ export function TagsPanel() {
               return (
                 <div
                   key={entry.tag}
-                  className={`tag-row${selected ? " active" : ""}`}
-                  data-tag={entry.tag}
                   data-testid={`item-tag-${entry.tag}`}
                   data-selected={selected ? "true" : "false"}
                   role="button"
@@ -155,7 +152,7 @@ export function TagsPanel() {
                     }
                   }}
                 >
-                  <span className="tag">#{entry.tag}</span>
+                  <span>#{entry.tag}</span>
                   <span style={{ color: "var(--gray-text)" }}>{entry.count ?? 0} mods</span>
                 </div>
               );
@@ -166,7 +163,7 @@ export function TagsPanel() {
 
       <div className="card">
         <div className="card-header">标签详情</div>
-        <div id="tags-detail" data-testid="status-tags-detail" style={{ fontSize: 12 }}>
+        <div data-testid="status-tags-detail" style={{ fontSize: 12 }}>
           {detailStatus === "loading" ? (
             <LoadingState message="加载中..." testid="status-tag-detail-loading" />
           ) : detail ? (
@@ -189,31 +186,32 @@ export function TagsPanel() {
 
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
           <div className="form-group">
-            <label htmlFor="tag-folder-input">Mod 文件夹</label>
-            <input
-              id="tag-folder-input"
-              data-testid="field-tag-folder"
-              type="text"
-              placeholder="例如：CoolModFolder"
-              value={folder}
-              onChange={(event) => setFolder(event.target.value)}
-            />
+            <label>
+              Mod 文件夹
+              <input
+                data-testid="field-tag-folder"
+                type="text"
+                placeholder="例如：CoolModFolder"
+                value={folder}
+                onChange={(event) => setFolder(event.target.value)}
+              />
+            </label>
           </div>
           <div className="form-group">
-            <label htmlFor="tag-name-input">标签名</label>
-            <input
-              id="tag-name-input"
-              data-testid="field-tag-name"
-              type="text"
-              placeholder="例如：combat"
-              value={newTag}
-              onChange={(event) => setNewTag(event.target.value)}
-            />
+            <label>
+              标签名
+              <input
+                data-testid="field-tag-name"
+                type="text"
+                placeholder="例如：combat"
+                value={newTag}
+                onChange={(event) => setNewTag(event.target.value)}
+              />
+            </label>
           </div>
           <button
             type="button"
             className="btn btn-primary btn-sm"
-            id="btn-add-tag"
             data-testid="action-tag-add"
             disabled={mutating}
             onClick={() => void onCreate()}
@@ -234,21 +232,21 @@ export function TagsPanel() {
           }}
         >
           <div className="form-group">
-            <label htmlFor="tag-rename-input">重命名当前标签</label>
-            <input
-              id="tag-rename-input"
-              data-testid="field-tag-rename"
-              type="text"
-              placeholder="新的标签名"
-              value={renameTo}
-              disabled={!detail}
-              onChange={(event) => setRenameTo(event.target.value)}
-            />
+            <label>
+              重命名当前标签
+              <input
+                data-testid="field-tag-rename"
+                type="text"
+                placeholder="新的标签名"
+                value={renameTo}
+                disabled={!detail}
+                onChange={(event) => setRenameTo(event.target.value)}
+              />
+            </label>
           </div>
           <button
             type="button"
             className="btn btn-ghost btn-sm"
-            id="btn-rename-tag"
             data-testid="action-tag-rename"
             disabled={!detail || mutating}
             onClick={() => void onRename()}
@@ -258,7 +256,6 @@ export function TagsPanel() {
           <button
             type="button"
             className="btn btn-danger btn-sm"
-            id="btn-delete-tag"
             data-testid="action-tag-delete"
             disabled={!detail || mutating}
             onClick={() => setDeleteOpen(true)}

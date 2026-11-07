@@ -1,14 +1,16 @@
 /**
  * Mod settings panel — browse and edit RimWorld's `Config/Mod_*.xml`.
  *
- * Parity contract with the legacy `src/panels/settings.ts` and
- * `settings.spec.ts`: `#mod-settings-list`, `#mod-settings-status`,
- * `#mod-settings-backups`, `#mod-settings-editor`,
- * `#mod-settings-editor-title`, `#mod-settings-xml`, `#mod-settings-ack`,
- * `#btn-mod-settings-refresh`, `#btn-mod-settings-backup-all`,
- * `#btn-mod-settings-save`, `#btn-mod-settings-restore-latest`,
- * `#btn-mod-settings-close`, `.mod-setting-edit[data-file]`,
- * `.mod-setting-restore[data-file]`, `.mod-backup-restore[data-file]`.
+ * Anchors are canonical testids: `list-mod-settings`,
+ * `item-mod-setting-<filename>`, `action-mod-setting-edit-<filename>`,
+ * `action-mod-setting-restore-<filename>`, `status-settings`,
+ * `list-mod-setting-backups`, `item-mod-backup-<filename>`,
+ * `action-mod-backup-restore-<filename>`, `dialog-mod-settings-editor`,
+ * `status-mod-settings-editor-title`, `field-mod-settings-xml`,
+ * `field-mod-settings-ack`, `action-mod-settings-save`,
+ * `action-mod-settings-restore-latest`, `action-mod-settings-close`,
+ * `action-mod-settings-refresh` and `action-mod-settings-backup-all`.
+ * The legacy ids/classes are gone.
  *
  * Saving requires the explicit "game is closed" acknowledgement, mirroring the
  * backend's `ack_game_closed` contract. Restore confirmation uses the shared
@@ -148,14 +150,13 @@ export function SettingsPanel() {
   const showEmpty = status !== "loading" && files.length === 0;
 
   return (
-    <div className="card" id="mod-settings-card">
+    <div className="card">
       <div className="card-header" style={{ justifyContent: "space-between" }}>
         <span>🛠 Mod 设置文件（Config/Mod_*.xml）</span>
         <div style={{ display: "flex", gap: 6 }}>
           <button
             type="button"
             className="btn btn-ghost btn-sm"
-            id="btn-mod-settings-refresh"
             data-testid="action-mod-settings-refresh"
             onClick={refresh}
           >
@@ -164,7 +165,6 @@ export function SettingsPanel() {
           <button
             type="button"
             className="btn btn-primary btn-sm"
-            id="btn-mod-settings-backup-all"
             data-testid="action-mod-settings-backup-all"
             disabled={saving}
             onClick={() => void onBackupAll()}
@@ -175,7 +175,6 @@ export function SettingsPanel() {
       </div>
 
       <div
-        id="mod-settings-status"
         data-testid="status-settings"
         style={{ fontSize: 11, color: "var(--gray-text)", padding: "4px 0" }}
       >
@@ -186,19 +185,16 @@ export function SettingsPanel() {
 
       {editor ? (
         <div
-          id="mod-settings-editor"
           data-testid="dialog-mod-settings-editor"
           style={{ padding: "8px 0", borderTop: "1px solid var(--border)" }}
         >
           <div
-            id="mod-settings-editor-title"
             data-testid="status-mod-settings-editor-title"
             style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}
           >
             {editor.filename}（{editor.rootTag || "XML"}）
           </div>
           <textarea
-            id="mod-settings-xml"
             data-testid="field-mod-settings-xml"
             spellCheck={false}
             value={xml}
@@ -218,7 +214,6 @@ export function SettingsPanel() {
           <label className="check-label" style={{ marginTop: 8, display: "block" }}>
             <input
               type="checkbox"
-              id="mod-settings-ack"
               data-testid="field-mod-settings-ack"
               checked={acknowledged}
               onChange={(event) => setAcknowledged(event.target.checked)}
@@ -229,7 +224,6 @@ export function SettingsPanel() {
             <button
               type="button"
               className="btn btn-primary"
-              id="btn-mod-settings-save"
               data-testid="action-mod-settings-save"
               disabled={saving || editorLoading}
               onClick={() => void onSave()}
@@ -239,7 +233,6 @@ export function SettingsPanel() {
             <button
               type="button"
               className="btn btn-ghost"
-              id="btn-mod-settings-restore-latest"
               data-testid="action-mod-settings-restore-latest"
               disabled={saving}
               onClick={() => setRestoreTarget({ file: editor.filename, backup: "" })}
@@ -249,7 +242,6 @@ export function SettingsPanel() {
             <button
               type="button"
               className="btn btn-ghost"
-              id="btn-mod-settings-close"
               data-testid="action-mod-settings-close"
               onClick={closeEditor}
             >
@@ -259,7 +251,7 @@ export function SettingsPanel() {
         </div>
       ) : null}
 
-      <div id="mod-settings-list" data-testid="list-mod-settings" style={{ fontSize: 12 }}>
+      <div data-testid="list-mod-settings" style={{ fontSize: 12 }}>
         {status === "loading" && files.length === 0 ? (
           <LoadingState message="加载中..." testid="status-settings-loading" />
         ) : status === "error" && files.length === 0 ? (
@@ -293,8 +285,7 @@ export function SettingsPanel() {
               <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
                 <button
                   type="button"
-                  className="btn btn-ghost btn-sm mod-setting-edit"
-                  data-file={file.filename}
+                  className="btn btn-ghost btn-sm"
                   data-testid={`action-mod-setting-edit-${file.filename}`}
                   onClick={() => void openEditor(file.filename)}
                 >
@@ -302,8 +293,7 @@ export function SettingsPanel() {
                 </button>
                 <button
                   type="button"
-                  className="btn btn-ghost btn-sm mod-setting-restore"
-                  data-file={file.filename}
+                  className="btn btn-ghost btn-sm"
                   data-testid={`action-mod-setting-restore-${file.filename}`}
                   onClick={() => setRestoreTarget({ file: file.filename, backup: "" })}
                 >
@@ -317,7 +307,7 @@ export function SettingsPanel() {
 
       <div style={{ fontSize: 12, color: "var(--gray-text)", padding: "8px 0", borderTop: "1px solid var(--border)" }}>
         <div style={{ fontWeight: 600, marginBottom: 4 }}>🗂 设置备份</div>
-        <div id="mod-settings-backups" data-testid="list-mod-setting-backups">
+        <div data-testid="list-mod-setting-backups">
           {backups.length === 0 ? (
             <span style={{ color: "var(--gray-text)" }}>暂无备份</span>
           ) : (
@@ -336,9 +326,7 @@ export function SettingsPanel() {
                 </span>
                 <button
                   type="button"
-                  className="btn btn-ghost btn-sm mod-backup-restore"
-                  data-file={backup.source}
-                  data-backup={backup.filename}
+                  className="btn btn-ghost btn-sm"
                   data-testid={`action-mod-backup-restore-${backup.filename}`}
                   onClick={() =>
                     setRestoreTarget({ file: backup.source ?? "", backup: backup.filename })

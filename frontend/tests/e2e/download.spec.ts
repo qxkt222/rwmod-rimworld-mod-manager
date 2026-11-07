@@ -42,13 +42,13 @@ test.describe("download panel", () => {
     );
 
     await gotoPanel(page, backend, "download");
-    await page.locator("#mod-input").fill("123456");
-    await page.locator("#btn-download").click();
+    await page.getByTestId("field-mod-input").fill("123456");
+    await page.getByTestId("action-download").click();
 
     // The leading "✓" is decorative (legacy prefixes ok lines, React logs the
     // raw SSE message), so the contract is the event text and its order,
     // including the terminal done line.
-    await expect(page.locator("#log")).toContainText(
+    await expect(page.getByTestId("list-log")).toContainText(
       /▶ 开始下载 123456[\s\S]*正在解析 Workshop ID[\s\S]*下载成功[\s\S]*✅ 完成 123456/,
     );
   });
@@ -73,13 +73,15 @@ test.describe("download panel", () => {
     );
 
     await gotoPanel(page, backend, "download");
-    await page.locator("#mod-input").fill("123456");
+    await page.getByTestId("field-mod-input").fill("123456");
 
     // The panel debounces the lookup by 500 ms.
-    await expect(page.locator("#dep-preview")).toContainText("Harmony", { timeout: 5_000 });
-    await expect(page.locator("#dep-preview")).toContainText("HugsLib");
-    await expect(page.locator("#dep-preview")).toContainText("未安装");
-    await expect(page.locator("#dep-preview")).toContainText("1 个依赖缺失");
+    await expect(page.getByTestId("status-dependency-preview")).toContainText("Harmony", {
+      timeout: 5_000,
+    });
+    await expect(page.getByTestId("status-dependency-preview")).toContainText("HugsLib");
+    await expect(page.getByTestId("status-dependency-preview")).toContainText("未安装");
+    await expect(page.getByTestId("status-dependency-preview")).toContainText("1 个依赖缺失");
   });
 
   test("clear-log button empties the console", async ({ page, backend }) => {
@@ -92,11 +94,11 @@ test.describe("download panel", () => {
     );
 
     await gotoPanel(page, backend, "download");
-    await page.locator("#mod-input").fill("42");
-    await page.locator("#btn-download").click();
-    await expect(page.locator("#log")).toContainText("▶ 开始下载 42");
+    await page.getByTestId("field-mod-input").fill("42");
+    await page.getByTestId("action-download").click();
+    await expect(page.getByTestId("list-log")).toContainText("▶ 开始下载 42");
 
-    await page.locator("#btn-clear-log").click();
-    await expect(page.locator("#log")).toHaveText("");
+    await page.getByTestId("action-clear-log").click();
+    await expect(page.getByTestId("list-log")).toHaveText("");
   });
 });

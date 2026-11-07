@@ -7,9 +7,11 @@
  * flight — ids are processed sequentially, and `startStream` closes any stale
  * handle for the channel before opening a new one.
  *
- * Legacy anchors kept for `download.spec.ts`: `#mod-input`, `#btn-download`,
- * `#force-dl`, `#dep-preview`, `#download-progress`, `#dp-bar`, `#dp-current`,
- * `#log`, `#btn-clear-log`.
+ * Anchors are canonical testids: `field-mod-input`, `action-download`,
+ * `field-force-download`, `status-dependency-preview`,
+ * `status-download-progress`, `status-download-progress-bar`,
+ * `status-download-current`, `status-download-error`, `list-log` and
+ * `action-clear-log`. The legacy ids are gone.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -223,7 +225,6 @@ export function DownloadPanel() {
         <div className="form-row">
           <input
             type="text"
-            id="mod-input"
             data-testid="field-mod-input"
             placeholder="Mod ID 或 Workshop 链接，多个用逗号分隔"
             aria-label="Mod ID 或 Workshop 链接"
@@ -236,7 +237,6 @@ export function DownloadPanel() {
           <button
             type="button"
             className="btn btn-primary"
-            id="btn-download"
             data-testid="action-download"
             disabled={running}
             onClick={handleDownload}
@@ -247,7 +247,6 @@ export function DownloadPanel() {
         <label className="check-label" style={{ marginTop: 8 }}>
           <input
             type="checkbox"
-            id="force-dl"
             data-testid="field-force-download"
             checked={force}
             onChange={(event) => setForce(event.target.checked)}
@@ -256,7 +255,6 @@ export function DownloadPanel() {
         </label>
 
         <div
-          id="dep-preview"
           data-testid="status-dependency-preview"
           style={{ marginTop: 8, fontSize: 12 }}
         >
@@ -325,7 +323,6 @@ export function DownloadPanel() {
           <button
             type="button"
             className="btn btn-ghost btn-sm"
-            id="btn-clear-log"
             data-testid="action-clear-log"
             onClick={clearLog}
           >
@@ -335,7 +332,6 @@ export function DownloadPanel() {
 
         {currentId ? (
           <div
-            id="download-progress"
             data-testid="status-download-progress"
             style={{ padding: "0 16px 8px" }}
           >
@@ -348,14 +344,14 @@ export function DownloadPanel() {
               }}
             >
               <span>下载进度</span>
-              <span id="dp-current" style={{ color: "var(--gray-text)" }}>
+              <span data-testid="status-download-current" style={{ color: "var(--gray-text)" }}>
                 {currentId} {progress.toFixed(1)}%
               </span>
             </div>
             <div className="queue-bar">
               <div
                 className="queue-bar-inner"
-                id="dp-bar"
+                data-testid="status-download-progress-bar"
                 style={{ width: `${Math.min(100, progress)}%` }}
               />
             </div>
@@ -368,7 +364,7 @@ export function DownloadPanel() {
           </div>
         ) : null}
 
-        <div className="log-console" id="log" data-testid="list-log">
+        <div className="log-console" data-testid="list-log">
           {logLines.map((line, index) => (
             <span key={index} style={{ color: lineColor(line) }}>
               {line}

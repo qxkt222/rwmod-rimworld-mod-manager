@@ -217,13 +217,13 @@ describe("REV-009 sidebar mod badge", () => {
     );
 
     render(<Sidebar />);
-    expect(document.getElementById("mod-count")).toHaveTextContent("2");
+    expect(screen.getByTestId("status-sidebar-mods-count")).toHaveTextContent("2");
 
     await act(async () => {
       await useConfigStore.getState().activateInstance("beta");
     });
 
-    await waitFor(() => expect(document.getElementById("mod-count")).toHaveTextContent("3"));
+    await waitFor(() => expect(screen.getByTestId("status-sidebar-mods-count")).toHaveTextContent("3"));
   });
 });
 

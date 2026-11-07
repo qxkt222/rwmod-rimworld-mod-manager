@@ -28,7 +28,6 @@ export function Sidebar() {
 
   return (
     <aside
-      id="sidebar"
       className={`sidebar${collapsed ? " sidebar--collapsed" : ""}`}
       data-testid="nav-sidebar"
       data-collapsed={collapsed ? "true" : "false"}
@@ -48,7 +47,6 @@ export function Sidebar() {
                   key={panel}
                   href={`#${panel}`}
                   className={`side-item${isActive ? " active" : ""}`}
-                  data-panel={panel}
                   data-testid={`nav-${panel}`}
                   data-active={isActive ? "true" : "false"}
                   aria-current={isActive ? "page" : undefined}
@@ -61,7 +59,7 @@ export function Sidebar() {
                   {badge ? (
                     <span
                       className="side-badge"
-                      id={panel === "mods" ? "mod-count" : "queue-count"}
+                      data-testid={`status-sidebar-${panel}-count`}
                       title={badge.stale ? staleTitle : undefined}
                       style={badge.stale ? { opacity: 0.5 } : undefined}
                       aria-label={`${route.label}: ${badge.value}${badge.stale ? "（可能不是最新）" : ""}`}

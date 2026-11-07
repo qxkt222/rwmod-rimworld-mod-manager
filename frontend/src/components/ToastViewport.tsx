@@ -1,8 +1,9 @@
 /**
  * Toast viewport — bottom-right stack driven by `store/ui.ts`.
  *
- * Keeps the legacy `#toast-container` id so `expectToast()` in the E2E helpers
- * keeps working during the two-entry transition.
+ * The container is `status-toasts`; each toast is `status-toast` (the E2E
+ * helper asserts on the container so several stacked toasts never trip
+ * Playwright's strict mode).
  */
 import { useUIStore } from "../store/ui";
 
@@ -18,7 +19,12 @@ export function ToastViewport() {
   const dismiss = useUIStore((state) => state.dismissToast);
 
   return (
-    <div id="toast-container" className="toast-viewport" aria-live="polite" aria-atomic="false">
+    <div
+      className="toast-viewport"
+      data-testid="status-toasts"
+      aria-live="polite"
+      aria-atomic="false"
+    >
       {toasts.map((toast) => (
         <div
           key={toast.id}

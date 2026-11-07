@@ -2,8 +2,7 @@
  * React entry (wave 2, FE-2) — behaviour coverage for the seven A-group panels
  * on `/`: history, backups, saves, tags, config, settings and mods. Every case
  * drives the real backend (except the .rws upload, which only parses XML) and
- * asserts the canonical testids plus the legacy anchors the older suite
- * depends on.
+ * asserts the canonical testids.
  */
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -58,11 +57,11 @@ test.describe("react A panels", () => {
     await page.goto(`${backend.baseURL}/#history`);
 
     await expect(page.getByTestId("panel-history")).toHaveAttribute("data-active", "true");
-    await expect(page.locator("#history-list")).toContainText("暂无下载记录");
-    await expect(page.locator("#history-stats")).toContainText("总计 0");
-    await expect(page.locator("#history-stats")).toContainText("成功 0");
-    await expect(page.locator("#history-stats")).toContainText("失败 0");
-    await expect(page.locator("#auto-update-status")).toHaveText("就绪");
+    await expect(page.getByTestId("list-history")).toContainText("暂无下载记录");
+    await expect(page.getByTestId("status-history-stats")).toContainText("总计 0");
+    await expect(page.getByTestId("status-history-stats")).toContainText("成功 0");
+    await expect(page.getByTestId("status-history-stats")).toContainText("失败 0");
+    await expect(page.getByTestId("status-auto-update")).toHaveText("就绪");
     await expect(page.getByTestId("list-history")).toBeVisible();
   });
 
@@ -71,10 +70,10 @@ test.describe("react A panels", () => {
     backend,
   }) => {
     await page.goto(`${backend.baseURL}/#history`);
-    await page.locator("#btn-clear-history").click();
+    await page.getByTestId("action-history-clear").click();
 
     await expectToast(page, "历史记录已清空");
-    await expect(page.locator("#history-list")).toContainText("暂无下载记录");
+    await expect(page.getByTestId("list-history")).toContainText("暂无下载记录");
   });
 
   // ── backups ─────────────────────────────────────────────────────
@@ -83,7 +82,7 @@ test.describe("react A panels", () => {
     backend,
   }) => {
     await page.goto(`${backend.baseURL}/#backups`);
-    await expect(page.locator("#backup-list")).toContainText(
+    await expect(page.getByTestId("list-backups")).toContainText(
       "暂无备份。更新 Mod 时会自动创建备份。",
     );
 
@@ -92,16 +91,16 @@ test.describe("react A panels", () => {
     writeFileSync(path.join(backupDir, BACKUP_NAME), "fake zip placeholder", "utf8");
 
     try {
-      await page.locator("#btn-backup-refresh").click();
+      await page.getByTestId("action-backup-refresh").click();
 
-      const group = page.locator(".backup-group");
+      const group = page.getByTestId("item-backup-123456789");
       await expect(group).toHaveCount(1);
-      await expect(group.locator(".mod-name")).toHaveText("CoolMod");
+      await expect(group.getByTestId("status-backup-folder")).toHaveText("CoolMod");
       await expect(group).toContainText("ID: 123456789");
       await expect(group).toContainText("1 个版本");
-      await expect(page.locator("#backup-group-label")).toContainText("备份目录:");
+      await expect(page.getByTestId("status-backup-dir")).toContainText("备份目录:");
 
-      const versions = page.locator("#versions-123456789");
+      const versions = page.getByTestId("list-backup-versions-123456789");
       await expect(versions).toBeHidden();
       await group.getByRole("button", { name: /1版/ }).click();
       await expect(versions).toBeVisible();
@@ -117,10 +116,10 @@ test.describe("react A panels", () => {
     backend,
   }) => {
     await page.goto(`${backend.baseURL}/#saves`);
-    await expect(page.locator("#saves-results")).toContainText("No save files found");
-    await expect(page.locator("#btn-scan-saves")).toBeVisible();
+    await expect(page.getByTestId("list-saves")).toContainText("No save files found");
+    await expect(page.getByTestId("action-scan-saves")).toBeVisible();
 
-    await page.locator("#saves-file-upload").setInputFiles({
+    await page.getByTestId("field-saves-upload").setInputFiles({
       name: "sample.rws",
       mimeType: "application/xml",
       buffer: Buffer.from(SAVE_XML, "utf8"),
@@ -139,13 +138,13 @@ test.describe("react A panels", () => {
     try {
       await page.goto(`${backend.baseURL}/#tags`);
 
-      const row = page.locator(".tag-row", { hasText: "e2e-combat-a" });
+      const row = page.getByTestId("item-tag-e2e-combat-a");
       await expect(row).toBeVisible();
       await expect(row).toContainText("1 mods");
 
       await row.click();
-      await expect(page.locator("#tags-detail")).toContainText("#e2e-combat-a");
-      await expect(page.locator("#tags-detail")).toContainText("E2EModFolder");
+      await expect(page.getByTestId("status-tags-detail")).toContainText("#e2e-combat-a");
+      await expect(page.getByTestId("status-tags-detail")).toContainText("E2EModFolder");
     } finally {
       await request.delete(`${backend.baseURL}/api/tags/E2EModFolder/e2e-combat-a`);
     }
@@ -155,46 +154,46 @@ test.describe("react A panels", () => {
     await page.goto(`${backend.baseURL}/#tags`);
 
     // create
-    await page.locator("#tag-folder-input").fill("ReactTagFolder");
-    await page.locator("#tag-name-input").fill("react-original");
-    await page.locator("#btn-add-tag").click();
+    await page.getByTestId("field-tag-folder").fill("ReactTagFolder");
+    await page.getByTestId("field-tag-name").fill("react-original");
+    await page.getByTestId("action-tag-add").click();
     await expectToast(page, "已添加标签 #react-original");
 
-    const original = page.locator(".tag-row", { hasText: "react-original" });
+    const original = page.getByTestId("item-tag-react-original");
     await expect(original).toBeVisible();
     await original.click();
-    await expect(page.locator("#tags-detail")).toContainText("#react-original");
+    await expect(page.getByTestId("status-tags-detail")).toContainText("#react-original");
 
     // rename
-    await page.locator("#tag-rename-input").fill("react-renamed");
-    await page.locator("#btn-rename-tag").click();
+    await page.getByTestId("field-tag-rename").fill("react-renamed");
+    await page.getByTestId("action-tag-rename").click();
     await expectToast(page, /已重命名标签 #react-original/);
-    await expect(page.locator(".tag-row", { hasText: "react-renamed" })).toBeVisible();
-    await expect(page.locator(".tag-row", { hasText: "react-original" })).toHaveCount(0);
+    await expect(page.getByTestId("item-tag-react-renamed")).toBeVisible();
+    await expect(page.getByTestId("item-tag-react-original")).toHaveCount(0);
 
     // delete (in-app confirm dialog, not native confirm)
-    await page.locator(".tag-row", { hasText: "react-renamed" }).click();
-    await page.locator("#btn-delete-tag").click();
+    await page.getByTestId("item-tag-react-renamed").click();
+    await page.getByTestId("action-tag-delete").click();
     const dialog = page.getByTestId("dialog-tag-delete");
     await expect(dialog).toBeVisible();
     await dialog.getByRole("button", { name: "删除" }).click();
     await expectToast(page, "已删除标签 #react-renamed");
-    await expect(page.locator(".tag-row", { hasText: "react-renamed" })).toHaveCount(0);
+    await expect(page.getByTestId("item-tag-react-renamed")).toHaveCount(0);
   });
 
   // ── config ──────────────────────────────────────────────────────
   test("config reads the seeded configuration and saves it", async ({ page, backend }) => {
     await page.goto(`${backend.baseURL}/#config`);
 
-    await expect(page.locator("#cfg-steamcmd")).toHaveValue(/steamcmd\.exe$/);
-    await expect(page.locator("#cfg-mods")).toHaveValue(/[\\/]mods$/);
-    await expect(page.locator("#cfg-rimworld")).toHaveValue(/[\\/]rimworld$/);
-    await expect(page.locator("#config-display")).toContainText("SteamCMD:");
-    await expect(page.locator("#config-display")).toContainText("Mods 目录:");
-    await expect(page.locator("#instance-list")).toContainText("默认实例");
-    await expect(page.locator("#instance-list")).toContainText("当前实例");
+    await expect(page.getByTestId("field-steamcmd-path")).toHaveValue(/steamcmd\.exe$/);
+    await expect(page.getByTestId("field-mods-dir")).toHaveValue(/[\\/]mods$/);
+    await expect(page.getByTestId("field-rimworld-dir")).toHaveValue(/[\\/]rimworld$/);
+    await expect(page.getByTestId("status-config")).toContainText("SteamCMD:");
+    await expect(page.getByTestId("status-config")).toContainText("Mods 目录:");
+    await expect(page.getByTestId("list-instances")).toContainText("默认实例");
+    await expect(page.getByTestId("list-instances")).toContainText("当前实例");
 
-    await page.locator("#btn-save-config").click();
+    await page.getByTestId("action-save-config").click();
     await expectToast(page, "配置已保存");
   });
 
@@ -204,34 +203,34 @@ test.describe("react A panels", () => {
   }) => {
     await page.goto(`${backend.baseURL}/#config`);
 
-    await page.locator("#new-instance-name").fill("React Second");
-    await page.locator("#new-instance-mods").fill(path.join(backend.home, "mods2"));
-    await page.locator("#new-instance-rimworld").fill(path.join(backend.home, "rimworld2"));
-    await page.locator("#btn-add-instance").click();
+    await page.getByTestId("field-new-instance-name").fill("React Second");
+    await page.getByTestId("field-new-instance-mods").fill(path.join(backend.home, "mods2"));
+    await page.getByTestId("field-new-instance-rimworld").fill(path.join(backend.home, "rimworld2"));
+    await page.getByTestId("action-add-instance").click();
     await expectToast(page, "已创建实例 React Second");
 
-    const second = page.locator("#instance-list > div", { hasText: "React Second" });
+    const second = page.locator('[data-testid^="item-instance-"]', { hasText: "React Second" });
     await expect(second).toBeVisible();
 
-    await second.locator('button[data-action="activate"]').click();
+    await second.locator('[data-testid^="action-instance-activate-"]').click();
     await expectToast(page, "已切换到实例 React Second");
     await expect(second).toContainText("当前实例");
-    await expect(page.locator("#cfg-mods")).toHaveValue(/mods2$/);
+    await expect(page.getByTestId("field-mods-dir")).toHaveValue(/mods2$/);
 
-    const fallback = page.locator("#instance-list > div", { hasText: "默认实例" });
-    await fallback.locator('button[data-action="activate"]').click();
+    const fallback = page.locator('[data-testid^="item-instance-"]', { hasText: "默认实例" });
+    await fallback.locator('[data-testid^="action-instance-activate-"]').click();
     await expectToast(page, "已切换到实例 默认实例");
     await expect(fallback).toContainText("当前实例");
 
     await page
-      .locator("#instance-list > div", { hasText: "React Second" })
-      .locator('button[data-action="delete"]')
+      .locator('[data-testid^="item-instance-"]', { hasText: "React Second" })
+      .locator('[data-testid^="action-instance-delete-"]')
       .click();
     const dialog = page.getByTestId("dialog-instance-delete");
     await expect(dialog).toBeVisible();
     await dialog.getByRole("button", { name: "删除" }).click();
     await expectToast(page, "已删除实例 React Second");
-    await expect(page.locator("#instance-list")).not.toContainText("React Second");
+    await expect(page.getByTestId("list-instances")).not.toContainText("React Second");
   });
 
   // ── settings ────────────────────────────────────────────────────
@@ -245,26 +244,28 @@ test.describe("react A panels", () => {
     try {
       await page.goto(`${backend.baseURL}/#settings`);
 
-      const row = page.locator(".mod-row", { hasText: "Mod_TestExample.xml" });
+      const row = page.getByTestId("item-mod-setting-Mod_TestExample.xml");
       await expect(row).toBeVisible();
-      await expect(page.locator("#mod-settings-status")).toContainText("配置目录:");
+      await expect(page.getByTestId("status-settings")).toContainText("配置目录:");
 
-      await page.locator('.mod-setting-edit[data-file="Mod_TestExample.xml"]').click();
-      await expect(page.locator("#mod-settings-editor")).toBeVisible();
-      await expect(page.locator("#mod-settings-editor-title")).toContainText(
+      await page.getByTestId("action-mod-setting-edit-Mod_TestExample.xml").click();
+      await expect(page.getByTestId("dialog-mod-settings-editor")).toBeVisible();
+      await expect(page.getByTestId("status-mod-settings-editor-title")).toContainText(
         "Mod_TestExample.xml",
       );
-      await expect(page.locator("#mod-settings-xml")).toHaveValue(/<ModSettings>/);
+      await expect(page.getByTestId("field-mod-settings-xml")).toHaveValue(/<ModSettings>/);
 
       // Saving without the "game is closed" acknowledgement is refused.
-      await page.locator("#btn-mod-settings-save").click();
+      await page.getByTestId("action-mod-settings-save").click();
       await expectToast(page, "请先勾选「我已关闭 RimWorld」");
 
-      await page.locator("#mod-settings-xml").fill(NEW_SETTINGS_XML);
-      await page.locator("#mod-settings-ack").check();
-      await page.locator("#btn-mod-settings-save").click();
+      await page.getByTestId("field-mod-settings-xml").fill(NEW_SETTINGS_XML);
+      await page.getByTestId("field-mod-settings-ack").check();
+      await page.getByTestId("action-mod-settings-save").click();
       await expectToast(page, /已保存（备份 /);
-      await expect(page.locator("#mod-settings-backups")).toContainText("Mod_TestExample.xml");
+      await expect(page.getByTestId("list-mod-setting-backups")).toContainText(
+        "Mod_TestExample.xml",
+      );
     } finally {
       restoreSettingsFixture(backend.home, original);
     }
@@ -275,7 +276,7 @@ test.describe("react A panels", () => {
     const original = readFileSync(settingsPath);
     try {
       await page.goto(`${backend.baseURL}/#settings`);
-      await page.locator("#btn-mod-settings-backup-all").click();
+      await page.getByTestId("action-mod-settings-backup-all").click();
       await expectToast(page, /已备份 \d+ 个设置文件/);
     } finally {
       restoreSettingsFixture(backend.home, original);
@@ -289,18 +290,18 @@ test.describe("react A panels", () => {
   }) => {
     await page.goto(`${backend.baseURL}/#mods`);
 
-    await expect(page.locator("#mod-list")).toContainText("没有安装的 Mod");
-    await expect(page.locator("#mod-count")).toHaveText("0");
-    await expect(page.locator("#btn-mods-enable")).toBeVisible();
-    await expect(page.locator("#btn-mods-disable")).toBeVisible();
+    await expect(page.getByTestId("list-mods")).toContainText("没有安装的 Mod");
+    await expect(page.getByTestId("status-sidebar-mods-count")).toHaveText("0");
+    await expect(page.getByTestId("action-mods-enable")).toBeVisible();
+    await expect(page.getByTestId("action-mods-disable")).toBeVisible();
 
-    await page.locator("#btn-mods-enable").click();
+    await page.getByTestId("action-mods-enable").click();
     await expectToast(page, "请先勾选要操作的 Mod");
 
-    const checkbox = page.locator("#mods-only-active");
+    const checkbox = page.getByTestId("field-mods-only-active");
     await expect(checkbox).not.toBeChecked();
     await checkbox.check();
     await expect(checkbox).toBeChecked();
-    await expect(page.locator("#mod-list")).toContainText("没有安装的 Mod");
+    await expect(page.getByTestId("list-mods")).toContainText("没有安装的 Mod");
   });
 });

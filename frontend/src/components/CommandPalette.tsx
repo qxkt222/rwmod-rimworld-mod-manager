@@ -1,9 +1,10 @@
 /**
  * Ctrl+K command palette (docs/ui-redesign.md §5.1).
  *
- * Keeps the legacy DOM contract — `#cmd-palette` + `.open`, `#cmd-input`,
- * `.cmd-result` + `.selected` — so `command-palette.spec.ts` keeps passing.
- * New code targets `dialog-command-palette`.
+ * Anchors are canonical testids: `dialog-command-palette`,
+ * `field-command-input`, `list-command-results` and
+ * `item-command-<commandId>`. Open/selected state stays on the CSS classes
+ * (`.open`, `.selected`) and is mirrored by `aria-hidden` / `aria-selected`.
  */
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { createPortal } from "react-dom";
@@ -81,7 +82,6 @@ export function CommandPalette() {
 
   return createPortal(
     <div
-      id="cmd-palette"
       className={`cmd-overlay${open ? " open" : ""}`}
       data-testid="dialog-command-palette"
       role="dialog"
@@ -93,9 +93,9 @@ export function CommandPalette() {
       <div className="cmd-backdrop" onClick={close} />
       <div className="cmd-box">
         <input
-          id="cmd-input"
           ref={inputRef}
           className="cmd-input"
+          data-testid="field-command-input"
           type="text"
           placeholder="输入命令..."
           autoComplete="off"
@@ -106,12 +106,17 @@ export function CommandPalette() {
             setSelected(0);
           }}
         />
-        <div id="cmd-results" className="cmd-results" role="listbox" aria-label="命令列表">
+        <div
+          className="cmd-results"
+          data-testid="list-command-results"
+          role="listbox"
+          aria-label="命令列表"
+        >
           {filtered.map((command, index) => (
             <div
               key={command.id}
-              id={`cmd-result-${command.id}`}
               className={`cmd-result${index === selected ? " selected" : ""}`}
+              data-testid={`item-command-${command.id}`}
               data-idx={index}
               role="option"
               aria-selected={index === selected}

@@ -265,14 +265,25 @@ async def security_headers(
 ) -> Response:
     """Apply baseline hardening headers to every HTTP response.
 
-    No CSP here — the frontend serves inline scripts/styles and we don't want
-    to break the app. The headers below are non-breaking basics: no MIME
-    sniffing, no framing, referrer trimming, and explicit no-sniff for APIs.
+    The CSP is attached to HTML documents served outside /api only. The React UI
+    (GET /) is the one document that runs scripts, and its bundle ships no inline
+    <script> or inline event handlers, so script-src 'self' is safe.
+    style-src keeps 'unsafe-inline' for React style props and third-party CSS
+    variables. /api/docs (Swagger UI) is excluded because it loads its JS from a
+    CDN; static assets inherit the page's policy and need no header of their own.
     """
     response = await call_next(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "no-referrer")
+    content_type = response.headers.get("content-type", "")
+    if content_type.startswith("text/html") and not request.url.path.startswith("/api"):
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; connect-src 'self' ws: wss:; font-src 'self'; "
+            "object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+        )
     # Static assets may be cached; API responses get explicit no-store so a
     # logged-out stale page never leaks through a browser back/forward cache.
     if request.url.path.startswith("/api"):

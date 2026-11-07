@@ -1,11 +1,10 @@
 /**
  * Backups panel — grouped mod backups with per-version restore and cleanup.
  *
- * Parity contract with the legacy `src/panels/backup.ts` and
- * `backups.spec.ts`: `#backup-list`, `#backup-group-label`,
- * `#btn-backup-refresh`, `#btn-backup-cleanup`, `.backup-group`, `.mod-name`,
- * `#versions-<workshopId>` and the `data-restore` / `data-versions` /
- * `data-restore-id` / `data-delete` attributes.
+ * Anchors are canonical testids: `list-backups`, `status-backup-dir`,
+ * `action-backup-refresh`, `action-backup-cleanup`, `item-backup-<workshopId>`,
+ * `status-backup-folder`, `list-backup-versions-<workshopId>` and the
+ * per-action `action-backup-*` testids. The legacy ids are gone.
  *
  * Confirmation dialogs use the shared `ConfirmDialog` instead of native
  * `confirm()`; the legacy spec never drives them, and the cleanup prompt
@@ -145,7 +144,6 @@ export function BackupsPanel() {
             <input
               type="number"
               min={0}
-              id="backup-keep-count"
               data-testid="field-backup-keep"
               aria-label="每个 Mod 保留的备份数量"
               value={keepCount}
@@ -155,7 +153,6 @@ export function BackupsPanel() {
             <button
               type="button"
               className="btn btn-ghost btn-sm"
-              id="btn-backup-refresh"
               data-testid="action-backup-refresh"
               onClick={refresh}
             >
@@ -164,7 +161,6 @@ export function BackupsPanel() {
             <button
               type="button"
               className="btn btn-ghost btn-sm"
-              id="btn-backup-cleanup"
               data-testid="action-backup-cleanup"
               onClick={() => void onCleanup()}
             >
@@ -174,14 +170,13 @@ export function BackupsPanel() {
         </div>
 
         <div
-          id="backup-group-label"
           data-testid="status-backup-dir"
           style={{ fontSize: 11, color: "var(--gray-text)", padding: "4px 0" }}
         >
           {backups.length > 0 && backupDir ? `备份目录: ${backupDir}` : ""}
         </div>
 
-        <div id="backup-list" data-testid="list-backups" style={{ fontSize: 12 }}>
+        <div data-testid="list-backups" style={{ fontSize: 12 }}>
           {status === "loading" && backups.length === 0 ? (
             <LoadingState message="加载中..." testid="status-backups-loading" />
           ) : status === "error" && backups.length === 0 ? (
@@ -202,7 +197,7 @@ export function BackupsPanel() {
               return (
                 <div key={workshopId}>
                   <div
-                    className="mod-row backup-group"
+                    className="mod-row"
                     data-testid={`item-backup-${workshopId}`}
                     style={rowStyle}
                   >
@@ -210,7 +205,7 @@ export function BackupsPanel() {
                       💾
                     </div>
                     <div className="mod-info" style={{ minWidth: 0, flex: 1 }}>
-                      <div className="mod-name">{latest.folder_name}</div>
+                      <div data-testid="status-backup-folder">{latest.folder_name}</div>
                       <div className="mod-meta" style={metaStyle}>
                         <span>ID: {workshopId}</span>
                         <span>{versions.length} 个版本</span>
@@ -222,7 +217,6 @@ export function BackupsPanel() {
                       <button
                         type="button"
                         className="btn btn-primary btn-sm"
-                        data-restore={workshopId}
                         data-testid={`action-backup-restore-${workshopId}`}
                         onClick={() =>
                           setRestoreTarget({
@@ -237,7 +231,6 @@ export function BackupsPanel() {
                       <button
                         type="button"
                         className="btn btn-ghost btn-sm"
-                        data-versions={workshopId}
                         data-testid={`action-backup-versions-${workshopId}`}
                         aria-expanded={isOpen}
                         onClick={() => toggleVersions(workshopId)}
@@ -249,13 +242,11 @@ export function BackupsPanel() {
 
                   <div
                     className="backup-versions"
-                    id={`versions-${workshopId}`}
                     data-testid={`list-backup-versions-${workshopId}`}
                     style={{ display: isOpen ? undefined : "none", padding: "0 16px 12px" }}
                   >
                     {versions.map((version) => (
                       <div
-                        className="queue-item"
                         key={version.filename}
                         data-testid={`item-backup-version-${version.filename}`}
                         style={{
@@ -290,7 +281,6 @@ export function BackupsPanel() {
                           <button
                             type="button"
                             className="btn btn-ghost btn-sm"
-                            data-delete={version.filename}
                             data-testid={`action-backup-delete-${version.filename}`}
                             aria-label={`删除备份 ${version.filename}`}
                             onClick={() => setDeleteTarget(version.filename)}

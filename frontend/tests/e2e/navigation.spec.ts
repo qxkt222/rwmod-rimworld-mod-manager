@@ -79,7 +79,7 @@ test.describe("navigation", () => {
 
   test("sidebar quick links navigate too", async ({ page, backend }) => {
     await page.goto(entryURL(backend, "dashboard"));
-    await page.locator('.side-item[data-panel="backups"]').click();
+    await navControl(page, "backups").click();
     await expect(page.locator("#panel-backups")).toHaveClass(/active/);
     await expect(page).toHaveURL(/#backups$/);
   });

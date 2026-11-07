@@ -6,10 +6,12 @@
  * is a one-shot request kept in local state (legacy behaviour: it replaced the
  * console contents).
  *
- * Legacy anchors kept for `collection.spec.ts`: `#collection-input`,
- * `#btn-collection-preview`, `#btn-collection`, `#force-collection`,
- * `#log-collection`, `#collection-progress`, `#cp-total-bar`, `#cp-count`,
- * `#cp-current`.
+ * Anchors are canonical testids: `field-collection-input`,
+ * `action-collection-preview`, `action-collection-download`,
+ * `field-force-collection`, `list-collection-log`,
+ * `status-collection-progress`, `status-collection-progress-bar`,
+ * `status-collection-progress-count` and `status-collection-current`.
+ * The legacy ids are gone.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -130,7 +132,6 @@ export function CollectionPanel() {
         <div className="form-row">
           <input
             type="text"
-            id="collection-input"
             data-testid="field-collection-input"
             placeholder="Steam 合集 ID（如 3721899704）"
             aria-label="Steam 合集 ID"
@@ -143,7 +144,6 @@ export function CollectionPanel() {
           <button
             type="button"
             className="btn btn-primary"
-            id="btn-collection-preview"
             data-testid="action-collection-preview"
             style={{ marginRight: 4 }}
             disabled={previewing}
@@ -154,7 +154,6 @@ export function CollectionPanel() {
           <button
             type="button"
             className="btn btn-primary"
-            id="btn-collection"
             data-testid="action-collection-download"
             disabled={streaming}
             onClick={download}
@@ -165,7 +164,6 @@ export function CollectionPanel() {
         <label className="check-label" style={{ marginTop: 8 }}>
           <input
             type="checkbox"
-            id="force-collection"
             data-testid="field-force-collection"
             checked={force}
             onChange={(event) => setForce(event.target.checked)}
@@ -180,7 +178,7 @@ export function CollectionPanel() {
       >
         <div className="card-header">📋 日志</div>
         {showProgress ? (
-          <div id="collection-progress" data-testid="status-collection-progress" style={{ padding: "8px 16px 0" }}>
+          <div data-testid="status-collection-progress" style={{ padding: "8px 16px 0" }}>
             <div
               style={{
                 display: "flex",
@@ -189,25 +187,28 @@ export function CollectionPanel() {
                 marginBottom: 4,
               }}
             >
-              <span id="cp-total-label">合集下载进度</span>
-              <span id="cp-count" style={{ color: "var(--gray-text)" }}>
+              <span>合集下载进度</span>
+              <span data-testid="status-collection-progress-count" style={{ color: "var(--gray-text)" }}>
                 {streaming ? `${Math.round(progress)}%` : "完成"}
               </span>
             </div>
             <div className="queue-bar">
               <div
                 className="queue-bar-inner"
-                id="cp-total-bar"
+                data-testid="status-collection-progress-bar"
                 style={{ width: `${Math.min(100, progress)}%` }}
               />
             </div>
-            <div id="cp-current" style={{ fontSize: 11, color: "var(--gray-text)", marginTop: 4 }}>
+            <div
+              data-testid="status-collection-current"
+              style={{ fontSize: 11, color: "var(--gray-text)", marginTop: 4 }}
+            >
               {streaming ? "下载中…" : ""}
             </div>
           </div>
         ) : null}
 
-        <div className="log-console" id="log-collection" data-testid="list-collection-log">
+        <div className="log-console" data-testid="list-collection-log">
           {visibleLines.map((line, index) => (
             <span key={index} style={{ color: lineColor(line) }}>
               {line}

@@ -1,5 +1,6 @@
 # rwmod — RimWorld Mod Manager 项目深度调查报告
 
+> 历史快照：截至 v0.5.0，不代表当前实现。
 > 调查时间：2026-08（基于仓库当前状态，`git log` 最新提交 7439949）
 > 调查方式：全部结论来自仓库内一手来源（源码 / README / CHANGELOG / RELEASE_NOTES / pyproject.toml / git 历史 / 测试代码 / 前端源码 / 构建脚本），未使用外部资料。
 > 报告内所有引用均为「相对路径:行号」或「相对路径（文件名）」。
@@ -574,4 +575,4 @@ OpenAPI 文档位于 `/api/docs`、`/api/openapi.json`（`server.py:107-108`）�
 ## 附：调查环境说明
 
 - 本次调查在受限 shell（沙箱禁止访问工作区外临时目录）下运行，`pytest` 本地复跑出现 PermissionError 属环境限制；除测试复跑外，其余结论均基于源码静态阅读与 git 历史，未对仓库做任何修改（`git status` 工作树干净）。
-- 报告输出文件：本文件（`docs/project-investigation-report.md`），仓库原有 `docs/agents/` 两个文件未改动。
+- 报告输出文件：本文件（`docs/archive/project-investigation-report.md`），仓库原有 `docs/agents/` 两个文件未改动。

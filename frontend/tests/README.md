@@ -73,6 +73,33 @@ E2E 不 mock 前端：`npm run build` 的产物由真实 FastAPI 静态挂载提
 4. 交互元素必须有可访问名称（`aria-label` 或可见文字），testid 不是无障碍替代。
 5. 新增 testid 时同步更新本表；删除类名前先全局搜索 `getByTestId`。
 
+## 最终 testid 清单（2026-11-07 FE-ANCHOR2）
+
+面板内部已没有旧业务 id/class 兼容层；`tests/` 只使用 testid 与保留的结构锚点。
+
+**保留的结构契约**（不是旧前端遗留，`gotoPanel` / `PanelHost` 依赖）：
+`#panel-<name>`、`.panel.active`、`data-active`、`panel-<name>`、`panel-host`。
+
+| 区域 | testid |
+|---|---|
+| Shell | `nav-sidebar`、`nav-<panel>`、`topbar`、`status-breadcrumb`、`status-steam`、`status-ws`、`status-app`、`action-command-palette`、`action-theme`、`action-refresh`、`status-toasts`、`status-toast` |
+| 命令面板 | `dialog-command-palette`、`field-command-input`、`list-command-results`、`item-command-<id>` |
+| dashboard | `status-dashboard-mods`、`status-dashboard-updates`、`status-dashboard-disk`、`list-activity`、`action-quick-search`、`action-quick-download`、`action-quick-queue`、`action-auto-update`、`status-auto-update` |
+| download | `field-mod-input`、`action-download`、`field-force-download`、`status-dependency-preview`、`status-download-progress`、`status-download-progress-bar`、`status-download-current`、`status-download-error`、`list-log`、`action-clear-log` |
+| collection | `field-collection-input`、`action-collection-preview`、`action-collection-download`、`field-force-collection`、`status-collection-progress`、`status-collection-progress-bar`、`status-collection-progress-count`、`status-collection-current`、`list-collection-log` |
+| import | `dropzone-import-file`、`field-import-file`、`dropzone-import-sort`、`field-import-sort` |
+| mods | `status-mods-header`、`status-mod-count`、`list-mods`、`item-mod-<packageId-or-folder>`、`field-mod-select-<packageId>`、`field-mods-only-active`、`action-mods-select-all`、`action-mods-enable`、`action-mods-disable`、`action-export-collection`、`action-collection-copy-ids`、`action-collection-copy-markdown`、`action-collection-close`、`status-collection-export` |
+| search | `field-search-query`、`action-search`、`list-search-results`、`item-search-<id>`、`status-search-hit-title-<id>`、`action-add-queue-<id>` |
+| queue | `list-queue`、`item-queue-<id>`、`action-queue-remove-<id>`、`action-queue-retry-<id>`、`action-queue-start`、`action-queue-pause`、`action-queue-clear`、`status-queue-ws`、`action-check-updates`、`action-update-all`、`list-update-results`、`item-update-<workshopId>`、`action-changelog-toggle-<workshopId>`、`status-changelog-full-<workshopId>`、`status-updates-current` |
+| rimsort | `action-rimsort-generate`、`status-rimsort-output`、`dropzone-rimsort`、`field-rimsort-file`、`status-rimsort-compare`、`action-rimsort-order`、`status-rimsort-order`、`action-missing-queue-<workshopId>` |
+| profiles | `action-profile-save`、`list-profiles`、`item-profile-<name>`、`action-profile-restore-<name>`、`action-profile-delete-<name>`、`status-profile-path`、`action-undo`、`status-undo`、`dialog-profile-save`、`field-profile-name`、`action-profile-save-confirm`、`dialog-profile-confirm` |
+| history | `action-history-refresh`、`action-history-clear`、`list-history`、`status-history-stats`、`action-auto-update`、`status-auto-update` |
+| backups | `field-backup-keep`、`action-backup-refresh`、`action-backup-cleanup`、`status-backup-dir`、`list-backups`、`item-backup-<workshopId>`、`status-backup-folder`、`action-backup-restore-<workshopId>`、`action-backup-versions-<workshopId>`、`list-backup-versions-<workshopId>`、`item-backup-version-<filename>`、`action-backup-restore-version-<filename>`、`action-backup-delete-<filename>` |
+| saves | `action-scan-saves`、`drop-saves-file`、`field-saves-upload`、`list-saves` |
+| tags | `list-tags`、`item-tag-<tag>`、`status-tags-detail`、`field-tag-folder`、`field-tag-name`、`action-tag-add`、`field-tag-rename`、`action-tag-rename`、`action-tag-delete`、`dialog-tag-delete` |
+| config | `list-instances`、`item-instance-<id>`、`action-instance-activate-<id>`、`action-instance-delete-<id>`、`field-new-instance-name`、`field-new-instance-mods`、`field-new-instance-rimworld`、`action-add-instance`、`status-config`、`field-steamcmd-path`、`field-mods-dir`、`field-rimworld-dir`、`field-backup-dir`、`action-save-config`、`action-check-steamcmd`、`status-steamcmd`、`action-export-bundle`、`field-import-bundle`、`field-export-include-backups`、`field-export-include-secrets`、`status-transfer`、`dialog-instance-delete` |
+| settings | `action-mod-settings-refresh`、`action-mod-settings-backup-all`、`status-settings`、`list-mod-settings`、`item-mod-setting-<filename>`、`action-mod-setting-edit-<filename>`、`action-mod-setting-restore-<filename>`、`dialog-mod-settings-editor`、`status-mod-settings-editor-title`、`field-mod-settings-xml`、`field-mod-settings-ack`、`action-mod-settings-save`、`action-mod-settings-restore-latest`、`action-mod-settings-close`、`list-mod-setting-backups`、`item-mod-backup-<filename>`、`action-mod-backup-restore-<filename>`、`dialog-mod-settings-restore` |
+
 ## 覆盖清单（wave 0a）
 
 | Panel | 测试文件 | 核心流程 |

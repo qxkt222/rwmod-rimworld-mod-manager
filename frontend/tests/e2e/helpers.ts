@@ -53,7 +53,7 @@ export async function clickDialogButton(page: Page, name: string, label: string)
 
 /** Assert a toast with the given text appeared in the toast container. */
 export async function expectToast(page: Page, text: string | RegExp): Promise<void> {
-  await expect(page.locator("#toast-container")).toContainText(text);
+  await expect(page.getByTestId("status-toasts")).toContainText(text);
 }
 
 /** Thin typed wrapper around Playwright's APIRequestContext. */

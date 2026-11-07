@@ -20,7 +20,7 @@ test.describe("import panel", () => {
     );
 
     await gotoPanel(page, backend, "import");
-    await page.locator("#import-file").setInputFiles({
+    await page.getByTestId("field-import-file").setInputFiles({
       name: "mods.txt",
       mimeType: "text/plain",
       buffer: Buffer.from("111\n222\n", "utf8"),
@@ -48,7 +48,7 @@ test.describe("import panel", () => {
     );
 
     await gotoPanel(page, backend, "import");
-    await page.locator("#import-sort").setInputFiles({
+    await page.getByTestId("field-import-sort").setInputFiles({
       name: "ModsConfig.xml",
       mimeType: "application/xml",
       buffer: Buffer.from("<ModsConfigData />", "utf8"),
@@ -67,7 +67,7 @@ test.describe("import panel", () => {
     );
 
     await gotoPanel(page, backend, "import");
-    await page.locator("#import-file").setInputFiles({
+    await page.getByTestId("field-import-file").setInputFiles({
       name: "mods.txt",
       mimeType: "text/plain",
       buffer: Buffer.from("111\n", "utf8"),

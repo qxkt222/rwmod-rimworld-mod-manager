@@ -6,9 +6,10 @@
  * the DOM, so switching tabs must not lose them). The generated XML is also
  * downloaded as `ModsConfig.xml`, exactly like the legacy panel.
  *
- * Legacy anchors kept for `rimsort.spec.ts`: `#btn-rimsort-generate`,
- * `#rimsort-output`, `#drop-zone-rimsort`, `#rimsort-file`,
- * `#rimsort-compare-result`, `#btn-rimsort-order`, `#rimsort-order-result`.
+ * Anchors are canonical testids: `action-rimsort-generate`,
+ * `status-rimsort-output`, `dropzone-rimsort`, `field-rimsort-file`,
+ * `status-rimsort-compare`, `action-rimsort-order` and
+ * `status-rimsort-order`. The legacy ids are gone.
  */
 import { useRef, useState } from "react";
 
@@ -102,7 +103,6 @@ export function RimsortPanel() {
           <button
             type="button"
             className="btn btn-primary btn-sm"
-            id="btn-rimsort-generate"
             data-testid="action-rimsort-generate"
             disabled={generateStatus === "loading"}
             onClick={() => void handleGenerate()}
@@ -115,7 +115,6 @@ export function RimsortPanel() {
         </div>
         {xml ? (
           <pre
-            id="rimsort-output"
             data-testid="status-rimsort-output"
             style={{
               maxHeight: 240,
@@ -136,7 +135,6 @@ export function RimsortPanel() {
         <div className="card-header">📋 对比 ModsConfig.xml</div>
         <label
           className={`file-drop${dragOver ? " drag-over" : ""}`}
-          id="drop-zone-rimsort"
           data-testid="dropzone-rimsort"
           onDragOver={(event) => {
             event.preventDefault();
@@ -157,7 +155,6 @@ export function RimsortPanel() {
           <input
             ref={fileRef}
             type="file"
-            id="rimsort-file"
             data-testid="field-rimsort-file"
             accept=".xml"
             onChange={(event) => handleFileChange(event.target.files)}
@@ -165,7 +162,6 @@ export function RimsortPanel() {
         </label>
 
         <div
-          id="rimsort-compare-result"
           data-testid="status-rimsort-compare"
           style={{ fontSize: 12, color: "var(--gray-text)", marginTop: 8 }}
         >
@@ -216,7 +212,6 @@ export function RimsortPanel() {
                           <button
                             type="button"
                             className="btn btn-primary btn-sm"
-                            data-wid={workshopId}
                             data-testid={`action-missing-queue-${workshopId}`}
                             onClick={() => void addMissingToQueue(workshopId)}
                           >
@@ -263,7 +258,6 @@ export function RimsortPanel() {
           <button
             type="button"
             className="btn btn-primary btn-sm"
-            id="btn-rimsort-order"
             data-testid="action-rimsort-order"
             disabled={orderStatus === "loading"}
             onClick={() => void handleOrderCheck()}
@@ -272,7 +266,6 @@ export function RimsortPanel() {
           </button>
         </div>
         <div
-          id="rimsort-order-result"
           data-testid="status-rimsort-order"
           style={{ fontSize: 12, color: "var(--gray-text)" }}
         >

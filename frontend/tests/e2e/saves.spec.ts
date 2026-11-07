@@ -19,13 +19,13 @@ test.describe("saves panel", () => {
   test("renders the empty scan state", async ({ page, backend }) => {
     await gotoPanel(page, backend, "saves");
 
-    await expect(page.locator("#saves-results")).toContainText("No save files found");
-    await expect(page.locator("#btn-scan-saves")).toBeVisible();
+    await expect(page.getByTestId("list-saves")).toContainText("No save files found");
+    await expect(page.getByTestId("action-scan-saves")).toBeVisible();
   });
 
   test("uploads a .rws file and reports the parsed mod count", async ({ page, backend }) => {
     await gotoPanel(page, backend, "saves");
-    await page.locator("#saves-file-upload").setInputFiles({
+    await page.getByTestId("field-saves-upload").setInputFiles({
       name: "sample.rws",
       mimeType: "application/xml",
       buffer: Buffer.from(SAVE_XML, "utf8"),
@@ -36,7 +36,7 @@ test.describe("saves panel", () => {
 
   test("scan button re-runs the scan", async ({ page, backend }) => {
     await gotoPanel(page, backend, "saves");
-    await page.locator("#btn-scan-saves").click();
-    await expect(page.locator("#saves-results")).toContainText("No save files found");
+    await page.getByTestId("action-scan-saves").click();
+    await expect(page.getByTestId("list-saves")).toContainText("No save files found");
   });
 });

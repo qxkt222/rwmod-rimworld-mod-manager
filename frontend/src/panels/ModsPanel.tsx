@@ -2,15 +2,16 @@
  * Mods panel — installed mods, health/compatibility badges, batch
  * enable/disable, the "only active" filter and collection export.
  *
- * Parity contract with the legacy `src/panels/mods.ts` / `main.ts` rendering
- * and `mods.spec.ts`: `#mod-list`, `#mod-count-label`, `#mods-only-active`,
- * `#btn-mods-select-all`, `#btn-mods-enable`, `#btn-mods-disable`,
- * `#btn-export-collection`, `.mod-row`, `.mod-select`, `data-folder`,
- * `data-active`, `.mod-active-badge`, `.health-badge`, `.compat-badge`,
- * `#btn-copy-ids`, `#btn-copy-md`, `#btn-collection-close`.
+ * Anchors are canonical testids: `status-mods-header`, `status-mod-count`,
+ * `list-mods`, `item-mod-<packageId|folder>`, `field-mod-select-<packageId>`,
+ * `field-mods-only-active`, `action-mods-select-all`, `action-mods-enable`,
+ * `action-mods-disable`, `action-export-collection`, `action-collection-copy-ids`,
+ * `action-collection-copy-markdown` and `action-collection-close`. The legacy
+ * ids/classes are gone.
  *
- * The sidebar's `#mod-count` badge is fed by the shared `mods` slice, so this
- * panel only renders the list and forwards mutations through the store.
+ * The sidebar's `status-sidebar-mods-count` badge is fed by the shared `mods`
+ * slice, so this panel only renders the list and forwards mutations through
+ * the store.
  */
 import { useCallback, useEffect, useState } from "react";
 
@@ -175,7 +176,6 @@ export function ModsPanel() {
     <div className="card" style={{ flex: 1, minHeight: 0 }}>
       <div
         className="card-header"
-        id="mods-header"
         style={{ justifyContent: "space-between" }}
         data-testid="status-mods-header"
       >
@@ -191,7 +191,6 @@ export function ModsPanel() {
           <button
             type="button"
             className="btn btn-ghost btn-sm"
-            id="btn-export-collection"
             data-testid="action-export-collection"
             disabled={exporting}
             onClick={() => void onExport()}
@@ -199,7 +198,6 @@ export function ModsPanel() {
             {exporting ? "⏳ 生成中..." : "📤 导出合集"}
           </button>
           <span
-            id="mod-count-label"
             data-testid="status-mod-count"
             style={{ fontWeight: 400, fontSize: 12, color: "var(--gray-text)" }}
           >
@@ -221,7 +219,6 @@ export function ModsPanel() {
         <label className="check-label" style={{ margin: 0 }}>
           <input
             type="checkbox"
-            id="mods-only-active"
             data-testid="field-mods-only-active"
             checked={onlyActive}
             onChange={(event) => setOnlyActive(event.target.checked)}
@@ -231,7 +228,6 @@ export function ModsPanel() {
         <button
           type="button"
           className="btn btn-ghost btn-sm"
-          id="btn-mods-select-all"
           data-testid="action-mods-select-all"
           onClick={toggleAll}
         >
@@ -240,7 +236,6 @@ export function ModsPanel() {
         <button
           type="button"
           className="btn btn-primary btn-sm"
-          id="btn-mods-enable"
           data-testid="action-mods-enable"
           onClick={() => void applyActive(true)}
         >
@@ -249,7 +244,6 @@ export function ModsPanel() {
         <button
           type="button"
           className="btn btn-ghost btn-sm"
-          id="btn-mods-disable"
           data-testid="action-mods-disable"
           onClick={() => void applyActive(false)}
         >
@@ -257,7 +251,7 @@ export function ModsPanel() {
         </button>
       </div>
 
-      <div id="mod-list" data-testid="list-mods" style={{ fontSize: 12 }}>
+      <div data-testid="list-mods" style={{ fontSize: 12 }}>
         {exportData ? (
           <div style={{ padding: 12 }} data-testid="status-collection-export">
             <div style={{ marginBottom: 12, display: "flex", gap: 8, alignItems: "center" }}>
@@ -265,7 +259,6 @@ export function ModsPanel() {
               <button
                 type="button"
                 className="btn btn-primary btn-sm"
-                id="btn-copy-ids"
                 data-testid="action-collection-copy-ids"
                 onClick={() =>
                   void copyText(
@@ -279,7 +272,6 @@ export function ModsPanel() {
               <button
                 type="button"
                 className="btn btn-ghost btn-sm"
-                id="btn-copy-md"
                 data-testid="action-collection-copy-markdown"
                 onClick={() => void copyText(exportData.markdown, "已复制 Markdown")}
               >
@@ -288,7 +280,6 @@ export function ModsPanel() {
               <button
                 type="button"
                 className="btn btn-ghost btn-sm"
-                id="btn-collection-close"
                 data-testid="action-collection-close"
                 onClick={() => setExportData(null)}
               >
@@ -347,15 +338,13 @@ export function ModsPanel() {
             <div
               className="mod-row"
               key={item.package_id || item.folder}
-              data-folder={item.folder}
               data-active={item.active ? "1" : "0"}
               data-testid={`item-mod-${item.package_id || item.folder}`}
               style={rowStyle}
             >
               <input
                 type="checkbox"
-                className="mod-select"
-                data-package-id={item.package_id}
+                data-testid={`field-mod-select-${item.package_id || item.folder}`}
                 title="选中以批量启用/禁用"
                 aria-label={`选择 ${item.name || item.folder}`}
                 checked={selectedIds.includes(item.package_id)}
