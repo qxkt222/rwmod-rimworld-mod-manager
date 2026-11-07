@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
+from typing import Any, cast
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
@@ -24,6 +26,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from rwmod import __version__
 from rwmod.database import close_db, init_db
 from rwmod.deps import get_autoupdate
 from rwmod.errors import RwmodError
@@ -101,7 +104,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title="rwmod Web",
-    version="0.7.0",
+    # pyproject.toml is the single source of truth; run_tests.py asserts that
+    # rwmod.__version__, this app version and rwmod.iss AppVersion all agree.
+    version=__version__,
     lifespan=lifespan,
     docs_url="/api/docs",
     openapi_url="/api/openapi.json",
@@ -139,7 +144,111 @@ def _custom_openapi() -> dict:
 
 app.openapi = _custom_openapi  # type: ignore[method-assign]  # documented FastAPI pattern
 
+# ── request body limits ────────────────────────────────────────────
+# The largest legitimate JSON body is a full ModsConfig.xml (a few hundred KB
+# for a 500-mod list); every other JSON payload is tiny. Without a cap a LAN
+# client can make the process buffer an arbitrarily large body and OOM it.
+# Multipart uploads keep their own, much larger per-endpoint limits.
+MAX_JSON_BODY_BYTES = 8 * 1024 * 1024
+
+# Browser WebSocket handshakes always carry Origin; a cross-site page must not
+# be able to subscribe to the queue feed. Localhost in any port is allowed
+# (matching the CORS policy) plus any same-origin request (LAN access is a
+# supported deployment).
+_LOCAL_ORIGIN_RE = re.compile(r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$", re.I)
+
+
+def _origin_allowed(origin: str, host: str) -> bool:
+    """True for a same-origin or loopback Origin header."""
+    if _LOCAL_ORIGIN_RE.match(origin):
+        return True
+    if host:
+        return origin.rstrip("/").split("://", 1)[-1].lower() == host.lower()
+    return False
+
+
+class JsonBodyLimitMiddleware:
+    """Cap ``application/json`` request bodies, chunked uploads included.
+
+    ``Content-Length`` is absent for a chunked body, so the cap cannot rely on
+    it; the body is drained here (at most ``max_bytes + 1`` bytes are kept) and
+    replayed to the application. Only JSON is affected — file uploads stream
+    through untouched and keep their endpoint-specific limits.
+    """
+
+    def __init__(self, app: Any, max_bytes: int = MAX_JSON_BODY_BYTES) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        content_type = ""
+        declared: int | None = None
+        for name, value in scope.get("headers", []):
+            if name == b"content-type":
+                content_type = value.decode("latin-1").lower()
+            elif name == b"content-length":
+                try:
+                    declared = int(value)
+                except ValueError:
+                    declared = None
+        if "application/json" not in content_type:
+            await self.app(scope, receive, send)
+            return
+        if declared is not None and declared > self.max_bytes:
+            await self._too_large(send)
+            return
+
+        body = b""
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                await self.app(scope, receive, send)
+                return
+            body += message.get("body", b"")
+            if len(body) > self.max_bytes:
+                await self._too_large(send)
+                return
+            if not message.get("more_body", False):
+                break
+
+        replayed = False
+
+        async def replay() -> dict[str, Any]:
+            nonlocal replayed
+            if not replayed:
+                replayed = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            return cast("dict[str, Any]", await receive())
+
+        await self.app(scope, replay, send)
+
+    async def _too_large(self, send: Any) -> None:
+        payload = json.dumps(
+            {
+                "error": "PayloadTooLarge",
+                "detail": f"请求体过大（上限 {self.max_bytes // (1024 * 1024)} MB）",
+            },
+            ensure_ascii=False,
+        ).encode("utf-8")
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 413,
+                "headers": [
+                    (b"content-type", b"application/json; charset=utf-8"),
+                    (b"content-length", str(len(payload)).encode("ascii")),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": payload})
+
+
 # ── middleware ─────────────────────────────────────────────────────
+app.add_middleware(JsonBodyLimitMiddleware)
 app.add_middleware(GZipMiddleware, minimum_size=500)
 app.add_middleware(
     CORSMiddleware,
@@ -310,7 +419,18 @@ def index() -> FileResponse:
 
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket) -> None:
-    """WebSocket for real-time status updates to frontend."""
+    """WebSocket for real-time status updates to frontend.
+
+    Browsers always send ``Origin`` on a WebSocket handshake, so a cross-site
+    page (or a DNS-rebinding host) is rejected here before it ever sees queue
+    data. Non-browser clients (CLI, tests, native shells) send no Origin and
+    are allowed — they are not a CSRF vector.
+    """
+    origin = ws.headers.get("origin")
+    if origin and not _origin_allowed(origin, ws.headers.get("host", "")):
+        _log.warning("拒绝跨站 WebSocket 握手: origin=%s", origin)
+        await ws.close(code=1008)
+        return
     await ws.accept()
     _ws_clients.add(ws)
     try:

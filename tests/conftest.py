@@ -144,6 +144,15 @@ def _isolate_user_paths(
     deps_mod._autoupdate = None
     rimpy_mod.RimPyDB._instance = None
 
+    # steamcmd_support keeps a process-global set of *pending* cancel requests
+    # (an id recorded before its batch reaches Popen). A test that cancels a
+    # fabricated queue item never dispatches a batch, so its marker would
+    # cancel the next test's download of the same workshop id. Reset it around
+    # every test, exactly like the live-process registries below.
+    import rwmod.steamcmd_support.procs as procs_mod
+
+    procs_mod._cancel_requests.clear()
+
     # rwmod.server calls init_logging() at import, attaching a RotatingFileHandler
     # for the real ~/.rwmod.log to the *root* logger. That handler survives later
     # LOG_PATH patches and would keep writing the developer's log from every
@@ -153,6 +162,7 @@ def _isolate_user_paths(
 
     yield
 
+    procs_mod._cancel_requests.clear()
     close_db()
 
 

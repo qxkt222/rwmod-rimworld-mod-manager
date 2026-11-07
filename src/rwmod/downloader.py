@@ -1,23 +1,55 @@
-"""Download + retry + copy-to-mods logic — with smart error handling."""
+"""Download + retry + copy-to-mods logic — with smart error handling.
+
+The implementation is organised under :mod:`rwmod.download` (outcomes, locks,
+install/rollback helpers, dependency collection, the single-mod state
+machine). This module keeps the historical ``rwmod.downloader`` import surface
+— every name below is re-exported — and owns the two orchestrators plus the
+helpers that callers and tests patch at this path (``SteamCMD``, discovery,
+``_install_content``, ``_skymods_fallback``).
+"""
 
 from __future__ import annotations
 
 import logging
 import random
 import shutil
-import threading
 import time
-from collections import deque
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
 from pathlib import Path
 
 from rwmod.config import Config
 from rwmod.database import find_local_mods_by_workshop_id, find_local_mods_by_workshop_ids
-from rwmod.steamcmd import DownloadResult, ErrorKind, SteamCMD
-from rwmod.utils import safe_filename
-from rwmod.xmlutil import parse_about_field
+from rwmod.download.core import _download_one_unlocked
+from rwmod.download.deps import _collect_deps
+from rwmod.download.install import (
+    _auto_restore_backup,
+    _cleanup_update_backups,
+    _discard_stash,
+    _persistent_backup,
+    _pick_folder_name,
+    _read_about_field,
+    _rollback_failed_install,
+    _rollback_stash,
+    _stash_for_overwrite,
+    _verify_install,
+)
+from rwmod.download.locks import (
+    _MOD_LOCKS_MAX,
+    _dest_lock_for,
+    _lock_for,
+    _mod_locks,
+    _mod_locks_guard,
+)
+from rwmod.download.outcomes import (
+    KIND_COLLECTION_EMPTY,
+    KIND_COLLECTION_PROBE_FAILED,
+    KIND_INSTALL_FAILED,
+    BatchResult,
+    DownloadOutcome,
+    explain_outcome,
+)
+from rwmod.steamcmd import ErrorKind, SteamCMD
 
 __all__ = [
     "download_one",
@@ -26,7 +58,39 @@ __all__ = [
     "BatchResult",
     "explain_outcome",
     "_find_existing",
+    "_find_existing_many",
     "_pick_folder_name",
+    "_read_about_field",
+    "_verify_install",
+    "_install_content",
+    "_stash_for_overwrite",
+    "_rollback_stash",
+    "_discard_stash",
+    "_auto_restore_backup",
+    "_rollback_failed_install",
+    "_persistent_backup",
+    "_cleanup_update_backups",
+    "_collect_deps",
+    "_classify_collection",
+    "_skymods_fallback",
+    "_lock_for",
+    "_dest_lock_for",
+    "_mod_locks",
+    "_mod_locks_guard",
+    "_MOD_LOCKS_MAX",
+    "_download_one_unlocked",
+    "_retry_delay",
+    "MAX_RETRIES",
+    "RETRY_DELAY",
+    "RETRY_BACKOFF",
+    "RETRY_JITTER",
+    "BATCH_SIZE",
+    "KIND_INSTALL_FAILED",
+    "KIND_COLLECTION_PROBE_FAILED",
+    "KIND_COLLECTION_EMPTY",
+    # Re-exported so callers/tests patching ``rwmod.downloader.SteamCMD`` keep
+    # working after the implementation moved into ``rwmod.download``.
+    "SteamCMD",
 ]
 
 _log = logging.getLogger(__name__)
@@ -51,89 +115,6 @@ def _retry_delay(attempt: int) -> float:
 BATCH_SIZE = 6
 # Copy / Skymods-fallback workers used after a batch download finishes.
 _BATCH_WORKERS = 4
-
-# Kinds produced by the downloader itself (not by SteamCMD's workshop log).
-# They live here rather than in steamcmd.ErrorKind because they describe our
-# pipeline, not a SteamCMD result line.
-KIND_INSTALL_FAILED = "install_failed"
-KIND_COLLECTION_PROBE_FAILED = "collection_probe_failed"
-KIND_COLLECTION_EMPTY = "collection_empty"
-
-_OUTCOME_HUMAN: dict[str, str] = {
-    KIND_INSTALL_FAILED: "下载完成但安装失败",
-    KIND_COLLECTION_PROBE_FAILED: "无法确认是否为合集（Steam API 不可用）",
-    KIND_COLLECTION_EMPTY: "合集为空或无法获取子项",
-}
-
-
-@dataclass(frozen=True)
-class DownloadOutcome:
-    """Structured result of one download, safe to surface in the queue/UI.
-
-    ``error_detail`` is for hover/tooltips and logs — keep it out of compact
-    UI rows. ``error_kind`` is a stable machine code (``ErrorKind.*`` or one
-    of the ``KIND_*`` constants above).
-    """
-
-    ok: bool
-    error_kind: str = ""
-    error_detail: str = ""
-
-
-class BatchResult(dict[str, bool]):
-    """``{mod_id: ok}`` plus the per-id structured outcomes.
-
-    A dict subclass so every existing caller that expects
-    ``dict[str, bool]`` keeps working; ``.outcomes`` carries the reasons.
-    Queue/router callers read ``.outcomes`` instead of taking a new keyword,
-    which also keeps older test doubles (plain dict returns) valid.
-    """
-
-    outcomes: dict[str, DownloadOutcome]
-
-    def __init__(
-        self,
-        ok: dict[str, bool],
-        outcomes: dict[str, DownloadOutcome],
-    ) -> None:
-        super().__init__(ok)
-        self.outcomes = outcomes
-
-
-def explain_outcome(kind: str) -> str:
-    """Human-readable, short reason for a download outcome kind."""
-    return _OUTCOME_HUMAN.get(kind) or ErrorKind.explain(kind)
-
-
-# Per-mod locks: concurrent downloads of the same mod are serialized so the
-# check-then-download sequence is atomic. Prevents TOCTOU races where two
-# workers download the same mod and corrupt each other.
-_mod_locks: dict[str, threading.Lock] = {}
-_mod_locks_guard = threading.Lock()
-
-
-# Cap on the per-mod lock dict so a long-running server (thousands of
-# distinct workshop IDs) does not grow it without bound.
-_MOD_LOCKS_MAX = 1024
-
-
-def _lock_for(mod_id: str) -> threading.Lock:
-    """Return (creating if needed) the per-mod lock."""
-    with _mod_locks_guard:
-        lock = _mod_locks.get(mod_id)
-        if lock is None:
-            lock = threading.Lock()
-            _mod_locks[mod_id] = lock
-            # Drop locks nobody is holding or waiting on when the dict grows
-            # past the cap. locked() is True while a thread holds OR waits on
-            # the lock, so in-use locks are never collected.
-            if len(_mod_locks) > _MOD_LOCKS_MAX:
-                stale = [k for k, lock2 in _mod_locks.items() if not lock2.locked()]
-                for k in stale:
-                    _mod_locks.pop(k, None)
-                    if len(_mod_locks) <= _MOD_LOCKS_MAX // 2:
-                        break
-        return lock
 
 
 def _instance_scope(config: Config) -> str | None:
@@ -262,143 +243,6 @@ def _classify_collection(mod_id: str) -> tuple[bool, bool]:
     return verdict, collection_probe_failed()
 
 
-def _read_about_field(mod_dir: Path, tag: str) -> str:
-    about = mod_dir / "About" / "About.xml"
-    if about.exists():
-        try:
-            return parse_about_field(about, tag) or ""
-        except Exception:
-            pass
-    return ""
-
-
-def _pick_folder_name(workshop_path: Path, mod_id: str) -> str:
-    pkg = _read_about_field(workshop_path, "packageId")
-    if pkg:
-        return safe_filename(pkg, allow_empty=False)
-    name = _read_about_field(workshop_path, "name")
-    if name:
-        return f"{safe_filename(name, allow_empty=False)}_{mod_id}"
-    return f"mod_{mod_id}"
-
-
-def _verify_install(dest: Path, mod_id: str) -> tuple[bool, str]:
-    """Check a freshly installed mod folder before declaring success.
-
-    P1-2: a copy that exists is not necessarily the item we asked for — a
-    truncated download, a wrong item, or an empty About.xml all looked like
-    success before. Returns ``(ok, reason)``.
-
-    ``PublishedFileId.txt`` is checked when present. Workshop content that
-    genuinely has no such file (older/manual uploads) is accepted rather than
-    rolled back; a *mismatch* is always a failure.
-    """
-    about = dest / "About" / "About.xml"
-    if not about.is_file():
-        return False, "安装后缺少 About/About.xml"
-    try:
-        if about.stat().st_size == 0:
-            return False, "安装后的 About.xml 为空"
-    except OSError as e:
-        return False, f"无法读取 About.xml: {e}"
-
-    published = dest / "About" / "PublishedFileId.txt"
-    if published.is_file():
-        try:
-            value = published.read_text(encoding="utf-8").strip()
-        except OSError as e:
-            return False, f"无法读取 PublishedFileId.txt: {e}"
-        if value != mod_id:
-            return False, f"PublishedFileId 不一致（{value} != {mod_id}）"
-
-    try:
-        if not any(p.is_file() for p in dest.rglob("*")):
-            return False, "安装内容为空"
-    except OSError as e:
-        return False, f"无法读取安装内容: {e}"
-    return True, ""
-
-
-def _persistent_backup(config: Config, mod_id: str, mod_dir: Path) -> Path | None:
-    """Zip the installed copy before a force overwrite (P1-2).
-
-    Unlike the stash (same-volume rename, lost if the process dies), this zip
-    survives the update and can be restored later. ``update_backup=False``
-    disables it. Failure never blocks the update.
-    """
-    if not bool(getattr(config, "update_backup", True)):
-        return None
-    try:
-        from rwmod.backup import backup_mod
-
-        return backup_mod(config.mods_dir, mod_id, mod_dir.name, config.backup_dir)
-    except Exception as e:  # noqa: BLE001 — backup is best-effort
-        _log.warning("更新前持久备份失败（继续更新）: %s", e)
-        return None
-
-
-def _cleanup_update_backups(config: Config) -> None:
-    """Keep at most ``backup_keep`` zips per mod (best effort)."""
-    try:
-        from rwmod.backup import cleanup_backups
-
-        keep = max(1, int(getattr(config, "backup_keep", 3)))
-        cleanup_backups(config.backup_dir, keep_per_mod=keep)
-    except Exception as e:  # noqa: BLE001 — cleanup must never fail the update
-        _log.debug("清理旧备份失败: %s", e)
-
-
-def _rollback_failed_install(
-    config: Config,
-    mod_id: str,
-    dest: Path,
-    stashed: Path | None,
-    backup_path: Path | None,
-) -> bool:
-    """Restore the old copy after a failed install. Order: stash → backup zip.
-
-    The failure may have left a partial/invalid copy at ``dest``; it must be
-    removed first or the stashed copy cannot be renamed back into place.
-    """
-    if dest.exists():
-        try:
-            shutil.rmtree(dest)
-        except OSError as e:
-            _log.warning("回滚前删除失败副本失败: %s", e)
-
-    if stashed is not None and stashed.exists():
-        try:
-            stashed.rename(dest)
-            _log.info("下载失败，已从暂存目录回滚: %s", dest.name)
-            return True
-        except OSError as e:
-            _log.warning("从暂存目录回滚失败: %s", e)
-
-    if backup_path is not None:
-        try:
-            from rwmod.backup import restore_mod
-
-            result = restore_mod(
-                config.mods_dir,
-                mod_id,
-                config.backup_dir,
-                backup_filename=backup_path.name,
-            )
-            if result.get("ok"):
-                _log.info("下载失败，已从更新前备份回滚: %s", backup_path.name)
-                return True
-            _log.warning("从更新前备份回滚失败: %s", result.get("msg"))
-        except Exception as e:  # noqa: BLE001 — rollback must never mask the error
-            _log.warning("从更新前备份回滚异常: %s", e)
-
-    # Last resort: newest backup for this mod. Only when this call actually
-    # had an old copy to restore (a caller that owns the stash, e.g. the
-    # single-mod path, restores it itself after this returns).
-    if stashed is not None or backup_path is not None:
-        _auto_restore_backup(config, mod_id)
-    return False
-
-
 def _install_content(
     config: Config,
     mod_id: str,
@@ -414,6 +258,10 @@ def _install_content(
     P1-2: a force overwrite takes a persistent zip backup first, and the
     copied folder must pass ``_verify_install`` before it counts as installed
     (or before ``set_last_updated`` is written).
+
+    The whole install runs under a lock keyed by the *destination folder*:
+    two workshop ids can share a packageId and therefore the same folder, and
+    a workshop-id lock let them delete/copy the shared folder concurrently.
     """
 
     def _fail(reason: str) -> bool:
@@ -435,51 +283,60 @@ def _install_content(
 
     folder_name = _pick_folder_name(workshop_dir, mod_id)
     dest = config.mods_dir / folder_name
-    if dest.exists() and not force:
-        _log.info("目标已存在: %s", dest)
+
+    with _dest_lock_for(dest):
+        if dest.exists() and not force:
+            _log.info("目标已存在: %s", dest)
+            return True
+
+        # Force-overwrite: rename the old copy aside instead of deleting it, so a
+        # failed copy below rolls back — the batch path (auto-update included)
+        # must not permanently lose the installed version. Same stash contract as
+        # the single-mod path in _download_one_unlocked. A persistent zip is taken
+        # first so the old version survives even a crash mid-update.
+        stashed: Path | None = None
+        backup_path: Path | None = None
+        if dest.exists():
+            backup_path = _persistent_backup(config, mod_id, dest)
+            stashed = _stash_for_overwrite(dest)
+            if stashed is None:
+                if backup_path is None:
+                    # No stash, no zip: deleting here would destroy the only
+                    # copy of the user's mod. Keep it and report the failure.
+                    _log.error("无法暂存旧版且无可用备份，保留旧版并取消安装: %s", dest.name)
+                    return _fail("无法暂存旧版且无可用备份，已保留旧版")
+                # The persistent zip can restore it if the copy fails.
+                try:
+                    shutil.rmtree(dest)
+                except OSError as e:
+                    _log.warning("删除旧版本失败（继续覆盖）: %s", e)
+
+        try:
+            shutil.copytree(workshop_dir, dest)
+        except OSError as e:
+            _log.error("复制下载内容失败: %s", e)
+            _rollback_failed_install(config, mod_id, dest, stashed, backup_path)
+            return _fail(f"复制下载内容失败: {e}")
+
+        ok, reason = _verify_install(dest, mod_id)
+        if not ok:
+            _log.error("安装校验失败: %s — %s", mod_id, reason)
+            _rollback_failed_install(config, mod_id, dest, stashed, backup_path)
+            return _fail(reason)
+
+        # Verification passed — only now record the install time in the metadata
+        # DB (best effort: a DB hiccup must never fail an otherwise-good install).
+        try:
+            from rwmod.database import set_last_updated
+
+            set_last_updated(folder_name, int(time.time()), instance_id=_instance_scope(config))
+        except Exception:  # noqa: BLE001 — timestamp is auxiliary data
+            _log.debug("写入安装时间戳失败: %s", folder_name)
+
+        _discard_stash(stashed)
+        if backup_path is not None:
+            _cleanup_update_backups(config)
         return True
-
-    # Force-overwrite: rename the old copy aside instead of deleting it, so a
-    # failed copy below rolls back — the batch path (auto-update included)
-    # must not permanently lose the installed version. Same stash contract as
-    # the single-mod path in _download_one_unlocked. A persistent zip is taken
-    # first so the old version survives even a crash mid-update.
-    stashed: Path | None = None
-    backup_path: Path | None = None
-    if dest.exists():
-        backup_path = _persistent_backup(config, mod_id, dest)
-        stashed = _stash_for_overwrite(dest)
-        if stashed is None:
-            # Could not rename the old copy aside (locked files?) — fall back
-            # to the previous delete-then-copy behaviour.
-            shutil.rmtree(dest)
-
-    try:
-        shutil.copytree(workshop_dir, dest)
-    except OSError as e:
-        _log.error("复制下载内容失败: %s", e)
-        _rollback_failed_install(config, mod_id, dest, stashed, backup_path)
-        return _fail(f"复制下载内容失败: {e}")
-
-    ok, reason = _verify_install(dest, mod_id)
-    if not ok:
-        _log.error("安装校验失败: %s — %s", mod_id, reason)
-        _rollback_failed_install(config, mod_id, dest, stashed, backup_path)
-        return _fail(reason)
-
-    # Verification passed — only now record the install time in the metadata
-    # DB (best effort: a DB hiccup must never fail an otherwise-good install).
-    try:
-        from rwmod.database import set_last_updated
-
-        set_last_updated(folder_name, int(time.time()), instance_id=_instance_scope(config))
-    except Exception:  # noqa: BLE001 — timestamp is auxiliary data
-        _log.debug("写入安装时间戳失败: %s", folder_name)
-
-    _discard_stash(stashed)
-    if backup_path is not None:
-        _cleanup_update_backups(config)
-    return True
 
 
 def download_batch(
@@ -618,7 +475,10 @@ def download_batch(
 
     # ── batch SteamCMD download (one process, one login) ──────────
     steamcmd = SteamCMD(config.steamcmd_path)
-    results = steamcmd.workshop_download_many(todo, progress_cb=progress_cb)
+    # Cancellation is scoped per installation: the batch registers under
+    # (iid, mod id) so cancelling another instance's copy of the same workshop
+    # id cannot kill this process.
+    results = steamcmd.workshop_download_many(todo, progress_cb=progress_cb, instance_id=iid)
     # Defensive: every requested id must have a result entry.
     for mid in todo:
         if mid not in results:
@@ -632,8 +492,14 @@ def download_batch(
 
     def _install(mid: str) -> bool:
         detail: list[str] = []
-        with _lock_for(mid):
+        try:
+            # _install_content serializes on the destination folder, not the
+            # workshop id — duplicate packageIds from different ids share it.
             ok = _install_content(config, mid, force, detail_out=detail)
+        except Exception as e:  # noqa: BLE001 — one bad mod must not sink the batch
+            _log.exception("安装 %s 时发生未预期异常", mid)
+            ok = False
+            detail.append(f"安装异常: {e}")
         if not ok:
             install_detail[mid] = detail[0] if detail else "安装失败"
         return ok
@@ -760,304 +626,6 @@ def download_one(
     return ok
 
 
-def _download_one_unlocked(
-    config: Config,
-    mod_id: str,
-    force: bool = False,
-    deferred: list[str] | None = None,
-    visited: set[str] | None = None,
-    outcome_out: list[DownloadOutcome] | None = None,
-) -> bool:
-    """Core download logic. Caller must already hold the per-mod lock.
-
-    ``deferred`` (when given) receives IDs of collection children /
-    dependencies that still need downloading; the caller processes them
-    after releasing the lock. ``outcome_out`` receives the structured result.
-    """
-    steamcmd = SteamCMD(config.steamcmd_path)
-
-    def _record(ok: bool, kind: str = "", detail: str = "") -> None:
-        if outcome_out is not None:
-            outcome_out.append(DownloadOutcome(ok=ok, error_kind=kind, error_detail=detail))
-
-    # Force-overwrite: the existing mod is renamed aside (not deleted) so a
-    # failed download can roll it back. Deleting first (the old rmtree) left
-    # a window where a failed download with no backup permanently lost the mod.
-    old_backed_up = False
-    iid = _instance_scope(config)
-    existing = _find_existing(config.mods_dir, mod_id, instance_id=iid)
-    stashed: Path | None = None
-    backup_path: Path | None = None
-    if existing:
-        if force:
-            # Persistent zip first (survives a crash), then the same-volume
-            # stash for a fast rollback.
-            backup_path = _persistent_backup(config, mod_id, existing)
-            stashed = _stash_for_overwrite(existing)
-            if stashed is not None:
-                old_backed_up = True
-            else:
-                _log.warning("暂存旧版失败（将以备份方式覆盖）")
-                try:
-                    from rwmod.backup import backup_mod
-
-                    if backup_mod(config.mods_dir, mod_id, existing.name, config.backup_dir):
-                        old_backed_up = True
-                except Exception as e2:  # noqa: BLE001
-                    _log.warning("备份失败: %s", e2)
-                shutil.rmtree(existing)
-        else:
-            _log.info("已安装: %s", existing.name)
-            _record(True, ErrorKind.OK, "已安装")
-            return True
-
-    def _restore_old_copy() -> None:
-        """Undo a force-overwrite stash after an aborted (non-SteamCMD) path.
-
-        The stash/backup above runs *before* collection detection, so an early
-        return from the collection block must put the old copy back — otherwise
-        a failed probe during a force update would leave the mod renamed aside
-        and the game without it.
-        """
-        if not old_backed_up:
-            return
-        if not _rollback_stash(config, mod_id, stashed):
-            _auto_restore_backup(config, mod_id)
-
-    # ── collection detection (Web API, no SteamCMD needed) ──────────
-    # SteamCMD cannot download collections — only individual mod files.
-    # If the probe itself fails we stop instead of falling through to SteamCMD:
-    # that fallback is exactly how a collection id ends up "downloaded" as a
-    # single mod (no About.xml → Skymods 403).
-    try:
-        from rwmod.workshop import fetch_collection_children
-
-        is_coll, probe_failed = _classify_collection(mod_id)
-        if probe_failed:
-            _log.error("无法确认 %s 是否为合集（Steam API 不可用），已停止下载", mod_id)
-            _restore_old_copy()
-            _record(False, KIND_COLLECTION_PROBE_FAILED, "无法确认是否为合集（Steam API 不可用）")
-            return False
-        if is_coll:
-            _log.info("检测到合集 ID: %s，获取子项...", mod_id)
-            children = fetch_collection_children(mod_id)
-            if not children:
-                _log.warning("合集 %s 为空或无法获取子项", mod_id)
-                _restore_old_copy()
-                _record(False, KIND_COLLECTION_EMPTY, "合集为空或无法获取子项")
-                return False
-            _log.info("合集包含 %s 个 Mod，交给锁外队列下载...", len(children))
-            if deferred is None:
-                # 无收集器（例如直接调用）时保持原行为：逐个递归下载
-                ok = 0
-                for i, cid in enumerate(children, 1):
-                    _log.info("[%s/%s] 合集子项 %s", i, len(children), cid)
-                    if download_one(config, cid, force=force, _visited=visited):
-                        ok += 1
-                if ok:
-                    _record(True, ErrorKind.OK, "")
-                    return True
-                _restore_old_copy()
-                _record(False, ErrorKind.UNKNOWN, "合集子项全部下载失败")
-                return False
-            for cid in children:
-                if force or not _find_existing(config.mods_dir, cid, instance_id=iid):
-                    deferred.append(cid)
-            # DL-6: "nothing left to download" is success, not failure. Every
-            # child already installed means the collection is satisfied; the
-            # caller (queue/router) must report done, not failed.
-            ok = True
-            _record(ok, ErrorKind.OK, "无待下载子项" if not deferred else "")
-            return ok
-    except Exception as e:
-        # Fail closed: an ambiguous probe must never become a SteamCMD download.
-        _log.error("合集探测失败，已停止下载 %s（不交给 SteamCMD）: %s", mod_id, e)
-        _restore_old_copy()
-        _record(False, KIND_COLLECTION_PROBE_FAILED, f"合集探测失败: {e}")
-        return False
-
-    last_result: DownloadResult | None = None
-
-    for attempt in range(1, MAX_RETRIES + 2):
-        _log.info("尝试 %s/%s...", attempt, MAX_RETRIES + 1)
-        result = steamcmd.workshop_download(mod_id)
-        last_result = result
-
-        # Log relevant output lines
-        for line in result.output_lines:
-            low = line.lower()
-            if any(kw in low for kw in ("download", "success", "error", "fail", "item")):
-                _log.info("  %s", line)
-
-        if result.success:
-            break
-
-        # The batch was killed by a user cancel — retrying would immediately
-        # undo the cancellation.
-        if result.error_kind == ErrorKind.CANCELLED:
-            _log.info("批次被取消，停止重试: %s", mod_id)
-            break
-
-        # Permanent errors → no point retrying
-        if result.error_kind in ErrorKind.NON_RETRYABLE:
-            _log.warning(
-                "不可重试错误 [%s]: %s",
-                result.error_kind,
-                result.error_detail or ErrorKind.explain(result.error_kind),
-            )
-            break
-
-        # Transient errors → retry with exponential backoff (5 → 15 → 45s).
-        if attempt <= MAX_RETRIES:
-            delay = _retry_delay(attempt)
-            _log.warning("SteamCMD 错误 [%s]，%.1fs 后重试...", result.error_kind, delay)
-            time.sleep(delay)
-
-    # ── handle successful download ───────────────────────────────
-    if last_result and last_result.success:
-        install_detail: list[str] = []
-        if not _install_content(config, mod_id, force, detail_out=install_detail):
-            reason = install_detail[0] if install_detail else "安装失败"
-            _log.warning("安装下载内容失败，尝试 Skymods: %s", mod_id)
-            if _skymods_fallback(config, mod_id):
-                _discard_stash(stashed)
-                if backup_path is not None:
-                    _cleanup_update_backups(config)
-                _record(True, ErrorKind.OK, "")
-                return True
-            if old_backed_up and existing is not None:
-                _rollback_failed_install(config, mod_id, existing, stashed, backup_path)
-            detail = reason
-            if bool(getattr(config, "enable_skymods", False)):
-                detail = f"{detail}；Skymods 备用源也失败"
-            _record(False, KIND_INSTALL_FAILED, detail)
-            return False
-        _log.info("下载完成: %s", mod_id)
-        # Force-overwrite succeeded — the stashed old copy is now obsolete.
-        _discard_stash(stashed)
-        if backup_path is not None:
-            _cleanup_update_backups(config)
-
-        # Auto-download dependencies (collected, downloaded outside the lock)
-        _collect_deps(config, mod_id, deferred)
-        _record(True, ErrorKind.OK, "")
-        return True
-
-    # ── handle failure ───────────────────────────────────────────
-    if last_result:
-        err_msg = last_result.error_detail or ErrorKind.explain(last_result.error_kind)
-        _log.error("下载失败: %s — %s", mod_id, err_msg)
-
-    # Only try Skymods if the error is potentially recoverable and the source
-    # is enabled (it is opt-in; smods.ru answers plain urllib with a 403).
-    skymods_attempted = False
-    if (
-        last_result
-        and last_result.error_kind not in ErrorKind.NON_RETRYABLE
-        and last_result.error_kind != ErrorKind.CANCELLED
-        and bool(getattr(config, "enable_skymods", False))
-    ):
-        skymods_attempted = True
-        if _skymods_fallback(config, mod_id):
-            # Skymods installed a copy — the force-overwrite stash is obsolete.
-            _discard_stash(stashed)
-            _record(True, ErrorKind.OK, "")
-            return True
-
-    # For non-retryable errors, explain clearly and skip Skymods; a user
-    # cancel is not an error worth a ❌ line.
-    if last_result and last_result.error_kind == ErrorKind.CANCELLED:
-        _log.info("下载已取消: %s", mod_id)
-    elif last_result:
-        _log.error(
-            "❌ %s (%s): %s — 已跳过 Skymods（错误不可恢复）",
-            mod_id,
-            last_result.error_kind,
-            err_msg,
-        )
-    else:
-        _log.error("❌ %s: 下载失败", mod_id)
-
-    # force 覆盖时旧版已被移开——下载失败则按 stash → 更新前备份的顺序回滚。
-    if old_backed_up and existing is not None:
-        _rollback_failed_install(config, mod_id, existing, stashed, backup_path)
-    if last_result:
-        detail = err_msg
-        if skymods_attempted:
-            detail = f"{detail}；Skymods 备用源也失败"
-        _record(False, last_result.error_kind, detail)
-    else:
-        _record(False, ErrorKind.UNKNOWN, "下载失败")
-    return False
-
-
-def _stash_for_overwrite(dest: Path) -> Path | None:
-    """Rename *dest* aside before a force-overwrite.
-
-    Returns the stash path (``.rwmod_stash_<name>_<timestamp>`` next to the
-    original), or None when the rename itself failed — the caller then falls
-    back to the old delete-then-copy behaviour.
-    """
-    stashed = dest.parent / (
-        f".rwmod_stash_{safe_filename(dest.name, allow_empty=False)}_{int(time.time())}"
-    )
-    try:
-        dest.rename(stashed)
-    except OSError as e:
-        _log.warning("暂存旧版失败: %s", e)
-        return None
-    _log.info("覆盖前暂存旧版: %s → %s", dest.name, stashed.name)
-    return stashed
-
-
-def _rollback_stash(config: Config, mod_id: str, stashed: Path | None) -> bool:
-    """Put a force-overwrite's stashed old copy back into place.
-
-    Returns True if the stash existed and was restored (or the mod was
-    already re-installed by the failed download's partial copy).
-    """
-    if stashed is None or not stashed.exists():
-        return False
-    dest = config.mods_dir / stashed.name[len(".rwmod_stash_") :].rsplit("_", 1)[0]
-    if dest.exists():
-        # A partial copy landed in the final location — drop the stash, the
-        # download did install something.
-        _discard_stash(stashed)
-        return True
-    try:
-        stashed.rename(dest)
-        _log.info("下载失败，已自动回滚旧版: %s", dest.name)
-        return True
-    except OSError as e:
-        _log.warning("下载失败且回滚暂存目录失败: %s", e)
-        return False
-
-
-def _discard_stash(stashed: Path | None) -> None:
-    """Remove a force-overwrite stash once it is obsolete."""
-    if stashed is None:
-        return
-    try:
-        if stashed.exists():
-            shutil.rmtree(stashed)
-    except OSError as e:
-        _log.warning("清理暂存目录失败: %s", e)
-
-
-def _auto_restore_backup(config: Config, mod_id: str) -> None:
-    """Roll back to the most recent backup after a failed force reinstall."""
-    try:
-        from rwmod.backup import restore_mod
-
-        result = restore_mod(config.mods_dir, mod_id, config.backup_dir)
-        if result.get("ok"):
-            _log.info("下载失败，已自动回滚备份: %s", mod_id)
-        else:
-            _log.warning("下载失败且自动回滚失败: %s", result.get("msg"))
-    except Exception as e:  # noqa: BLE001 — rollback must never mask the error
-        _log.warning("下载失败后自动回滚异常: %s", e)
-
-
 def _skymods_fallback(config: Config, mod_id: str) -> bool:
     """Try Skymods as fallback source (opt-in, circuit-broken)."""
     if not bool(getattr(config, "enable_skymods", False)):
@@ -1075,48 +643,3 @@ def _skymods_fallback(config: Config, mod_id: str) -> bool:
         return True
     _log.error("Skymods 备用源也失败: %s", mod_id)
     return False
-
-
-def _collect_deps(config: Config, mod_id: str, deferred: list[str] | None) -> None:
-    """Collect not-yet-installed dependencies of a freshly installed mod.
-
-    Uses a breadth-first traversal so transitive dependencies (a dependency's
-    own dependencies) are also fetched, not just the direct ones. A visited
-    set prevents infinite loops on cyclic dependency graphs.
-
-    The Steam API query is done **per BFS level** (fetch_item_dependencies
-    accepts many ids in one GetPublishedFileDetails call), so a mod with
-    dozens of dependencies costs a handful of requests instead of one per
-    dependency.
-
-    Collected IDs are appended to ``deferred`` and downloaded by the caller
-    AFTER the per-mod lock is released (see download_one).
-    """
-    try:
-        from rwmod.workshop import fetch_item_dependencies
-
-        queue: deque[str] = deque([mod_id])
-        queued: set[str] = {mod_id}  # ids already queued / decided (dedupe)
-        while queue:
-            # Drain the whole current level, then query it in ONE API call.
-            level: list[str] = []
-            while queue:
-                current = queue.popleft()
-                level.append(current)
-            if not level:
-                continue
-            deps_map = fetch_item_dependencies(level)
-            for current in level:
-                for dep_id in deps_map.get(current, []):
-                    if dep_id in queued:
-                        continue
-                    if _find_existing(config.mods_dir, dep_id, instance_id=_instance_scope(config)):
-                        queued.add(dep_id)
-                        continue
-                    _log.info("收集依赖: %s", dep_id)
-                    if deferred is not None:
-                        deferred.append(dep_id)
-                    queued.add(dep_id)
-                    queue.append(dep_id)
-    except Exception as e:
-        _log.warning("依赖检测失败: %s", e)

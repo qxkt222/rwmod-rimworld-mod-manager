@@ -52,7 +52,11 @@ def get_or_refresh_metas(mods_dir: Path, instance_id: str | None = None) -> list
     """
     iid = instance_id or resolve_instance_id(mods_dir)
     if not mods_dir.exists():
-        _clear_all(iid)
+        # A temporarily unavailable directory (unplugged drive, network share
+        # offline, permissions flap) must not wipe the metadata cache: the
+        # "deleted mods" reconciliation below would permanently forget every
+        # mod, so the next /updates scan would report nothing. Report an empty
+        # listing and leave the rows intact.
         return []
 
     db = get_conn()

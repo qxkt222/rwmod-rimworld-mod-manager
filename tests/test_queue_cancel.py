@@ -47,7 +47,9 @@ class TestQueueCancel:
         q.items.append(item)
         assert q.remove("123")
         assert item.status == "cancelled"
-        assert "123" in q._cancelled
+        # Cancel markers are keyed by (instance_id, workshop id) so the same
+        # workshop id downloading for two installations cannot cross-cancel.
+        assert ("default", "123") in q._cancelled
 
     def test_remove_pending_pops_item(self):
         q = DownloadQueue()
@@ -89,7 +91,8 @@ class TestQueueCancel:
         cfg = Config(steamcmd_path=tmp_path / "steamcmd.exe", mods_dir=tmp_path)
 
         def _cancel_during_download(*args: object, **kwargs: object) -> dict[str, bool]:
-            q._cancelled.add("123")
+            # Same key shape remove() uses: (instance_id, workshop id).
+            q._cancelled.add(("default", "123"))
             return {"123": True}
 
         with patch("rwmod.queue.download_batch", side_effect=_cancel_during_download):

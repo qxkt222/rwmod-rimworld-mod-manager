@@ -17,6 +17,7 @@ from rwmod.mod_rules import (
     CORE_PACKAGE_ID,
     OFFICIAL_PACKAGE_IDS,
     build_package_id_index,
+    is_official_package_id,
     load_user_rules,
     merge_rule_sources,
     normalize_package_id,
@@ -186,23 +187,28 @@ def compare_modsconfig(modsconfig_path: Path, mods_dir: Path) -> dict:
     config_norms = {normalize_package_id(pid) for pid in active_mods}
     installed_by_norm = build_package_id_index(installed_package_ids(mods_dir))
 
-    # Core is RimWorld's built-in mod — it lives in the game's Data/Core
-    # folder, not in mods_dir, so it must never be reported as missing. Both
-    # the folder name ("Core") and Core's real packageId are accepted;
-    # packageIds are compared case-insensitively (PARSE-7).
+    # Core and every official DLC ship in the game's Data/ folder, not in
+    # mods_dir, so they must never be reported as missing. Both the folder
+    # name ("Core") and Core's real packageId are accepted (PARSE-7);
+    # ``is_official_package_id`` covers the DLC packageIds as well — a real
+    # 522-mod ModsConfig reported exactly five false "missing" entries, one
+    # per installed DLC.
     core_norms = {normalize_package_id("Core"), normalize_package_id(CORE_PACKAGE_ID)}
+
+    def _is_official(norm: str) -> bool:
+        return norm in core_norms or is_official_package_id(norm)
 
     missing = [
         pid
         for pid in active_mods
         if normalize_package_id(pid) not in installed_by_norm
-        and normalize_package_id(pid) not in core_norms
+        and not _is_official(normalize_package_id(pid))
     ]
-    # Core is RimWorld's built-in mod — never report it as "extra" either.
+    # Official content is never "extra" either.
     extra = [
         pid
         for norm, pid in installed_by_norm.items()
-        if norm not in config_norms and norm not in core_norms
+        if norm not in config_norms and not _is_official(norm)
     ]
     installed_list = [pid for norm, pid in installed_by_norm.items() if norm in config_norms]
 

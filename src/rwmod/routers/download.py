@@ -152,13 +152,19 @@ def _reject_oversized(file: UploadFile) -> None:
         raise HTTPException(413, f"文件过大（上限 {MAX_UPLOAD_BYTES // 1024} KB）")
 
 
-async def _read_modlist(file: UploadFile) -> str:
+async def _read_modlist(file: UploadFile) -> bytes:
     """Read an uploaded modlist, enforcing MAX_UPLOAD_BYTES regardless of
-    whether the client sent a Content-Length."""
+    whether the client sent a Content-Length.
+
+    Returns raw bytes on purpose: decoding here as strict UTF-8 made any
+    GBK/ANSI modlist (the common case on a Chinese Windows install) raise
+    ``UnicodeDecodeError`` → 500. ``parse_modlist_file`` already tries
+    utf-8-sig / gbk / latin-1, so the bytes are handed over untouched.
+    """
     content = await read_upload_limited(file, MAX_UPLOAD_BYTES)
     if content is None:
         raise HTTPException(413, f"文件过大（上限 {MAX_UPLOAD_BYTES // 1024} KB）")
-    return content.decode("utf-8")
+    return content
 
 
 @router.post("/download")
@@ -418,7 +424,7 @@ async def import_file(
     cfg.validate()
     _reject_oversized(file)
     content = await _read_modlist(file)
-    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as f:
+    with tempfile.NamedTemporaryFile("wb", suffix=".txt", delete=False) as f:
         f.write(content)
         tmp = f.name
     try:
@@ -481,23 +487,43 @@ async def import_sort_api(
         f.write(content)
         tmp = f.name
     try:
-        package_ids = parse_mods_config(Path(tmp))
-        installed = get_installed_package_ids(cfg.mods_dir)
-        missing = [pid for pid in package_ids if pid not in installed]
-        known, unknown = resolve_workshop_ids(missing, cfg.mods_dir)
+        # Two full Mods-directory scans (parse About.xml for every installed
+        # mod, then the packageId→workshop_id map) are CPU + disk heavy; they
+        # must not run on the event loop.
+        total_packages, missing_count, known, unknown = await asyncio.to_thread(
+            _analyze_modlist, Path(tmp), cfg.mods_dir
+        )
         results = []
         for mid in known:
             ok = await _bounded_download(cfg, mid, force)
             results.append({"id": mid, "ok": ok})
         return {
-            "total_packages": len(package_ids),
-            "missing": len(missing),
+            "total_packages": total_packages,
+            "missing": missing_count,
             "unknown": unknown,
             "downloaded": len(results),
             "results": results,
         }
     finally:
         Path(tmp).unlink(missing_ok=True)
+
+
+def _analyze_modlist(config_xml: Path, mods_dir: Path) -> tuple[int, int, list[str], list[str]]:
+    """Blocking half of /import/sort — run it in a worker thread.
+
+    Returns (total_packages, missing_count, known_workshop_ids,
+    unknown_package_ids). packageIds are compared case-insensitively: RimWorld
+    lowercases what it writes into ModsConfig.xml while About.xml keeps the
+    author's camelCase, so a raw ``in`` check reported installed mods as
+    missing and re-downloaded them.
+    """
+    from rwmod.metadata import package_id_key
+
+    package_ids = parse_mods_config(config_xml)
+    installed = {package_id_key(pid) for pid in get_installed_package_ids(mods_dir)}
+    missing = [pid for pid in package_ids if package_id_key(pid) not in installed]
+    known, unknown = resolve_workshop_ids(missing, mods_dir)
+    return len(package_ids), len(missing), known, unknown
 
 
 def _sse_event(event: str, **kwargs) -> str:

@@ -23,6 +23,9 @@ class AutoUpdateManager:
         self._running: bool = False
         self._bg_task: asyncio.Task[None] | None = None
         self._on_update: list[Callable[[list[dict]], None]] = []
+        #: Why the most recent check failed ("" after a successful check).
+        #: A failed check must never look like "no updates available".
+        self._last_error: str = ""
 
     def on_update(self, callback: Callable[[list[dict]], None]) -> None:
         """Register a callback invoked when new updates are discovered."""
@@ -48,6 +51,11 @@ class AutoUpdateManager:
     def is_running(self) -> bool:
         return self._running
 
+    @property
+    def last_error(self) -> str:
+        """Reason the most recent update check failed, or "" when it succeeded."""
+        return self._last_error
+
     async def start_background(self) -> None:
         if self._bg_task is None or self._bg_task.done():
             self._bg_task = asyncio.create_task(self._loop())
@@ -64,6 +72,7 @@ class AutoUpdateManager:
             return {"ok": False, "msg": "已在运行中"}
 
         self._running = True
+        self._last_error = ""
         try:
             cfg = Config.load()
             from rwmod.workshop import check_mod_updates
@@ -95,6 +104,13 @@ class AutoUpdateManager:
                 "queued": queued,
             }
 
+        except Exception as e:
+            # Surface the failure instead of returning checked=0/outdated=0,
+            # which the UI rendered as "everything is up to date".
+            self._last_error = str(e) or type(e).__name__
+            _log.error("更新检查失败: %s", self._last_error)
+            raise
+
         finally:
             self._running = False
 
@@ -116,6 +132,9 @@ class AutoUpdateManager:
                     self._notify(updates)
                 else:
                     _log.info("所有 Mod 均为最新")
+                self._last_error = ""
 
             except Exception as e:
-                _log.error("后台更新检查失败: %s", e)
+                # Keep the reason visible; a failed check is not "no updates".
+                self._last_error = str(e) or type(e).__name__
+                _log.error("后台更新检查失败: %s", self._last_error)

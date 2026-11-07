@@ -19,6 +19,14 @@ from rwmod.mod_settings import (
     restore_backup,
     write_mod_setting,
 )
+from rwmod.models.schemas import (
+    ModSettingBackupAllResponse,
+    ModSettingBackupListResponse,
+    ModSettingContentResponse,
+    ModSettingRestoreResponse,
+    ModSettingsListResponse,
+    ModSettingWriteResponse,
+)
 
 router = APIRouter(prefix="/api/mod-settings", tags=["mod-settings"])
 
@@ -41,26 +49,26 @@ class ModSettingRestoreRequest(BaseModel):
 # mistaken for a settings file name.
 
 
-@router.get("")
+@router.get("", response_model=ModSettingsListResponse)
 def api_list_mod_settings(
     cfg: Config = Depends(get_config),
 ):
     return list_mod_settings(cfg.config_dir, cfg.mods_dir)
 
 
-@router.get("/backups")
+@router.get("/backups", response_model=ModSettingBackupListResponse)
 def api_list_mod_setting_backups():
     return list_backups()
 
 
-@router.post("/backup-all")
+@router.post("/backup-all", response_model=ModSettingBackupAllResponse)
 def api_backup_all_mod_settings(
     cfg: Config = Depends(get_config),
 ):
     return backup_all(cfg.config_dir)
 
 
-@router.get("/{filename}")
+@router.get("/{filename}", response_model=ModSettingContentResponse)
 def api_get_mod_setting(
     filename: str,
     cfg: Config = Depends(get_config),
@@ -68,7 +76,7 @@ def api_get_mod_setting(
     return read_mod_setting(filename, cfg.config_dir)
 
 
-@router.put("/{filename}")
+@router.put("/{filename}", response_model=ModSettingWriteResponse)
 def api_put_mod_setting(
     filename: str,
     payload: ModSettingWriteRequest,
@@ -82,7 +90,7 @@ def api_put_mod_setting(
     )
 
 
-@router.post("/{filename}/restore")
+@router.post("/{filename}/restore", response_model=ModSettingRestoreResponse)
 def api_restore_mod_setting(
     filename: str,
     payload: ModSettingRestoreRequest,

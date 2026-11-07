@@ -16,9 +16,9 @@ from rwmod.metadata import package_id_key, read_mod_metadata
 from rwmod.mod_cache import get_cached_mods
 from rwmod.mod_health_check import get_health
 from rwmod.mod_sizes import get_sizes, is_pending
-from rwmod.models.schemas import DownloadRequest, FoldersRequest
+from rwmod.models.schemas import DownloadRequest, FoldersRequest, ModListItem
 from rwmod.routers.download import _dl_semaphore
-from rwmod.utils import extract_mod_id, read_upload_limited
+from rwmod.utils import extract_mod_id
 from rwmod.workshop import check_mod_updates
 
 router = APIRouter(prefix="/api/mods", tags=["mods"])
@@ -47,6 +47,29 @@ def _reject_oversized_mod(file: UploadFile) -> None:
         raise HTTPException(413, f"文件过大（上限 {_MAX_MOD_ZIP_BYTES // (1024 * 1024)} MB）")
 
 
+_UPLOAD_CHUNK = 1024 * 1024  # 1 MB
+
+
+def _save_upload_limited(file: UploadFile, path: Path, max_bytes: int) -> None:
+    """Stream an upload to *path* with a hard byte cap.
+
+    ``UploadFile.size`` is None for a chunked upload, and the previous
+    implementation buffered the whole body in memory twice (the ``bytes`` and
+    ZipFile's copy), so a 2 GB mod zip peaked above 4 GB RSS. Streaming to disk
+    keeps the process flat regardless of archive size.
+    """
+    total = 0
+    with path.open("wb") as fh:
+        while True:
+            chunk = file.file.read(_UPLOAD_CHUNK)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                raise HTTPException(413, f"文件过大（上限 {max_bytes // (1024 * 1024)} MB）")
+            fh.write(chunk)
+
+
 # ── lightweight in-memory cache ───────────────────────────────────
 # Keyed by mods_dir so switching config directories doesn't reuse stale data.
 # Only the cheap part (metadata + tags) is cached here; disk sizes come from
@@ -71,10 +94,17 @@ def _cached_mod_list(cfg: Config) -> list[dict]:
 
     # Batch-load all folder→tags mappings in ONE query (avoids N+1
     # per-mod get_tags() calls — a massive speedup for hundreds of mods).
+    # Scoped to the instance that owns this mods_dir: two installations may
+    # both contain a folder called "Core" with unrelated tags, and the old
+    # unfiltered query showed one install's tags on the other's mods.
+    from rwmod.config import resolve_instance_id
     from rwmod.database import get_conn
 
     db = get_conn()
-    rows = db.execute("SELECT folder, tag FROM mod_tags ORDER BY folder, tag").fetchall()
+    rows = db.execute(
+        "SELECT folder, tag FROM mod_tags WHERE instance_id = ? ORDER BY folder, tag",
+        (resolve_instance_id(cfg.mods_dir),),
+    ).fetchall()
     tags_by_folder: dict[str, list[str]] = {}
     for r in rows:
         tags_by_folder.setdefault(r["folder"], []).append(r["tag"])
@@ -133,7 +163,7 @@ def _active_package_keys(cfg: Config) -> set[str]:
         return set()
 
 
-@router.get("")
+@router.get("", response_model=list[ModListItem])
 def list_mods(
     cfg: Config = Depends(get_config),
 ):
@@ -296,23 +326,28 @@ async def import_local_mod(
         raise HTTPException(400, "请上传 .zip 文件")
     _reject_oversized_mod(file)
 
-    content = await read_upload_limited(file, _MAX_MOD_ZIP_BYTES)
-    if content is None:
-        raise HTTPException(413, f"文件过大（上限 {_MAX_MOD_ZIP_BYTES // (1024 * 1024)} MB）")
-    if not content:
-        raise HTTPException(400, "文件为空")
+    # Stream the body to a temp file on disk (never into RAM), then let
+    # ZipFile read it by path. Decompression + copy is CPU/disk heavy, so it
+    # runs off the event loop; a multi-GB import can neither OOM nor freeze
+    # the server.
+    import tempfile
 
-    # Decompression + copy is CPU/disk heavy — run it off the event loop so a
-    # multi-GB import can never freeze the server.
-    return await asyncio.to_thread(_import_local_sync, content, cfg)
+    with tempfile.NamedTemporaryFile("wb", suffix=".zip", delete=False) as fh:
+        upload_path = Path(fh.name)
+    try:
+        await asyncio.to_thread(_save_upload_limited, file, upload_path, _MAX_MOD_ZIP_BYTES)
+        if upload_path.stat().st_size == 0:
+            raise HTTPException(400, "文件为空")
+        return await asyncio.to_thread(_import_local_sync, upload_path, cfg)
+    finally:
+        upload_path.unlink(missing_ok=True)
 
 
-def _import_local_sync(content: bytes, cfg: Config) -> dict:
+def _import_local_sync(zip_path: Path, cfg: Config) -> dict:
     """Validate + extract an uploaded mod zip (blocking; run in a thread)."""
     import shutil
     import tempfile
     import zipfile
-    from pathlib import Path
 
     from rwmod.utils import safe_extract_zip
 
@@ -323,7 +358,7 @@ def _import_local_sync(content: bytes, cfg: Config) -> dict:
         # API-7: a corrupt / hostile zip raises BadZipFile (documented); it
         # must become the standard 400 error body, not an unhandled 500.
         try:
-            with zipfile.ZipFile(__import__("io").BytesIO(content), "r") as zf:
+            with zipfile.ZipFile(zip_path, "r") as zf:
                 safe_extract_zip(zf, tmp_dir)
         except (zipfile.BadZipFile, ValueError) as e:
             raise ValidationError(f"压缩包损坏或不安全: {e}") from None

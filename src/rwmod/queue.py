@@ -75,12 +75,15 @@ class DownloadQueue:
     _paused: bool = False
     _semaphore: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(MAX_CONCURRENT))
     _callbacks: list[Callable] = field(default_factory=list)
-    # Workshop IDs whose in-flight download should be treated as cancelled.
-    # Only remove()-ing an item that is actually *downloading* adds an id here;
-    # the marker is consumed (discarded) by _process_batch at its next
-    # checkpoint, and any stale marker is dropped when the item's lifecycle
-    # ends (remove/clear_done/add) — the set never grows forever.
-    _cancelled: set[str] = field(default_factory=set)
+    # ``(instance_id, workshop id)`` pairs whose in-flight download should be
+    # treated as cancelled. Scoped by instance: the same workshop id may be
+    # downloading for two installations at once, and cancelling one must not
+    # abort the other. Only remove()-ing an item that is actually
+    # *downloading* adds a pair here; the marker is consumed (discarded) by
+    # _process_batch at its next checkpoint, and any stale marker is dropped
+    # when the item's lifecycle ends (remove/clear_done/add) — the set never
+    # grows forever.
+    _cancelled: set[tuple[str, str]] = field(default_factory=set)
     # (instance_id, workshop id) pairs already dispatched by the worker during
     # the current drain episode. Auto-collected collection children /
     # dependencies are only queued once per episode, so a cyclic collection or
@@ -119,6 +122,33 @@ class DownloadQueue:
         if item.instance_id:
             return item.instance_id
         return self._config.active_instance if self._config is not None else "default"
+
+    def _cancel_key(self, item: QueueItem) -> tuple[str, str]:
+        """Key of one item's cancel marker: ``(instance_id, workshop id)``."""
+        return (self._item_instance(item), item.id)
+
+    @staticmethod
+    def _forget_steamcmd_cancel(instance_id: str, mod_id: str) -> None:
+        """Drop a SteamCMD cancel request that no batch will ever consume.
+
+        ``remove()`` records a ``(instance, id)`` request so a batch still
+        probing / waiting for the global run lock aborts before spawning. If
+        the queue drops the item *itself* before dispatching, no batch sees
+        that pair — the leftover request would cancel a later, unrelated
+        download of the same workshop id for that instance. Forget it at the
+        same checkpoint that drops the item.
+        """
+        try:
+            from rwmod import steamcmd
+
+            # Private on purpose: this is the only hook that clears a request
+            # the batch will never consume. getattr keeps mypy honest about the
+            # public surface while tolerating its absence on an older build.
+            forget = getattr(steamcmd, "_forget_cancel_requests", None)
+            if forget is not None:
+                forget(instance_id, [mod_id])
+        except Exception:  # noqa: BLE001 — cancellation cleanup must never fail
+            pass
 
     def _config_for(self, instance_id: str) -> Config:
         """Return a Config whose flat properties point at *instance_id*.
@@ -204,7 +234,7 @@ class DownloadQueue:
                 # Any cancel marker left over from this id's previous life is
                 # meaningless for a freshly queued item — drop it so re-adding
                 # can never be cancelled by stale state (DL-5).
-                self._cancelled.discard(mid)
+                self._cancelled.discard((iid, mid))
                 item = QueueItem(id=mid, force=force, instance_id=iid)
                 self.items.append(item)
                 new_items.append(item)
@@ -222,8 +252,13 @@ class DownloadQueue:
             with contextlib.suppress(RuntimeError):
                 loop.call_soon_threadsafe(self._wake.set)
 
-    def remove(self, mod_id: str) -> bool:
+    def remove(self, mod_id: str, instance_id: str | None = None) -> bool:
         """Remove a queue item (or cancel an in-flight download).
+
+        ``instance_id`` disambiguates the same workshop id queued for two
+        installations; when omitted the first matching item is used (the old
+        behaviour). Cancel markers are keyed by ``(instance, id)``, so
+        cancelling alpha's copy never aborts beta's in-flight download.
 
         For a *pending* item it is removed entirely; a *downloading* item is
         marked cancelled and kept in the list so the UI shows the cancellation.
@@ -240,30 +275,40 @@ class DownloadQueue:
         removed_item: QueueItem | None = None
         with self._items_lock:
             for i, item in enumerate(self.items):
-                if item.id == mod_id:
-                    if item.status == "downloading":
-                        self._cancelled.add(mod_id)
-                        item.status = "cancelled"
-                        item.msg = "已取消（正在终止 SteamCMD）"
-                        item.error_kind = ""
-                        item.error_detail = ""
-                        cancelled_item = item
-                    else:
-                        # No in-flight download to discard: drop any stale
-                        # marker so the id starts clean if it is re-added.
-                        self._cancelled.discard(mod_id)
-                        self.items.pop(i)
-                        removed_item = item
-                    break
+                if item.id != mod_id:
+                    continue
+                if instance_id is not None and self._item_instance(item) != instance_id:
+                    continue
+                key = (self._item_instance(item), item.id)
+                if item.status == "downloading":
+                    self._cancelled.add(key)
+                    item.status = "cancelled"
+                    item.msg = "已取消（正在终止 SteamCMD）"
+                    item.error_kind = ""
+                    item.error_detail = ""
+                    cancelled_item = item
+                else:
+                    # No in-flight download to discard: drop any stale marker
+                    # so the id starts clean if it is re-added.
+                    self._cancelled.discard(key)
+                    self.items.pop(i)
+                    removed_item = item
+                break
             else:
                 return False
         if cancelled_item is not None:
             self._persist(cancelled_item)
-            # Kill the live SteamCMD process, if any — best effort.
+            # Kill the live SteamCMD process *and* record a cancel request:
+            # the batch may still be probing or waiting for the global run
+            # lock, in which case there is no process to kill yet and only the
+            # request can stop it before it spawns. request_cancel also kills
+            # a live process, so it covers both phases.
             try:
-                from rwmod.steamcmd import cancel_download
+                from rwmod.steamcmd import request_cancel
 
-                cancel_download(mod_id)
+                # Instance-scoped: the same workshop id may be downloading for
+                # another installation; only this item's own batch may abort.
+                request_cancel(key[0], mod_id)
             except Exception:  # noqa: BLE001 — cancel must never fail the removal
                 pass
         elif removed_item is not None:
@@ -288,8 +333,13 @@ class DownloadQueue:
         self._paused = False
         self._wake_worker()
 
-    def retry_failed(self, mod_ids: list[str] | None = None) -> int:
+    def retry_failed(self, mod_ids: list[str] | None = None, instance_id: str | None = None) -> int:
         """Move failed items back to pending (all, or only ``mod_ids``).
+
+        ``instance_id`` scopes the operation to one installation: the same
+        workshop id may have failed for two installations, and retrying one
+        must not requeue the other (REV-016). ``None`` keeps the queue-wide
+        meaning for library callers.
 
         Returns how many were requeued. Zero is a valid no-op, not an error —
         callers answer 200 with ``accepted=0``.
@@ -301,6 +351,8 @@ class DownloadQueue:
                 if item.status != "failed":
                     continue
                 if wanted is not None and item.id not in wanted:
+                    continue
+                if instance_id is not None and self._item_instance(item) != instance_id:
                     continue
                 item.status = "pending"
                 item.progress = 0.0
@@ -316,14 +368,28 @@ class DownloadQueue:
         return len(accepted)
 
     def clear_done(self) -> None:
+        """Drop finished/cancelled items from memory **and** their DB rows.
+
+        Every delete is scoped to ``(instance_id, workshop id)``: the old
+        implementation deleted by workshop id alone, so clearing alpha's
+        finished item silently deleted beta's pending row for the same mod.
+
+        The DB sweep does not depend on the in-memory list. ``_load_from_db``
+        only restores pending/downloading rows, so a done/cancelled row
+        persisted by an earlier session is never in ``items``; the previous
+        implementation derived the instance set from memory and therefore
+        could not clear it after a restart (REV-015).
+        """
         with self._items_lock:
-            done_ids = [i.id for i in self.items if i.status in ("done", "cancelled")]
+            done = [i for i in self.items if i.status in ("done", "cancelled")]
             self.items = [i for i in self.items if i.status not in ("done", "cancelled")]
-            for wid in done_ids:
+            for item in done:
                 # Lifecycle end: no checkpoint will consume these markers.
-                self._cancelled.discard(wid)
-        for wid in done_ids:
-            self._db_delete(wid)
+                self._cancelled.discard((self._item_instance(item), item.id))
+        for item in done:
+            self._db_delete(item.id, self._item_instance(item))
+        # Delete every finished row by (instance_id, status), not only the
+        # instances currently represented in memory.
         self._db_clear_done()
 
     def on_update(self, cb: Callable) -> None:
@@ -576,7 +642,7 @@ class DownloadQueue:
                         item.msg = f"下载异常: {e}"
                         item.error_kind = ErrorKind.UNKNOWN
                         item.error_detail = str(e)
-                        self._cancelled.discard(item.id)
+                        self._cancelled.discard(self._cancel_key(item))
             for item in batch:
                 self._persist(item)
             await self._notify()
@@ -596,20 +662,25 @@ class DownloadQueue:
             force = force or any(i.force for i in batch)
 
             # Items cancelled while this batch waited for a slot stay cancelled;
-            # items removed from the queue are no longer ours to process.
+            # items removed from the queue are no longer ours to process. This
+            # is the checkpoint for the "waiting for the global SteamCMD lock"
+            # phase: it runs after the semaphore slot is acquired.
             live: list[QueueItem] = []
             for item in batch:
                 with self._items_lock:
                     if not any(i is item for i in self.items):
                         continue  # removed while the batch was being scheduled
-                    cancelled = item.id in self._cancelled
+                    cancelled = (iid, item.id) in self._cancelled
                     if cancelled:
-                        self._cancelled.discard(item.id)
+                        self._cancelled.discard((iid, item.id))
                 if cancelled:
                     item.status = "cancelled"
                     item.msg = "已取消"
                     item.retry_count = 0
                     self._persist(item)
+                    # No batch will see this id — do not leave a SteamCMD
+                    # cancel request that could hit a later download.
+                    self._forget_steamcmd_cancel(iid, item.id)
                     continue
                 item.status = "downloading"
                 item.progress = 0.1
@@ -639,6 +710,33 @@ class DownloadQueue:
             if remaining:
                 await self._notify()
             live = remaining
+            if not live:
+                return
+
+            # Cancellation checkpoint after the probe/scan phase: the
+            # installed-mod lookup above can take a while on a large mods
+            # directory, and a cancel that arrived meanwhile must not be handed
+            # to SteamCMD and only discovered after the download finished.
+            still_wanted: list[QueueItem] = []
+            for item in live:
+                with self._items_lock:
+                    cancelled = (iid, item.id) in self._cancelled
+                    if cancelled:
+                        self._cancelled.discard((iid, item.id))
+                if cancelled:
+                    item.status = "cancelled"
+                    item.progress = 0
+                    item.msg = "已取消"
+                    item.retry_count = 0
+                    item.error_kind = ""
+                    item.error_detail = ""
+                    self._persist(item)
+                    self._forget_steamcmd_cancel(iid, item.id)
+                    continue
+                still_wanted.append(item)
+            if len(still_wanted) != len(live):
+                await self._notify()
+            live = still_wanted
             if not live:
                 return
 
@@ -695,9 +793,9 @@ class DownloadQueue:
             for item in live:
                 # Cancelled while the batch was in flight — keep cancelled.
                 with self._items_lock:
-                    cancelled = item.id in self._cancelled
+                    cancelled = (iid, item.id) in self._cancelled
                     if cancelled:
-                        self._cancelled.discard(item.id)
+                        self._cancelled.discard((iid, item.id))
                 if cancelled:
                     item.status = "cancelled"
                     item.msg = "已取消"
@@ -768,8 +866,11 @@ class DownloadQueue:
                 if fresh_extra:
                     # Children/dependencies belong to the same instance as the
                     # collection that discovered them, not to whichever
-                    # instance happens to be active by then.
-                    self.add(fresh_extra, instance_id=iid)
+                    # instance happens to be active by then. They also inherit
+                    # the batch's update intent: a forced re-sort/update of a
+                    # collection must replace the children that are already
+                    # installed, not silently skip them (REV-002).
+                    self.add(fresh_extra, force=force, instance_id=iid)
 
     # ── persistence helpers ──────────────────────────────────────
 
@@ -819,11 +920,11 @@ class DownloadQueue:
         except Exception:
             pass
 
-    def _db_clear_done(self) -> None:
+    def _db_clear_done(self, instance_id: str | None = None) -> None:
         try:
             from rwmod.database import queue_clear_done
 
-            queue_clear_done()
+            queue_clear_done(instance_id)
         except Exception:
             pass
 

@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+import tempfile
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -127,9 +128,15 @@ def import_bundle(cfg: Config, bundle_path: Path) -> dict:
     if not bundle_path.exists():
         return {"ok": False, "msg": f"文件不存在: {bundle_path}"}
 
-    tmp_dir = bundle_path.parent / f".rwmod_import_{datetime.now(UTC).strftime('%H%M%S')}"
+    # A unique scratch directory per import. The old name was
+    # ".rwmod_import_<HHMMSS>", so two imports of the same bundle inside one
+    # second shared a directory and could read each other's half-extracted
+    # files (REV-018). mkdtemp cannot collide.
     try:
-        tmp_dir.mkdir(parents=True, exist_ok=True)
+        tmp_dir = Path(tempfile.mkdtemp(prefix=".rwmod_import_", dir=bundle_path.parent))
+    except OSError as e:
+        return {"ok": False, "msg": f"无法创建导入临时目录: {e}"}
+    try:
         with zipfile.ZipFile(bundle_path, "r") as zf:
             safe_extract_zip(zf, tmp_dir)
     except (zipfile.BadZipFile, OSError) as e:

@@ -7,6 +7,7 @@ from rwmod.deps import get_config
 from rwmod.errors import ModNotFoundError
 from rwmod.metadata import ModMeta, package_id_key
 from rwmod.mod_cache import get_cached_mods
+from rwmod.models.schemas import SaveAnalyzeResponse, SaveDetailResponse, SaveListResponse
 from rwmod.save_parser import analyze_save, find_save_files, parse_save_mods
 
 router = APIRouter(prefix="/api/saves", tags=["saves"])
@@ -26,7 +27,7 @@ def _workshop_ids_by_key(metas: list[ModMeta]) -> dict[str, str]:
     return {package_id_key(m.package_id): m.workshop_id for m in metas if m.workshop_id}
 
 
-@router.get("")
+@router.get("", response_model=SaveListResponse)
 def list_saves(
     cfg: Config = Depends(get_config),
 ):
@@ -49,7 +50,7 @@ def list_saves(
     return {"saves": results}
 
 
-@router.get("/{save_name}")
+@router.get("/{save_name}", response_model=SaveDetailResponse)
 def save_detail(
     save_name: str,
     cfg: Config = Depends(get_config),
@@ -63,16 +64,22 @@ def save_detail(
     return analyze_save(target, installed)
 
 
-@router.post("/analyze")
+@router.post("/analyze", response_model=SaveAnalyzeResponse)
 async def api_upload_and_analyze(
     file: UploadFile,
 ):
     """Upload a .rws save file and get its mod requirements."""
-    from rwmod.routers.download import _reject_oversized
+    from rwmod.routers.download import MAX_UPLOAD_BYTES, _reject_oversized
+    from rwmod.utils import read_upload_limited
 
     _reject_oversized(file)
+    # Content-Length is absent on a chunked upload, so the cap must be enforced
+    # while reading — a bare `await file.read()` buffered the entire body.
+    raw = await read_upload_limited(file, MAX_UPLOAD_BYTES)
+    if raw is None:
+        raise HTTPException(413, f"文件过大（上限 {MAX_UPLOAD_BYTES // 1024} KB）")
     try:
-        content = (await file.read()).decode("utf-8", errors="replace")
+        content = raw.decode("utf-8", errors="replace")
     except Exception as e:
         raise HTTPException(400, f"Cannot read file: {e}") from e
     try:

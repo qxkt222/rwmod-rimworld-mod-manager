@@ -1,5 +1,6 @@
 """Transfer router — one-click export/import of the full rwmod setup."""
 
+import asyncio
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -10,6 +11,7 @@ from starlette.background import BackgroundTask
 
 from rwmod.config import Config
 from rwmod.deps import get_config
+from rwmod.errors import ModNotFoundError, RwmodError, ValidationError
 from rwmod.models.schemas import TransferExportRequest
 from rwmod.transfer import export_bundle, import_bundle
 
@@ -65,7 +67,7 @@ def api_export(
     )
     if not result["ok"]:
         out.unlink(missing_ok=True)
-        raise HTTPException(500, "导出失败")
+        raise RwmodError(str(result.get("msg") or "导出失败"))
     return FileResponse(
         out,
         media_type="application/zip",
@@ -87,11 +89,17 @@ async def api_import(
         tmp = f.name
     try:
         # Stream to disk with a hard cap — chunked uploads have size=None,
-        # and a multi-GB bundle must not be buffered in RAM.
-        _save_upload(file, Path(tmp), _MAX_IMPORT_BYTES)
-        result = import_bundle(cfg, Path(tmp))
+        # and a multi-GB bundle must not be buffered in RAM. Both the streaming
+        # write and the extract/restore pass run in a worker thread: they are
+        # synchronous disk work that used to block the event loop for the
+        # whole import.
+        await asyncio.to_thread(_save_upload, file, Path(tmp), _MAX_IMPORT_BYTES)
+        result = await asyncio.to_thread(import_bundle, cfg, Path(tmp))
         if not result["ok"]:
-            raise HTTPException(400, result.get("msg", "导入失败"))
+            msg = str(result.get("msg", "导入失败"))
+            if "不存在" in msg:
+                raise ModNotFoundError(msg)
+            raise ValidationError(msg)
         return result
     finally:
         Path(tmp).unlink(missing_ok=True)

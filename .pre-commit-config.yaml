@@ -1,7 +1,10 @@
-# See https://pre-commit.com for more information
+# Every hook rev below tracks the version pinned in uv.lock (the dev group is
+# what `uv sync` installs and what CI runs). Keeping them equal means a local
+# `pre-commit run` and the gate agree on the rule set — a newer ruff hook used
+# to flag code that `uv run ruff` accepted, and vice versa.
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.0
+    rev: v0.16.1
     hooks:
       - id: ruff
         args: [--fix]
@@ -16,13 +19,13 @@ repos:
           - --ignore-words=.codespell-allow
 
   - repo: https://github.com/PyCQA/bandit
-    rev: 1.8.3
+    rev: 1.9.4
     hooks:
       - id: bandit
         args: [-c, pyproject.toml, -ll]
 
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.15.0
+    rev: v2.3.0
     hooks:
       - id: mypy
         args: [--config-file=pyproject.toml, src/rwmod]

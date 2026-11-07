@@ -248,5 +248,5 @@ class SteamCMDFake:
         self.result = result
         self.workshop_content_dir = Path(".") / "steamapps" / "workshop" / "content" / "294100"
 
-    def workshop_download(self, mod_id: str):
+    def workshop_download(self, mod_id: str, instance_id: str | None = None):
         return self.result

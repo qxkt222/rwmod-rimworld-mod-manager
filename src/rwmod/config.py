@@ -28,6 +28,7 @@ what lets every existing call site keep working unchanged.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import sys
@@ -39,15 +40,32 @@ from rwmod.errors import ConfigError
 from rwmod.steam_db import MAX_CACHE_BYTES as STEAM_DB_MAX_BYTES
 from rwmod.utils import bundle_root
 
+_log = logging.getLogger(__name__)
+
 __all__ = [
+    "ALLOWED_STEAMCMD_NAMES",
     "Config",
     "InstanceConfig",
     "current_instance_id",
+    "is_allowed_steamcmd_name",
     "is_valid_instance_id",
     "resolve_instance_id",
 ]
 
 DEFAULT_INSTANCE_ID = "default"
+
+#: SteamCMD ships as ``steamcmd.exe`` on Windows and as a ``steamcmd.sh``
+#: wrapper (``steamcmd`` on some distros) elsewhere. Nothing else may ever be
+#: configured as the executable: the configured path is spawned by every
+#: download, so an arbitrary ``.exe`` here (one that ``import-local`` could
+#: have planted in mods_dir) would be arbitrary code execution.
+ALLOWED_STEAMCMD_NAMES = frozenset({"steamcmd.exe", "steamcmd.sh", "steamcmd"})
+
+
+def is_allowed_steamcmd_name(path: Path | str) -> bool:
+    """True if the basename is a SteamCMD executable (case-insensitive)."""
+    return Path(path).name.lower() in ALLOWED_STEAMCMD_NAMES
+
 
 #: Instance ids double as directory names under ~/.rwmod/{profiles,undo}/, so
 #: they must never contain a path separator or resolve to "." / "..".
@@ -333,7 +351,18 @@ class Config:
     def _load_no_cache(cls) -> Config:
         builtin = cls._default_steamcmd_path()
         if cls.CONFIG_PATH.exists():
-            data = tomllib.loads(cls.CONFIG_PATH.read_text(encoding="utf-8"))
+            try:
+                # utf-8-sig: a config re-saved by Windows Notepad / PowerShell
+                # gains a UTF-8 BOM, which tomllib rejects as an invalid
+                # character. UTF-16 files fail the decode instead.
+                raw = cls.CONFIG_PATH.read_text(encoding="utf-8-sig")
+                data = tomllib.loads(raw)
+            except (tomllib.TOMLDecodeError, UnicodeDecodeError, OSError) as e:
+                # A hand-edited / half-written config must not take the whole
+                # server down on every request (500). Fall back to the explicit
+                # defaults and say so loudly; the next save() rewrites the file.
+                _log.error("无法解析配置文件 %s，已回退到默认配置: %s", cls.CONFIG_PATH, e)
+                return cls(steamcmd_path=builtin)
             instances = cls._instances_from_toml(data, builtin)
             if instances is not None:
                 return cls(
@@ -462,7 +491,18 @@ class Config:
         RimWorld game dir is *not* required here — it is only needed by
         optional features (compat / load-order / saves) which handle its
         absence themselves.
+
+        The executable *name* is part of the check, not just existence: this
+        path is handed to ``subprocess.Popen``, and ``/api/mods/import-local``
+        can write an arbitrary ``.exe`` into mods_dir. Requiring the
+        ``steamcmd`` basename keeps a hand-edited ``~/.rwmod.toml`` from
+        turning a download request into arbitrary code execution.
         """
+        if not is_allowed_steamcmd_name(self.steamcmd_path):
+            raise ConfigError(
+                "steamcmd_path 必须指向 steamcmd.exe（或 steamcmd.sh）:"
+                f" {str(self.steamcmd_path)!r}"
+            )
         if not self.steamcmd_path.exists():
             raise ConfigError(f"SteamCMD not found: {self.steamcmd_path}")
         self.mods_dir.mkdir(parents=True, exist_ok=True)
@@ -491,27 +531,29 @@ def _esc(s: str) -> str:
 
 
 def current_instance_id() -> str:
-    """Active instance id, or ``"default"`` when no config can be loaded.
+    """Active instance id for the scoped stores (database/tags/profile/undo).
 
-    Used by the scoped stores (database/tags/profile/undo) so they follow the
-    instance the user switched to without every call site having to pass an id.
+    There is deliberately **no** ``except: return "default"`` fallback. It used
+    to swallow every failure and silently scope writes to the ``default``
+    instance, so a broken/unreadable config mixed one installation's history,
+    tags, profiles and undo snapshots into another's. "No config file yet" is
+    not a failure: :meth:`Config.load` returns an explicit default instance, so
+    the fresh-install path still yields ``"default"``. A config that cannot be
+    *read* raises instead, which the error middleware turns into a visible 500
+    rather than silent cross-instance writes.
     """
-    try:
-        return Config.load().active_instance
-    except Exception:  # pragma: no cover — fail open to the default scope
-        return DEFAULT_INSTANCE_ID
+    return Config.load().active_instance
 
 
 def resolve_instance_id(mods_dir: Path | str | None = None) -> str:
     """Return the instance that owns *mods_dir*, else the active instance.
 
     Exact path matching lets a caller that still only passes ``cfg.mods_dir``
-    (there are ~86 of them) hit the right per-instance cache/tag scope.
+    (there are ~86 of them) hit the right per-instance cache/tag scope. Like
+    :func:`current_instance_id`, an unreadable config raises instead of
+    silently falling back to ``default``.
     """
-    try:
-        cfg = Config.load()
-    except Exception:  # pragma: no cover — fail open to the default scope
-        return DEFAULT_INSTANCE_ID
+    cfg = Config.load()
     if mods_dir is not None:
         target = _norm_dir(mods_dir)
         for inst in cfg.instances:

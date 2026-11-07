@@ -127,7 +127,7 @@ class _ScriptedSteam:
     def workshop_content_dir(self) -> Path:
         return self.content_dir
 
-    def workshop_download(self, mod_id: str) -> DownloadResult:
+    def workshop_download(self, mod_id: str, instance_id: str | None = None) -> DownloadResult:
         self.calls.append(mod_id)
         if len(self._results) > 1:
             return self._results.pop(0)
@@ -310,10 +310,10 @@ class TestWorkshopDownloadManyProcess:
     def test_active_download_count_tracks_registry(self):
         _live_procs.clear()
         assert active_download_count() == 0
-        _live_procs["1"] = MagicMock()
-        _live_procs["2"] = MagicMock()
+        _live_procs[("", "1")] = MagicMock()
+        _live_procs[("", "2")] = MagicMock()
         assert active_download_count() == 2
-        assert cancel_download("1") is True
+        assert cancel_download(None, "1") is True
         assert active_download_count() == 1
 
 
@@ -380,7 +380,9 @@ class TestPerModLocks:
             def workshop_content_dir(self) -> Path:
                 return tmp_path / "no-content"
 
-            def workshop_download(self, mod_id: str) -> DownloadResult:
+            def workshop_download(
+                self, mod_id: str, instance_id: str | None = None
+            ) -> DownloadResult:
                 with guard:
                     state["calls"] += 1
                     state["cur"] += 1
@@ -915,7 +917,7 @@ class TestDownloadBatchExtras:
         monkeypatch.setattr("rwmod.workshop.is_collection", lambda mid: False)
         seen: list[list[str]] = []
 
-        def fake_many(self, ids, progress_cb=None):
+        def fake_many(self, ids, progress_cb=None, instance_id=None):
             seen.append(list(ids))
             return {m: _res(False, m, ErrorKind.FILE_NOT_FOUND, "gone") for m in ids}
 
@@ -930,7 +932,7 @@ class TestDownloadBatchExtras:
         monkeypatch.setattr("rwmod.workshop.is_collection", lambda mid: False)
         monkeypatch.setattr(
             "rwmod.downloader.SteamCMD.workshop_download_many",
-            lambda self, ids, progress_cb=None: {m: _res(True, m) for m in ids},
+            lambda self, ids, progress_cb=None, instance_id=None: {m: _res(True, m) for m in ids},
         )
 
         def boom(*args: object, **kwargs: object) -> None:
@@ -961,7 +963,7 @@ class TestDownloadBatchExtras:
         monkeypatch.setattr("rwmod.workshop.is_collection", lambda mid: False)
         monkeypatch.setattr(
             "rwmod.downloader.SteamCMD.workshop_download_many",
-            lambda self, ids, progress_cb=None: {
+            lambda self, ids, progress_cb=None, instance_id=None: {
                 m: _res(False, m, ErrorKind.CANCELLED, "SteamCMD 批次被取消") for m in ids
             },
         )
@@ -985,7 +987,7 @@ class TestDownloadBatchExtras:
         monkeypatch.setattr("rwmod.workshop.is_collection", lambda mid: False)
         monkeypatch.setattr(
             "rwmod.downloader.SteamCMD.workshop_download_many",
-            lambda self, ids, progress_cb=None: {
+            lambda self, ids, progress_cb=None, instance_id=None: {
                 "111": _res(False, "111", ErrorKind.CANCELLED, "cancelled"),
                 "222": _res(True, "222"),
             },
@@ -1008,7 +1010,7 @@ class TestDownloadBatchExtras:
         def boom(mod_id: str) -> bool:
             raise RuntimeError("api down")
 
-        def fake_many(self, ids, progress_cb=None):
+        def fake_many(self, ids, progress_cb=None, instance_id=None):
             steamcmd_calls.append(list(ids))
             return {m: _res(True, m) for m in ids}
 
@@ -1740,7 +1742,7 @@ class TestKnownDefects:
         monkeypatch.setattr("rwmod.workshop.is_collection", lambda mid: False)
         monkeypatch.setattr(
             "rwmod.downloader.SteamCMD.workshop_download_many",
-            lambda self, ids, progress_cb=None: {m: _res(True, m) for m in ids},
+            lambda self, ids, progress_cb=None, instance_id=None: {m: _res(True, m) for m in ids},
         )
 
         def boom(*args: object, **kwargs: object) -> None:
@@ -1770,9 +1772,9 @@ class TestSteamCmdCancelEdges:
         proc.send_signal.side_effect = OSError("cannot signal")
         proc.terminate.side_effect = OSError("cannot signal")
         _live_procs.clear()
-        _live_procs["777"] = proc
-        assert cancel_download("777") is False
-        assert "777" not in _live_procs
+        _live_procs[("", "777")] = proc
+        assert cancel_download(None, "777") is False
+        assert ("", "777") not in _live_procs
 
 
 class TestProgressReaderEdges:
@@ -1965,7 +1967,7 @@ class TestInstanceDownloadIsolation:
         monkeypatch.setattr("rwmod.workshop.is_collection", lambda mid: False)
         calls: list[list[str]] = []
 
-        def fake_many(self, ids, progress_cb=None):
+        def fake_many(self, ids, progress_cb=None, instance_id=None):
             calls.append(list(ids))
             return {mid: _res(True, mid) for mid in ids}
 

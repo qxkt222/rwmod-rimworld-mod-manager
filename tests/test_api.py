@@ -424,7 +424,11 @@ class TestModSettingsEndpoint:
         assert body["ok"] is True
         assert body["backup"]
         assert target.read_text(encoding="utf-8") == "<b/>"
-        backup = Path.home() / ".rwmod" / "mod_settings_backups" / body["backup"]
+        # Backups are partitioned per instance (<root>/<instance_id>/), so ask
+        # the module where the active instance's directory is.
+        from rwmod.mod_settings import backups_dir
+
+        backup = backups_dir() / body["backup"]
         assert backup.is_relative_to(tmp_path)
         assert backup.read_text(encoding="utf-8") == "<a/>"
 

@@ -1,9 +1,15 @@
-"""Auto-update router — background update check and manual trigger."""
+"""Auto-update router — background update check and manual trigger.
+
+``/api/auto-update/run`` used to answer 200 with ``{ok: false, msg}`` when a
+check was already running; that is a conflict, so it now raises
+``ConflictError`` (409) and the 200 body carries the check's counters only.
+"""
 
 from fastapi import APIRouter, Depends
 
 from rwmod.autoupdate import AutoUpdateManager
 from rwmod.deps import get_autoupdate
+from rwmod.errors import ConflictError
 
 router = APIRouter(prefix="/api", tags=["auto-update"])
 
@@ -34,4 +40,7 @@ def auto_update_status(
 async def auto_update_run(
     au: AutoUpdateManager = Depends(get_autoupdate),
 ):
-    return await au.run_check()
+    result = await au.run_check()
+    if not result.get("ok", True):
+        raise ConflictError(str(result.get("msg") or "更新检查已在运行中"))
+    return result

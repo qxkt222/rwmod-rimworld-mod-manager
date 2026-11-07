@@ -268,6 +268,21 @@ FAILURE_CASES: list[dict] = [
         "kwargs": {"json": {"tag": "  "}},
         "status": 400,
     },
+    # REV-006: mutations that changed nothing used to answer 200 {"ok": false}.
+    {
+        "label": "tag remove missing",
+        "method": "DELETE",
+        "template": "/api/tags/{mod_folder}/{tag}",
+        "url": "/api/tags/folder1/t1",
+        "status": 404,
+    },
+    {
+        "label": "queue remove missing",
+        "method": "DELETE",
+        "template": "/api/queue/{mod_id}",
+        "url": "/api/queue/123456",
+        "status": 404,
+    },
     {
         "label": "config relative path",
         "method": "POST",
@@ -442,6 +457,58 @@ FAILURE_CASES: list[dict] = [
         "patches": {"rwmod.routers.download.fetch_collection_children": lambda _cid: []},
         "status": 404,
     },
+    # ── failure-contract migration (review 0.7.0, BE-A item 6) ──────
+    # These five used to answer 200 with `{ok: false, msg}`. A missing
+    # backup/profile/snapshot is a failure — the status code must carry it,
+    # exactly like every other error in this table.
+    {
+        "label": "backup delete missing",
+        "method": "DELETE",
+        "template": "/api/backups/{filename}",
+        "url": "/api/backups/nope.zip",
+        "status": 404,
+    },
+    {
+        "label": "backup restore missing",
+        "method": "POST",
+        "template": "/api/backups/{workshop_id}/restore",
+        "url": "/api/backups/123/restore",
+        "kwargs": {"json": {}},
+        "status": 404,
+    },
+    {
+        "label": "profiles restore missing",
+        "method": "POST",
+        "template": "/api/profiles/{name}/restore",
+        "url": "/api/profiles/nope/restore",
+        "status": 404,
+    },
+    {
+        "label": "profiles delete missing",
+        "method": "DELETE",
+        "template": "/api/profiles/{name}",
+        "url": "/api/profiles/nope",
+        "status": 404,
+    },
+    {
+        "label": "undo apply (no snapshots)",
+        "method": "POST",
+        "template": "/api/undo",
+        "url": "/api/undo",
+        "status": 404,
+    },
+    {
+        "label": "search failure degrades",
+        "method": "GET",
+        "template": "/api/search",
+        "url": "/api/search?q=harmony",
+        "patches": {
+            "rwmod.routers.workshop.search_workshop": lambda _q, page=1: (_ for _ in ()).throw(
+                RuntimeError("offline")
+            )
+        },
+        "status": 502,
+    },
 ]
 
 SUCCESS_CASES: list[dict] = [
@@ -563,17 +630,6 @@ SUCCESS_CASES: list[dict] = [
         },
     },
     {
-        "label": "search failure degrades",
-        "method": "GET",
-        "template": "/api/search",
-        "url": "/api/search?q=harmony",
-        "patches": {
-            "rwmod.routers.workshop.search_workshop": lambda _q, page=1: (_ for _ in ()).throw(
-                RuntimeError("offline")
-            )
-        },
-    },
-    {
         "label": "workshop detail found",
         "method": "GET",
         "template": "/api/workshop/{mod_id}",
@@ -607,12 +663,6 @@ SUCCESS_CASES: list[dict] = [
         "template": "/api/queue/add",
         "url": "/api/queue/add",
         "kwargs": {"json": {"ids": ["123456"]}},
-    },
-    {
-        "label": "queue remove",
-        "method": "DELETE",
-        "template": "/api/queue/{mod_id}",
-        "url": "/api/queue/123456",
     },
     {
         "label": "queue clear",
@@ -657,19 +707,6 @@ SUCCESS_CASES: list[dict] = [
         "url": "/api/backups/cleanup",
         "kwargs": {"json": {"keep": 5}},
     },
-    {
-        "label": "backup delete missing",
-        "method": "DELETE",
-        "template": "/api/backups/{filename}",
-        "url": "/api/backups/nope.zip",
-    },
-    {
-        "label": "backup restore missing",
-        "method": "POST",
-        "template": "/api/backups/{workshop_id}/restore",
-        "url": "/api/backups/123/restore",
-        "kwargs": {"json": {}},
-    },
     {"label": "history list", "method": "GET", "template": "/api/history", "url": "/api/history"},
     {
         "label": "history stats",
@@ -696,18 +733,6 @@ SUCCESS_CASES: list[dict] = [
         "url": "/api/profiles/save",
         "kwargs": {"json": {"name": "probe"}},
     },
-    {
-        "label": "profiles restore missing",
-        "method": "POST",
-        "template": "/api/profiles/{name}/restore",
-        "url": "/api/profiles/nope/restore",
-    },
-    {
-        "label": "profiles delete missing",
-        "method": "DELETE",
-        "template": "/api/profiles/{name}",
-        "url": "/api/profiles/nope",
-    },
     {"label": "tags list", "method": "GET", "template": "/api/tags", "url": "/api/tags"},
     {
         "label": "tags by tag",
@@ -727,12 +752,6 @@ SUCCESS_CASES: list[dict] = [
         "template": "/api/tags/{mod_folder}",
         "url": "/api/tags/folder1",
         "kwargs": {"json": {"tag": "t1"}},
-    },
-    {
-        "label": "tags remove one",
-        "method": "DELETE",
-        "template": "/api/tags/{mod_folder}/{tag}",
-        "url": "/api/tags/folder1/t1",
     },
     {
         "label": "tags remove all",
@@ -786,12 +805,6 @@ SUCCESS_CASES: list[dict] = [
         },
     },
     {"label": "undo list", "method": "GET", "template": "/api/undo", "url": "/api/undo"},
-    {
-        "label": "undo apply (no snapshots)",
-        "method": "POST",
-        "template": "/api/undo",
-        "url": "/api/undo",
-    },
     {
         "label": "auto-update status",
         "method": "GET",
@@ -1841,7 +1854,12 @@ class TestRimsortRouterBranches:
         import rwmod.routers.rimsort as rimsort_router
 
         calls: list[bool] = []
-        monkeypatch.setattr(rimsort_router, "refresh_community_rules", lambda: calls.append(True))
+
+        def fake_refresh() -> bool:
+            calls.append(True)
+            return True  # the flag now distinguishes success from a failed refresh
+
+        monkeypatch.setattr(rimsort_router, "refresh_community_rules", fake_refresh)
         _make_mod(cfg.mods_dir, "Aaa", package_id="a.mod")
 
         _assert_200_data(

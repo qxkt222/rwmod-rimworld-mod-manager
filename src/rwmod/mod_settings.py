@@ -21,6 +21,7 @@ Safety rules:
 from __future__ import annotations
 
 import logging
+import os
 import platform
 import re
 import shutil
@@ -39,6 +40,7 @@ __all__ = [
     "MAX_SETTINGS_BYTES",
     "backup_all",
     "backups_dir",
+    "backups_root",
     "is_game_running",
     "list_backups",
     "list_mod_settings",
@@ -64,9 +66,54 @@ _BACKUP_NAME_RE = re.compile(r"^\d{8}_\d{6}_\d{6}(?:_\d+)?_(.+)$")
 _NUMERIC_PREFIX_RE = re.compile(r"^([0-9]+)_")
 
 
-def backups_dir() -> Path:
-    """Backup root. Resolved per call so a patched ``Path.home`` is honoured."""
+def backups_root() -> Path:
+    """Base backup directory (all instances live under here)."""
     return Path.home() / ".rwmod" / "mod_settings_backups"
+
+
+def backups_dir(instance_id: str | None = None, *, create: bool = True) -> Path:
+    """Backup directory of one instance: ``<root>/<instance_id>``.
+
+    Resolved per call so a patched ``Path.home`` is honoured. Backups used to
+    share one flat directory, which meant :func:`list_backups` and the
+    "newest backup" restore path could show — and restore — the *other*
+    installation's ``Mod_*.xml``. Scoping by instance removes that entirely.
+    Legacy flat backups are migrated into ``default/`` on first use.
+    """
+    from rwmod.config import current_instance_id, is_valid_instance_id
+
+    iid = instance_id or current_instance_id()
+    if not is_valid_instance_id(iid):
+        raise ValidationError(f"非法实例 id: {iid!r}")
+    base = backups_root()
+    dest = base / iid
+    _assert_within_sandbox(base)
+    _assert_within_sandbox(dest)
+    _migrate_legacy_backups(base)
+    if create:
+        dest.mkdir(parents=True, exist_ok=True)
+    return dest
+
+
+def _migrate_legacy_backups(base: Path) -> None:
+    """Move pre-multi-instance ``base/*.xml`` into ``base/default/`` exactly once."""
+    if not base.is_dir():
+        return
+    legacy = [p for p in base.glob("*.xml") if p.is_file()]
+    if not legacy:
+        return
+    dest_dir = base / "default"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    for src in legacy:
+        dest = dest_dir / src.name
+        suffix = 2
+        while dest.exists():
+            dest = dest_dir / f"{src.stem}-legacy{suffix}{src.suffix}"
+            suffix += 1
+        try:
+            os.replace(src, dest)
+        except OSError:  # pragma: no cover — a racing third party moved it first
+            continue
 
 
 # ── config dir discovery ───────────────────────────────────────────
@@ -289,8 +336,6 @@ def _atomic_write(target: Path, data: bytes) -> None:
     tmp = target.with_name(target.name + ".rwmod.tmp")
     try:
         tmp.write_bytes(data)
-        import os
-
         os.replace(tmp, target)
     finally:
         tmp.unlink(missing_ok=True)
@@ -300,7 +345,7 @@ def _atomic_write(target: Path, data: bytes) -> None:
 
 
 def backup_all(config_dir: Path | None) -> dict:
-    """Copy every ``Mod_*.xml`` into the backup directory."""
+    """Copy every ``Mod_*.xml`` into this instance's backup directory."""
     cfg_dir = resolve_config_dir(config_dir)
     root = backups_dir()
     if cfg_dir is None:
@@ -322,8 +367,8 @@ def backup_all(config_dir: Path | None) -> dict:
 
 
 def list_backups() -> dict:
-    """List settings backups, newest first."""
-    root = backups_dir()
+    """List this instance's settings backups, newest first."""
+    root = backups_dir(create=False)
     if not root.is_dir():
         return {"backup_dir": str(root), "backups": []}
 
@@ -383,7 +428,7 @@ def restore_backup(
 
 
 def _pick_backup(filename: str, backup: str) -> Path:
-    root = backups_dir()
+    root = backups_dir(create=False)
     if backup:
         if Path(backup).name != backup or not _BACKUP_NAME_RE.match(backup):
             raise ValidationError(f"非法的备份文件名: {backup!r}")

@@ -567,12 +567,17 @@ class TestBackupPathResolution:
         assert victim.exists()
 
     def test_restore_rejects_traversal_filename_via_api(self, client: TestClient) -> None:
+        """A traversal filename never resolves to a backup → failure status.
+
+        It used to answer 200 with ``{ok: false}``; the failure contract puts
+        the failure in the status code, so this is now a 404.
+        """
         resp = client.post(
             "/api/backups/123/restore",
             json={"filename": "..\\..\\evil.zip"},
         )
-        assert resp.status_code == 200
-        assert resp.json()["ok"] is False
+        assert resp.status_code == 404
+        assert resp.json()["error"] == "ModNotFoundError"
 
     def test_restore_rejects_non_numeric_workshop_id(self, tmp_path: Path) -> None:
         mods = tmp_path / "Mods"

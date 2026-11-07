@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 
 from rwmod.config import Config
 from rwmod.deps import get_config
+from rwmod.errors import ModNotFoundError, RwmodError
 from rwmod.undo import list_undo_snapshots, undo_last
 
 router = APIRouter(prefix="/api/undo", tags=["undo"])
@@ -32,4 +33,10 @@ def api_undo(cfg: Config = Depends(get_config)):
     # cfg.config_dir (when set) is authoritative; the guard raises before the
     # snapshot is copied anywhere outside the test sandbox.
     path = modsconfig_target(cfg.rimworld_dir, cfg.config_dir)
-    return undo_last(path)
+    result = undo_last(path)
+    if not result.get("ok"):
+        msg = str(result.get("msg") or "撤销失败")
+        if "没有可撤销" in msg:
+            raise ModNotFoundError(msg)
+        raise RwmodError(msg)
+    return result

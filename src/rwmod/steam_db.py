@@ -65,6 +65,33 @@ MAX_CACHE_BYTES = 60 * 1024 * 1024  # 60 MiB
 _HTTP_TIMEOUT = 120  # the real payload is ~47 MB
 
 
+def _read_limited(response: Any, max_bytes: int) -> bytes | None:
+    """Read at most ``max_bytes`` from an HTTP response, streaming.
+
+    The previous ``resp.read()`` buffered the entire body and only then
+    checked its length, so the documented 60 MB cap never protected memory.
+    Chunks are read against the remaining budget; the first byte past the cap
+    aborts the read and returns ``None``. Minimal response doubles that do
+    not accept a size argument fall back to one bounded check.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        try:
+            chunk = response.read(max_bytes + 1 - total)
+        except TypeError:
+            # Test doubles / stripped-down response objects take no size arg.
+            raw = response.read()
+            return raw if len(raw) <= max_bytes else None
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            return None
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 def _header_value(response: Any, name: str) -> str:
     headers = getattr(response, "headers", None)
     if headers is None:
@@ -224,13 +251,12 @@ class SteamDB:
                     self._loaded = False
                     self._touch_cache()
                     return self._load_from_cache(limit=limit)
-                raw = resp.read()
+                raw = _read_limited(resp, limit)
                 response_etag = _header_value(resp, "ETag")
 
-            if len(raw) > limit:
+            if raw is None:
                 _log.warning(
-                    "Steam Workshop database payload too large (%d bytes > %d)",
-                    len(raw),
+                    "Steam Workshop database payload exceeds the %d-byte cap",
                     limit,
                 )
                 return False

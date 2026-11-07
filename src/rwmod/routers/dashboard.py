@@ -13,6 +13,7 @@ from rwmod.deps import get_autoupdate, get_config
 from rwmod.mod_cache import get_cached_mods
 from rwmod.mod_health_check import get_health
 from rwmod.mod_sizes import get_sizes, is_pending
+from rwmod.models.schemas import DashboardResponse
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
 
@@ -57,7 +58,7 @@ def _cached_dashboard(cfg: Config) -> dict:
     return entry
 
 
-@router.get("/dashboard")
+@router.get("/dashboard", response_model=DashboardResponse)
 async def dashboard(
     cfg: Config = Depends(get_config),
     au: AutoUpdateManager = Depends(get_autoupdate),
@@ -119,6 +120,16 @@ def steamcmd_check(
     network is down. Checking that the executable exists and is runnable is
     sufficient for a healthy check.
     """
+    # Defence in depth: the config endpoint already refuses a non-steamcmd
+    # basename, but ~/.rwmod.toml can be hand-edited. Never execute something
+    # that is not literally a steamcmd binary.
+    from rwmod.config import is_allowed_steamcmd_name
+
+    if not is_allowed_steamcmd_name(cfg.steamcmd_path):
+        return {
+            "ok": False,
+            "msg": f"拒绝执行：配置的路径不是 steamcmd 可执行文件（{cfg.steamcmd_path.name}）",
+        }
     if not cfg.steamcmd_path.exists():
         return {"ok": False, "msg": "SteamCMD 路径不存在"}
     # SteamCMD on Windows refuses to run from a path containing non-ASCII

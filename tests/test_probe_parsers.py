@@ -254,10 +254,12 @@ class TestModsConfigParsing:
         )
         assert parse_mods_config(f) == ["", "a.mod"]
 
-    def test_malformed_xml_returns_empty(self, tmp_path: Path):
+    def test_malformed_xml_raises_validation_error(self, tmp_path: Path):
+        """REV-003: a corrupt upload is a 400, never "the list is empty"."""
         f = tmp_path / "ModsConfig.xml"
         f.write_text("<<<not xml>>>")
-        assert parse_mods_config(f) == []
+        with pytest.raises(ValidationError):
+            parse_mods_config(f)
 
     def test_entity_expansion_rejected(self, tmp_path: Path):
         f = tmp_path / "ModsConfig.xml"
@@ -266,10 +268,12 @@ class TestModsConfigParsing:
             '<!ENTITY b "&a;&a;&a;&a;">]><ModsConfigData><activeMods>'
             "<li>&b;</li></activeMods></ModsConfigData>"
         )
-        assert parse_mods_config(f) == []
+        with pytest.raises(ValidationError):
+            parse_mods_config(f)
 
-    def test_missing_file_returns_empty(self, tmp_path: Path):
-        assert parse_mods_config(tmp_path / "nope.xml") == []
+    def test_missing_file_raises_validation_error(self, tmp_path: Path):
+        with pytest.raises(ValidationError):
+            parse_mods_config(tmp_path / "nope.xml")
 
     def test_bom_xml_parses(self, tmp_path: Path):
         f = tmp_path / "ModsConfig.xml"
@@ -280,11 +284,17 @@ class TestModsConfigParsing:
 
 
 class TestResolveWorkshopIds:
-    def test_case_mismatch_is_unknown(self, tmp_path: Path):
+    def test_case_mismatch_resolves(self, tmp_path: Path):
+        """ModsConfig/saves lowercase ids; About.xml keeps the author's case.
+
+        A case-only difference used to be reported as an unknown mod (it was
+        then re-downloaded even though it was installed). packageIds are now
+        compared through the normalised key.
+        """
         _make_mod(tmp_path, "A", "author.mod", workshop_id="111")
         known, unknown = resolve_workshop_ids(["Author.Mod"], tmp_path)
-        assert known == []
-        assert unknown == ["Author.Mod"]
+        assert known == ["111"]
+        assert unknown == []
 
     def test_duplicates_are_preserved(self, tmp_path: Path):
         _make_mod(tmp_path, "A", "author.mod", workshop_id="111")

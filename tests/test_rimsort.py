@@ -277,7 +277,9 @@ class TestOfficialAnchoring:
     def test_real_config_sorts_all_522_with_no_unresolved(self):
         active = parse_modsconfig(_REAL_CONFIG)["active_mods"]
         result = sort_mods(_REAL_MODS, active)
-        assert len(result["sorted"]) == len(active) == 522
+        # The live install grows over time; the invariant is that every active
+        # id is placed exactly once, not that the player owns 522 mods.
+        assert len(result["sorted"]) == len(active)
         assert result["unresolved"] == []
         assert result["sorted"][: len(ANCHOR_ORDER)] == ANCHOR_ORDER
 
@@ -302,7 +304,7 @@ class TestOfficialAnchoring:
 
         assert result["ok"] is True
         written = parse_modsconfig(cfg_path)["active_mods"]
-        assert len(written) == len(original) == 522
+        assert len(written) == len(original)
         assert written[: len(ANCHOR_ORDER)] == ANCHOR_ORDER
         assert {p.lower() for p in written} == {p.lower() for p in original}
 

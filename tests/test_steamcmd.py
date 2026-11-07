@@ -328,10 +328,10 @@ class TestCancelBatch:
         thread.start()
         for _ in range(200):
             with sc_mod._live_guard:
-                if "111" in sc_mod._live_procs:
+                if ("", "111") in sc_mod._live_procs:
                     break
             time.sleep(0.005)
-        assert cancel_download("111") is True
+        assert cancel_download(None, "111") is True
         thread.join(5)
         assert not thread.is_alive()
 
@@ -339,7 +339,7 @@ class TestCancelBatch:
         assert results["111"].success is False
         assert results["222"].success is True
         assert results["222"].completed is True
-        assert "222" not in sc_mod._live_procs
+        assert ("", "222") not in sc_mod._live_procs
 
     def test_lock_is_released_after_a_cancelled_batch(self, steamcmd: SteamCMD, monkeypatch):
         import io
@@ -373,10 +373,10 @@ class TestCancelBatch:
         thread.start()
         for _ in range(200):
             with sc_mod._live_guard:
-                if "111" in sc_mod._live_procs:
+                if ("", "111") in sc_mod._live_procs:
                     break
             time.sleep(0.005)
-        cancel_download("111")
+        cancel_download(None, "111")
         thread.join(5)
         assert not thread.is_alive()
 
@@ -561,9 +561,9 @@ class TestCancelDownload:
 
         proc = MagicMock()
         _live_procs.clear()
-        _live_procs["12345"] = proc
+        _live_procs[("", "12345")] = proc
         try:
-            assert cancel_download("12345") is True
+            assert cancel_download(None, "12345") is True
             # CTRL_BREAK (or terminate on POSIX) then kill as belt-and-braces.
             assert proc.kill.called
         finally:
@@ -574,7 +574,7 @@ class TestCancelDownload:
 
         _live_procs.clear()
         try:
-            assert cancel_download("99999") is False
+            assert cancel_download(None, "99999") is False
         finally:
             _live_procs.clear()
 
@@ -598,4 +598,4 @@ class TestCancelDownload:
         with patch("rwmod.steamcmd.subprocess.Popen", return_value=proc):
             result = steamcmd.workshop_download("123")
         assert result.success
-        assert "123" not in _live_procs
+        assert ("", "123") not in _live_procs

@@ -273,7 +273,9 @@ class TestWriteModSetting:
 
         assert result["ok"] is True
         assert result["game_running"] is False
-        backup = sandbox.backup_root / result["backup"]
+        # Backups are partitioned by instance (<root>/<instance_id>/), so the
+        # expected directory is the one the module itself reports.
+        backup = backups_dir() / result["backup"]
         assert backup.is_relative_to(sandbox.root)
         assert backup.read_bytes() == old_bytes
         assert b"<value>2</value>" in target.read_bytes()
@@ -361,8 +363,8 @@ class TestBackupAndRestore:
         assert result["count"] == 2
         names = {row["filename"] for row in result["backups"]}
         assert names == {"Mod_1_A.xml", "Mod_2_B.xml"}
-        assert sandbox.backup_root.is_relative_to(sandbox.root)
-        assert len(list(sandbox.backup_root.glob("*.xml"))) == 2
+        assert backups_dir().is_relative_to(sandbox.root)
+        assert len(list(backups_dir().glob("*.xml"))) == 2
 
     def test_backup_all_without_config_dir_is_empty(self, sandbox: SimpleNamespace):
         result = backup_all(None)

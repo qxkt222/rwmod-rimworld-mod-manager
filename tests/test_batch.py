@@ -88,7 +88,7 @@ class TestDownloadBatch:
 
         monkeypatch.setattr(
             "rwmod.downloader.SteamCMD.workshop_download_many",
-            lambda self, ids, progress_cb=None: called.append(ids) or {},
+            lambda self, ids, progress_cb=None, instance_id=None: called.append(ids) or {},
         )
         result = download_batch(cfg, ["111"])
         assert result == {"111": True}
@@ -102,7 +102,7 @@ class TestDownloadBatch:
         for wid, pkg in (("111", "author.one"), ("222", "author.two"), ("333", "author.three")):
             _workshop_content(tmp_path, cfg, wid, pkg=pkg)
 
-        def fake_download_many(self, ids: list[str], progress_cb=None):
+        def fake_download_many(self, ids: list[str], progress_cb=None, instance_id=None):
             from rwmod.steamcmd import DownloadResult, ErrorKind
 
             return {mid: DownloadResult(True, mid, ErrorKind.OK) for mid in ids}
@@ -121,7 +121,7 @@ class TestDownloadBatch:
 
         monkeypatch.setattr(
             "rwmod.downloader.SteamCMD.workshop_download_many",
-            lambda self, ids, progress_cb=None: {},  # process died without writing any result
+            lambda self, ids, progress_cb=None, instance_id=None: {},  # process died without writing any result
         )
         # Recoverable-failure path would retry via download_one → patch it to
         # avoid a real SteamCMD spawn.
@@ -142,7 +142,7 @@ class TestDownloadBatch:
         monkeypatch.setattr("rwmod.workshop.fetch_collection_children", fake_children)
         monkeypatch.setattr(
             "rwmod.downloader.SteamCMD.workshop_download_many",
-            lambda self, ids, progress_cb=None: {},
+            lambda self, ids, progress_cb=None, instance_id=None: {},
         )
         monkeypatch.setattr("rwmod.downloader.download_one", lambda c, mid, force=False: False)
 
@@ -201,7 +201,7 @@ class TestDownloadBatch:
         monkeypatch.setattr("rwmod.workshop.fetch_collection_children", lambda mid: ["100", "200"])
         steamcmd_calls: list[list[str]] = []
 
-        def fake_many(self, ids, progress_cb=None):
+        def fake_many(self, ids, progress_cb=None, instance_id=None):
             steamcmd_calls.append(list(ids))
             return {}
 
@@ -229,7 +229,7 @@ class TestDownloadBatch:
         monkeypatch.setattr("rwmod.workshop.is_collection", boom)
         steamcmd_calls: list[list[str]] = []
 
-        def fake_many(self, ids, progress_cb=None):
+        def fake_many(self, ids, progress_cb=None, instance_id=None):
             steamcmd_calls.append(list(ids))
             return {m: True for m in ids}
 
@@ -245,7 +245,7 @@ class TestDownloadBatch:
         monkeypatch.setattr("rwmod.workshop.fetch_collection_children", lambda mid: [])
         steamcmd_calls: list[list[str]] = []
 
-        def fake_many(self, ids, progress_cb=None):
+        def fake_many(self, ids, progress_cb=None, instance_id=None):
             steamcmd_calls.append(list(ids))
             return {m: True for m in ids}
 
@@ -260,7 +260,7 @@ class TestDownloadBatch:
 
         retried: list[str] = []
 
-        def fake_download_many(self, ids: list[str], progress_cb=None):
+        def fake_download_many(self, ids: list[str], progress_cb=None, instance_id=None):
             return {
                 "111": DownloadResult(False, "111", ErrorKind.FILE_NOT_FOUND, "gone"),
             }
@@ -280,7 +280,7 @@ class TestDownloadBatch:
 
         retried: list[str] = []
 
-        def fake_download_many(self, ids: list[str], progress_cb=None):
+        def fake_download_many(self, ids: list[str], progress_cb=None, instance_id=None):
             return {"111": DownloadResult(False, "111", ErrorKind.UNKNOWN, "blip")}
 
         monkeypatch.setattr("rwmod.downloader.SteamCMD.workshop_download_many", fake_download_many)
@@ -300,7 +300,7 @@ class TestDownloadBatch:
         monkeypatch.setattr("rwmod.workshop.is_collection", lambda mid: False)
         monkeypatch.setattr(
             "rwmod.downloader.SteamCMD.workshop_download_many",
-            lambda self, ids, progress_cb=None: {
+            lambda self, ids, progress_cb=None, instance_id=None: {
                 m: DownloadResult(False, m, ErrorKind.FILE_NOT_FOUND, "SteamCMD: File Not Found")
                 for m in ids
             },
@@ -325,7 +325,9 @@ class TestDownloadBatch:
         monkeypatch.setattr("rwmod.workshop.is_collection", lambda mid: False)
         monkeypatch.setattr(
             "rwmod.downloader.SteamCMD.workshop_download_many",
-            lambda self, ids, progress_cb=None: {m: DownloadResult(True, m) for m in ids},
+            lambda self, ids, progress_cb=None, instance_id=None: {
+                m: DownloadResult(True, m) for m in ids
+            },
         )
 
         def boom(*args: object, **kwargs: object) -> None:
@@ -371,7 +373,9 @@ class TestRetryBackoff:
             def workshop_content_dir(self) -> Path:
                 return tmp_path / "nowhere"
 
-            def workshop_download(self, mod_id: str) -> DownloadResult:
+            def workshop_download(
+                self, mod_id: str, instance_id: str | None = None
+            ) -> DownloadResult:
                 calls.append(mod_id)
                 return DownloadResult(False, mod_id, ErrorKind.UNKNOWN, "blip")
 

@@ -3,11 +3,12 @@
 from fastapi import APIRouter, Query
 
 from rwmod.database import clear_history, get_download_history, get_download_stats
+from rwmod.models.schemas import DownloadStatsResponse, HistoryResponse
 
 router = APIRouter(prefix="/api", tags=["history"])
 
 
-@router.get("/history")
+@router.get("/history", response_model=HistoryResponse)
 def history(
     # Bounded: a huge int reaches sqlite3's INTEGER conversion and raises
     # OverflowError (HTTP 500). Negative values stay tolerated (SQLite treats
@@ -18,7 +19,7 @@ def history(
     return {"items": get_download_history(limit=limit, status=status)}
 
 
-@router.get("/history/stats")
+@router.get("/history/stats", response_model=DownloadStatsResponse)
 def history_stats():
     return get_download_stats()
 

@@ -64,6 +64,31 @@ MAX_CACHE_BYTES = 2 * 1024 * 1024  # 2 MiB
 _HTTP_TIMEOUT = 30
 
 
+def _read_limited(response: Any, max_bytes: int) -> bytes | None:
+    """Read at most ``max_bytes`` from an HTTP response, streaming.
+
+    ``resp.read()`` used to buffer the whole payload before the documented
+    2 MB cap was checked. Read against the remaining budget instead; the
+    first byte past the cap aborts and returns ``None``. Response doubles
+    without a size-aware ``read`` fall back to one bounded check.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        try:
+            chunk = response.read(max_bytes + 1 - total)
+        except TypeError:
+            raw = response.read()
+            return raw if len(raw) <= max_bytes else None
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            return None
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 def _header_value(response: Any, name: str) -> str:
     headers = getattr(response, "headers", None)
     if headers is None:
@@ -104,6 +129,9 @@ class RimPyDB:
         self._parsed_conflicts: list[dict] = []
         self._loaded: bool = False
         self._load_attempted: bool = False
+        #: Why the most recent explicit refresh did not reach the network
+        #: (empty when it did, or when no refresh has run yet).
+        self.last_refresh_error: str = ""
 
     @classmethod
     def get(cls, cache_dir: Path | None = None) -> RimPyDB:
@@ -159,6 +187,29 @@ class RimPyDB:
         if self._load_from_cache(check_ttl=False):
             self._loaded = True
             return True
+        return False
+
+    def refresh(self) -> bool:
+        """Download the rules document even when the cache is still fresh.
+
+        :meth:`ensure_loaded` deliberately trusts a cache younger than
+        :data:`CACHE_TTL`; that made an explicit ``refresh_rules=true`` a
+        silent no-op for 24 hours. An explicit refresh must actually hit the
+        network. Returns False when the download failed — the stale cache is
+        kept and :attr:`last_refresh_error` explains that the refresh did not
+        happen.
+        """
+        self._loaded = False
+        self._load_attempted = False
+        self.last_refresh_error = ""
+        if self._download():
+            self._loaded = True
+            self._load_attempted = True
+            return True
+        self.last_refresh_error = "下载失败，仍在用已有缓存（如可用）"
+        # Fail-open: an existing cache still supplies rules to the caller.
+        self._loaded = self._load_from_cache(check_ttl=False)
+        self._load_attempted = True
         return False
 
     @property
@@ -316,13 +367,12 @@ class RimPyDB:
                     # Not modified: refresh the cache TTL and keep the data.
                     self._touch_cache()
                     return self._load_from_cache(check_ttl=False)
-                raw = resp.read()
+                raw = _read_limited(resp, MAX_CACHE_BYTES)
                 response_etag = _header_value(resp, "ETag")
 
-            if len(raw) > MAX_CACHE_BYTES:
+            if raw is None:
                 _log.warning(
-                    "Community rules payload too large (%d bytes > %d)",
-                    len(raw),
+                    "Community rules payload exceeds the %d-byte cap",
                     MAX_CACHE_BYTES,
                 )
                 return False
@@ -357,8 +407,11 @@ class RimPyDB:
 
 
 def refresh_community_rules() -> bool:
-    """Force a network refresh of the cached Community Rules database."""
-    db = RimPyDB.get()
-    db._loaded = False
-    db._load_attempted = False
-    return db.ensure_loaded(allow_network=True)
+    """Force a network refresh of the cached Community Rules database.
+
+    Always attempts the download (a fresh cache is bypassed). Returns False
+    when it failed, with :attr:`RimPyDB.last_refresh_error` saying why; the
+    caller (``routers/rimsort.py``, owned by BE-A) is expected to surface
+    that instead of reporting a silent success.
+    """
+    return RimPyDB.get().refresh()

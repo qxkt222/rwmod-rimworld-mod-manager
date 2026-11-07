@@ -11,6 +11,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
+from rwmod.errors import WorkshopError
 from rwmod.offline import mark_offline, mark_online
 
 __all__ = [
@@ -322,8 +323,13 @@ def _scrape_collection_page(collection_id: str, timeout: int = 30) -> list[str]:
 
 
 def fetch_item_details(mod_ids: list[str]) -> dict[str, dict]:
-    """Fetch updated timestamp for a batch of mod IDs (used for update detection)."""
-    return _fetch_batch(mod_ids)
+    """Fetch updated timestamp for a batch of mod IDs (used for update detection).
+
+    An API failure is an empty mapping here (the historical contract); callers
+    that must tell "no data" from "could not ask" use ``check_mod_updates``,
+    which raises ``WorkshopError`` instead.
+    """
+    return _fetch_batch(mod_ids) or {}
 
 
 def fetch_item_dependencies(mod_ids: list[str]) -> dict[str, list[str]]:
@@ -353,12 +359,18 @@ def fetch_item_dependencies(mod_ids: list[str]) -> dict[str, list[str]]:
     return result
 
 
-def _fetch_batch(mod_ids: list[str]) -> dict[str, dict]:
+def _fetch_batch(mod_ids: list[str]) -> dict[str, dict] | None:
+    """Details for a batch, or None when the API call itself failed.
+
+    The distinction matters: ``{}`` means "the API answered but had nothing
+    for these ids", while None means "we could not ask". The update checker
+    used to flatten both into ``{}`` and report "everything is up to date".
+    """
     if not mod_ids:
         return {}
     data = _request_json(_PUBLISHED_FILE_DETAILS_URL, form=_published_file_details_form(mod_ids))
     if data is None:
-        return {}
+        return None
 
     result: dict[str, dict] = {}
     for f in data.get("response", {}).get("publishedfiledetails", []):
@@ -370,25 +382,51 @@ def _fetch_batch(mod_ids: list[str]) -> dict[str, dict]:
     return result
 
 
+class _BatchDetails(dict[str, dict]):
+    """Details map plus the number of API batches that failed outright.
+
+    A ``dict`` subclass so existing callers/tests that treat the result as a
+    plain mapping keep working.
+    """
+
+    failed_batches: int = 0
+
+
 def _fetch_batch_parallel(mod_ids: list[str], batch_size: int = 100) -> dict[str, dict]:
     """Fetch mod details in parallel batches via ThreadPoolExecutor.
 
     For 300 mods → 3 concurrent API calls instead of 3 sequential ones,
     reducing total network wait by ~60-70%.
     A single batch goes directly to _fetch_batch with no executor overhead.
+
+    The returned mapping counts API failures in ``failed_batches`` so the
+    caller can distinguish "no updates" from "could not check".
     """
     if not mod_ids:
-        return {}
+        return _BatchDetails()
     if len(mod_ids) <= batch_size:
-        return _fetch_batch(mod_ids)
+        result = _BatchDetails()
+        batch = _fetch_batch(mod_ids)
+        if batch is None:
+            result.failed_batches = 1
+        else:
+            result.update(batch)
+        return result
 
     batches = [mod_ids[i : i + batch_size] for i in range(0, len(mod_ids), batch_size)]
-    result: dict[str, dict] = {}
+    result = _BatchDetails()
     with ThreadPoolExecutor(max_workers=min(len(batches), _MAX_WORKERS)) as executor:
         futures = {executor.submit(_fetch_batch, b): b for b in batches}
         for future in as_completed(futures):
-            with contextlib.suppress(Exception):
-                result.update(future.result())
+            try:
+                batch = future.result()
+            except Exception:
+                result.failed_batches += 1
+                continue
+            if batch is None:
+                result.failed_batches += 1
+            else:
+                result.update(batch)
     return result
 
 
@@ -425,6 +463,11 @@ def check_mod_updates(mods_dir: str) -> list[dict]:
     # 3 sequential ones, cutting network wait by ~60%.
     ids = list(local_mods.keys())
     all_details = _fetch_batch_parallel(ids)
+    failed_batches = int(getattr(all_details, "failed_batches", 0))
+    if failed_batches:
+        # Never report "no updates" for a check that could not be completed:
+        # that silently told the user everything was current.
+        raise WorkshopError(f"Steam API 请求失败（{failed_batches} 个批次），无法确认更新状态")
 
     import time as _time
 

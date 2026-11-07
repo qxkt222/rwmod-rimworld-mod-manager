@@ -8,7 +8,8 @@ import re
 import struct
 from pathlib import Path
 
-from rwmod.metadata import installed_package_ids, package_id_to_workshop_id
+from rwmod.errors import ValidationError
+from rwmod.metadata import installed_package_ids, package_id_key, package_id_to_workshop_id
 from rwmod.xmlutil import parse_xml_root
 
 # Safe XML parser: rejects entity expansion / external entity (XXE) attacks.
@@ -153,12 +154,17 @@ def parse_mods_config(config_xml: Path) -> list[str]:
     ``<li>`` and must not leak in here — ``rimsort.parse_modsconfig`` has
     always scoped to ``activeMods``, and disagreeing scopes made the CLI
     report installed DLC as missing mods (PARSE-5).
+
+    A malformed / unreadable file raises :class:`~rwmod.errors.ValidationError`
+    (400 at the API layer). Silently returning ``[]`` made a corrupt upload
+    look like "this mod list has no mods" — the caller answered 200 with a
+    zeroed result instead of a failure (REV-003). A well-formed document
+    without an ``activeMods`` element is still a valid empty list.
     """
     try:
         root = parse_xml_root(config_xml)
     except Exception as e:  # noqa: BLE001 — malformed or entity-laden XML
-        _log.error("无法解析 ModsConfig.xml: %s", e)
-        return []
+        raise ValidationError(f"无法解析 ModsConfig.xml: {e}") from e
     active_mods = root.find("activeMods")
     if active_mods is None:
         return []
@@ -176,14 +182,25 @@ def get_installed_package_ids(mods_dir: Path) -> set[str]:
 
 def resolve_workshop_ids(package_ids: list[str], mods_dir: Path) -> tuple[list[str], list[str]]:
     """Map packageIds → workshop IDs using installed mods as a lookup.
-    Returns (known_ids, unknown_package_ids).
+
+    packageIds are compared through :func:`package_id_key` (trim + case-fold):
+    RimWorld lowercases the ids it writes into ModsConfig.xml and saves, while
+    About.xml keeps the author's camelCase, so an exact-string lookup reported
+    installed mods as unknown. The original spelling is preserved in the
+    returned ``unknown`` list so the caller can show it to the user.
+
+    Returns (known_workshop_ids, unknown_package_ids).
     """
-    pkg_to_wid = package_id_to_workshop_id(mods_dir)
+    pkg_to_wid = {
+        package_id_key(pid): wid
+        for pid, wid in package_id_to_workshop_id(mods_dir).items()
+        if package_id_key(pid)
+    }
 
     known: list[str] = []
     unknown: list[str] = []
     for pid in package_ids:
-        wid = pkg_to_wid.get(pid, "")
+        wid = pkg_to_wid.get(package_id_key(pid), "")
         if wid:
             known.append(wid)
         else:

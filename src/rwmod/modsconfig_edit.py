@@ -19,6 +19,8 @@ import logging
 import os
 import re
 import shutil
+import tempfile
+import threading
 import xml.etree.ElementTree as ET
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -274,6 +276,12 @@ def _item_indent(old_inner: str, base_indent: str) -> str:
 
 # ── atomic writer ──────────────────────────────────────────────────
 
+# Serializes this process's writers. Unique temp names keep two processes
+# from sharing a scratch file; within one process the backup/snapshot read
+# and the replace still must not interleave — on Windows, replacing a file
+# another thread has open for the backup copy fails with PermissionError.
+_WRITE_LOCK = threading.Lock()
+
 
 def write_modsconfig_target(target: Path, text: str, *, label: str = "batch-active") -> Path | None:
     """Write *text* to *target* after backing it up and snapshotting it.
@@ -289,29 +297,38 @@ def write_modsconfig_target(target: Path, text: str, *, label: str = "batch-acti
     _assert_target(target)
     target.parent.mkdir(parents=True, exist_ok=True)
 
-    backup: Path | None = None
-    if target.exists():
-        ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
-        backup = target.with_name(f"{target.name}.bak_{ts}")
-        counter = 1
-        while backup.exists():
-            backup = target.with_name(f"{target.name}.bak_{ts}_{counter}")
-            counter += 1
-        shutil.copy2(target, backup)
+    with _WRITE_LOCK:
+        backup: Path | None = None
+        if target.exists():
+            ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
+            backup = target.with_name(f"{target.name}.bak_{ts}")
+            counter = 1
+            while backup.exists():
+                backup = target.with_name(f"{target.name}.bak_{ts}_{counter}")
+                counter += 1
+            shutil.copy2(target, backup)
 
-        from rwmod.undo import snapshot_modsconfig
+            from rwmod.undo import snapshot_modsconfig
 
-        snapshot_modsconfig(target, label=label)
+            snapshot_modsconfig(target, label=label)
 
-    tmp = target.with_name(target.name + ".rwmod.tmp")
-    try:
-        tmp.write_bytes(text.encode("utf-8"))
-        os.replace(tmp, target)
-    finally:
-        tmp.unlink(missing_ok=True)
+        # A unique temp name per writer. A fixed "<target>.rwmod.tmp" made two
+        # concurrent read-modify-writes share one scratch file: one writer's
+        # os.replace() moved the other's half-written content into place (lost
+        # update) or the loser's replace failed with FileNotFoundError (500).
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f"{target.name}.", suffix=".rwmod.tmp", dir=target.parent
+        )
+        tmp = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(text.encode("utf-8"))
+            os.replace(tmp, target)
+        finally:
+            tmp.unlink(missing_ok=True)
 
-    _log.info("写入 ModsConfig.xml: %s（备份 %s）", target, backup.name if backup else "无")
-    return backup
+        _log.info("写入 ModsConfig.xml: %s（备份 %s）", target, backup.name if backup else "无")
+        return backup
 
 
 def _assert_target(target: Path) -> None:

@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -91,10 +92,37 @@ def snapshot_modsconfig(
     return dest
 
 
+def _atomic_copy(source: Path, target: Path) -> None:
+    """Replace *target* with a copy of *source* via a same-directory temp file.
+
+    ``shutil.copy2(source, target)`` truncates the live ModsConfig.xml before
+    writing it, so a crash / full disk / killed process mid-copy leaves RimWorld
+    with a truncated (unreadable) mod list and no way back. Writing a sibling
+    temp file and renaming it with ``os.replace`` means the live file is either
+    the old one or the complete new one — never a half-written amalgam.
+
+    The temp name comes from :func:`tempfile.mkstemp`, so two concurrent
+    restores cannot share (and corrupt) one scratch file (REV-010).
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f"{target.name}.", suffix=".rwmod.tmp", dir=target.parent
+    )
+    os.close(fd)
+    tmp = Path(tmp_name)
+    try:
+        shutil.copy2(source, tmp)
+        os.replace(tmp, target)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def undo_last(modsconfig_path: Path, instance_id: str | None = None) -> dict:
     """Restore the most recent snapshot of one instance to modsconfig_path.
 
-    Returns {"ok": bool, "msg": str, "restored": str|None}.
+    Returns ``{"ok": bool, "msg": str, "restored": str|None}``. The router
+    turns ``ok: False`` into the matching ``errors.py`` exception, so a 200
+    body never has to carry a failure flag.
     """
     snapshots = list_undo_snapshots(instance_id)
     if not snapshots:
@@ -102,8 +130,7 @@ def undo_last(modsconfig_path: Path, instance_id: str | None = None) -> dict:
 
     latest = snapshots[0]
     try:
-        modsconfig_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(latest, modsconfig_path)
+        _atomic_copy(latest, modsconfig_path)
         latest.unlink(missing_ok=True)
         _log.info("已撤销: %s → %s", latest.name, modsconfig_path)
         return {"ok": True, "msg": f"已撤销到 {latest.name}", "restored": latest.name}

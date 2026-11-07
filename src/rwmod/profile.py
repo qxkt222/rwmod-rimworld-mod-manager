@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import logging
 import os
-import xml.etree.ElementTree as ET
+import shutil
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
 from rwmod.config import current_instance_id, is_valid_instance_id
 from rwmod.utils import safe_filename
+from rwmod.xmlutil import parse_xml_root
 
 __all__ = [
     "PROFILES_DIR",
@@ -205,6 +207,22 @@ def list_profiles(instance_id: str | None = None) -> list[dict]:
     return results
 
 
+def _remove_legacy_temp(target: Path) -> None:
+    """Delete the fixed ``<target>.rwmod.tmp`` scratch file used before REV-010.
+
+    A crashed pre-fix writer could leave one behind; leaving it would look like
+    live data to a curious user. Only a regular file is removed — a directory
+    squatting on the name is left alone so the atomic write fails loudly
+    instead of deleting something unexpected.
+    """
+    legacy = target.with_name(f"{target.name}.rwmod.tmp")
+    try:
+        if legacy.is_file():
+            legacy.unlink(missing_ok=True)
+    except OSError:  # best-effort cleanup must never fail the write
+        pass
+
+
 def save_profile(
     name: str, source_path: Path | str, label: str = "", instance_id: str | None = None
 ) -> dict:
@@ -216,8 +234,9 @@ def save_profile(
         label: Optional human-readable description.
         instance_id: Owning instance (defaults to the active one).
 
-    Returns:
-        {"ok": bool, "msg": str}
+    Returns ``{"ok": bool, "msg": str}`` (plus ``mod_count`` on success). The
+    routers translate ``ok: False`` into an ``errors.py`` exception; library
+    callers (the CLI) keep the tuple-style result they have always used.
     """
     dest = profiles_dir_for(instance_id) / f"{safe_filename(name)}.xml"
     safe_name = dest.stem
@@ -236,13 +255,28 @@ def save_profile(
     except Exception as e:
         return {"ok": False, "msg": f"读取失败: {e}"}
 
-    # Validate it's valid XML (basic check)
+    # Validate with the defused parser (a profile can be a hand-dropped file;
+    # entity-expansion / XXE must be rejected, not fed to stdlib ElementTree).
+    # Write a temp file first so a rejected/incomplete save never truncates an
+    # existing profile of the same name; then swap it in atomically. The temp
+    # name must be unique per writer: a fixed "<dest>.rwmod.tmp" let two
+    # concurrent save requests of the same profile share one scratch file
+    # (REV-010). Remove such a scratch file if a pre-fix writer crashed and
+    # left one behind.
+    _remove_legacy_temp(dest)
+    fd, tmp_name = tempfile.mkstemp(prefix=f"{dest.name}.", suffix=".rwmod.tmp", dir=dest.parent)
+    tmp = Path(tmp_name)
     try:
-        ET.fromstring(content)
-    except ET.ParseError as e:
-        return {"ok": False, "msg": f"无效的 XML: {e}"}
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+        try:
+            parse_xml_root(tmp)
+        except Exception as e:
+            return {"ok": False, "msg": f"无效的 XML: {e}"}
+        os.replace(tmp, dest)
+    finally:
+        tmp.unlink(missing_ok=True)
 
-    dest.write_text(content, encoding="utf-8")
     mod_count = _count_mods_in_xml(dest)
     _log.info("保存 profile: %s (%d mods)", safe_name, mod_count)
     return {
@@ -260,13 +294,11 @@ def restore_profile(name: str, target_path: Path, instance_id: str | None = None
         target_path: Where to write ModsConfig.xml.
         instance_id: Owning instance (defaults to the active one).
 
-    Returns:
-        {"ok": bool, "msg": str}
+    Returns ``{"ok": bool, "msg": str}`` (plus ``mod_count`` on success); the
+    router turns ``ok: False`` into the matching ``errors.py`` exception.
     """
     # Fail closed before touching anything: a target outside the declared test
-    # sandbox raises (SandboxViolationError) instead of being written, and the
-    # guard sits outside the try block so it cannot be swallowed by the
-    # {"ok": False} error path below.
+    # sandbox raises (SandboxViolationError) instead of being written.
     _assert_within_sandbox(target_path)
 
     safe_name = safe_filename(name)
@@ -275,21 +307,43 @@ def restore_profile(name: str, target_path: Path, instance_id: str | None = None
     if not src.exists():
         return {"ok": False, "msg": f"Profile 不存在: {safe_name}"}
 
+    # A profile is untrusted XML (users copy these files around): reject
+    # entity-expansion / external entities before the content is written over
+    # the live ModsConfig.xml.
+    try:
+        parse_xml_root(src)
+    except Exception as e:
+        return {"ok": False, "msg": f"Profile 不是有效的 XML: {e}"}
+
+    backup = target_path.with_suffix(".xml.rwmod.bak")
     tmp: Path | None = None
     try:
         content = src.read_text(encoding="utf-8")
         target_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Atomic write: write a temp file FIRST (a failed write leaves the
-        # live ModsConfig.xml untouched), then back the current file aside,
-        # then replace. Moving the live file away before writing would leave
-        # RimWorld with NO ModsConfig.xml if the write failed mid-restore.
-        tmp = target_path.with_suffix(target_path.suffix + ".rwmod.tmp")
-        tmp.write_text(content, encoding="utf-8")
+        # Atomic write: write a temp file FIRST, then atomically rename it over
+        # the live file. The live ModsConfig.xml is *copied* to .bak, never
+        # moved: an earlier version moved it aside first, so a failure at the
+        # second step left RimWorld with no ModsConfig.xml at all. The temp
+        # name is unique per writer (REV-010): a fixed name let two concurrent
+        # restores share one scratch file. A scratch file left by a crashed
+        # pre-fix writer is removed so it can never be mistaken for data.
+        _remove_legacy_temp(target_path)
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f"{target_path.name}.",
+            suffix=".rwmod.tmp",
+            dir=target_path.parent,
+        )
+        tmp = Path(tmp_name)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
 
         if target_path.exists():
-            backup = target_path.with_suffix(".xml.rwmod.bak")
-            os.replace(target_path, backup)
+            # A directory squatting on the .bak name would make copy2 place
+            # the file *inside* it and report success — refuse instead.
+            if backup.exists() and not backup.is_file():
+                raise OSError(f"备份路径被占用: {backup}")
+            shutil.copy2(target_path, backup)
             _log.info("备份现有 ModsConfig.xml → %s", backup.name)
 
         os.replace(tmp, target_path)
@@ -301,11 +355,13 @@ def restore_profile(name: str, target_path: Path, instance_id: str | None = None
             "mod_count": mod_count,
         }
     except Exception as e:
-        # `tmp` is only bound after the profile was read; a decode/IO failure
-        # before that point must not mask the real error with UnboundLocalError
-        # (DATA-4).
         if tmp is not None:
             tmp.unlink(missing_ok=True)
+        # os.replace is atomic, so a failure normally leaves the live file
+        # intact. If it disappeared anyway (external interference), restore the
+        # .bak so the game never loses its mod list.
+        if not target_path.exists() and backup.exists():
+            os.replace(backup, target_path)
         return {"ok": False, "msg": f"恢复失败: {e}"}
 
 
@@ -327,7 +383,9 @@ def delete_profile(name: str, instance_id: str | None = None) -> bool:
 def _count_mods_in_xml(path: Path) -> int:
     """Count <li> elements under <activeMods> in a ModsConfig.xml."""
     try:
-        root = ET.parse(path).getroot()
+        # defused parse: a profile file is user-supplied content, so entity
+        # bombs / XXE must be rejected by the safe parser, not stdlib.
+        root = parse_xml_root(path)
         active = root.find("activeMods")
         if active is not None:
             return len(active.findall("li"))

@@ -7,7 +7,12 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from rwmod.config import Config, InstanceConfig, is_valid_instance_id
+from rwmod.config import (
+    Config,
+    InstanceConfig,
+    is_allowed_steamcmd_name,
+    is_valid_instance_id,
+)
 from rwmod.deps import get_config
 from rwmod.models.schemas import ConfigResponse, ConfigUpdateRequest, InstanceCreateRequest
 
@@ -112,8 +117,16 @@ def _validate_dir_path(raw: str, field: str) -> Path:
     return p
 
 
-def _validate_steamcmd_path(raw: str) -> Path:
-    """steamcmd_path must be an absolute path to a regular file."""
+def _validate_steamcmd_path(raw: str, cfg: Config | None = None) -> Path:
+    """steamcmd_path must point at a real ``steamcmd`` executable.
+
+    The old check only asked for "absolute path to a regular file" — but this
+    path is *executed* by ``/api/steamcmd/check`` and by every download. Since
+    ``/api/mods/import-local`` unpacks a user-supplied zip into ``mods_dir``,
+    the old rule allowed upload-any-exe → point the setting at it → execute,
+    i.e. arbitrary code execution from the UI. Restrict the basename and refuse
+    any path inside a directory this app writes uploads into.
+    """
     p = Path(raw)
     if not p.is_absolute():
         raise HTTPException(400, f"steamcmd_path 必须是绝对路径: {raw!r}")
@@ -123,8 +136,42 @@ def _validate_steamcmd_path(raw: str) -> Path:
         raise HTTPException(400, f"steamcmd_path 路径无效: {raw!r}") from None
     if resolved.is_dir():
         raise HTTPException(400, f"steamcmd_path 不能是目录: {raw!r}")
+    if not is_allowed_steamcmd_name(resolved):
+        raise HTTPException(
+            400,
+            "steamcmd_path 必须指向 steamcmd.exe（或 steamcmd.sh），"
+            f"当前文件名不可执行: {resolved.name!r}",
+        )
     _reject_unsafe_dir(resolved, "steamcmd_path", raw)
+    if cfg is not None:
+        _reject_inside_upload_dirs(resolved, cfg, raw)
     return p
+
+
+def _reject_inside_upload_dirs(
+    path: Path, cfg: Config, raw: str, extra_dirs: tuple[Path, ...] = ()
+) -> None:
+    """Refuse an executable living inside a directory the API can write to.
+
+    ``mods_dir`` receives uploaded mod zips and ``backup_dir`` receives
+    restored archives; treating those as an executable source would rebuild
+    the upload→execute chain the basename check just closed. ``extra_dirs``
+    lets a not-yet-registered instance's directories be checked too.
+    """
+    candidates = [cfg.mods_dir, cfg.backup_dir, *extra_dirs]
+    for inst in cfg.instances:
+        candidates.extend((inst.mods_dir, inst.backup_dir or inst.mods_dir / "_backups"))
+    resolved = path.resolve()
+    for directory in candidates:
+        try:
+            target = Path(directory).resolve()
+        except (OSError, RuntimeError):
+            continue
+        if resolved == target or resolved.is_relative_to(target):
+            raise HTTPException(
+                400,
+                f"steamcmd_path 不能位于可上传目录内: {raw!r}",
+            )
 
 
 def _instance_payload(instance: InstanceConfig) -> dict:
@@ -174,9 +221,17 @@ def create_instance(
     config_dir = (
         _validate_dir_path(payload.config_dir, "config_dir") if payload.config_dir else None
     )
-    steamcmd_path = (
-        _validate_steamcmd_path(payload.steamcmd_path) if payload.steamcmd_path else None
-    )
+    steamcmd_path = None
+    if payload.steamcmd_path:
+        steamcmd_path = _validate_steamcmd_path(payload.steamcmd_path, cfg)
+        # The new instance is not registered yet, so its own directories must
+        # be passed explicitly to the upload-directory guard.
+        _reject_inside_upload_dirs(
+            steamcmd_path,
+            cfg,
+            payload.steamcmd_path,
+            extra_dirs=(mods_dir, backup_dir or mods_dir / "_backups"),
+        )
 
     instance_id = (payload.id or "").strip() or None
     if instance_id is not None and not is_valid_instance_id(instance_id):
@@ -266,7 +321,7 @@ def update_config(
     # from "key sent as an empty string", which the old `in payload` check gave us.
     sent = payload.model_fields_set
     if "steamcmd_path" in sent:
-        cfg.steamcmd_path = _validate_steamcmd_path(payload.steamcmd_path or "")
+        cfg.steamcmd_path = _validate_steamcmd_path(payload.steamcmd_path or "", cfg)
     if "mods_dir" in sent:
         cfg.mods_dir = _validate_dir_path(payload.mods_dir or "", "mods_dir")
     if "rimworld_dir" in sent:
