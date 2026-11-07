@@ -67,6 +67,14 @@ uv run uvicorn rwmod.server:app --host 127.0.0.1 --port 8000
 docker compose up -d
 ```
 
+### 升级
+
+从 0.7.x 直接运行新的 `rwmod_setup.exe` **覆盖安装**即可，不需要先卸载：
+
+- 配置（`.rwmod.toml`）与数据库（`.rwmod.db`）在启动时自动迁移到当前 schema；
+- `Mods`、备份、存档、`Config/` 都在游戏目录，不受安装影响；
+- 安装前先退出 rwmod（含后台/托盘进程），否则 exe 被占用会导致安装失败。
+
 ## 🔧 CLI 命令
 
 ```bash

@@ -47,6 +47,15 @@
   此前前端测试数为 0。
 - CI 新增 Windows 打包 job（PyInstaller + exe 探活 + Inno Setup）与 Windows pytest。
 
+## ⬆️ 升级
+
+从 0.7.x **直接覆盖安装**，无需卸载：
+
+- 配置与数据库在启动时自动迁移（`PRAGMA user_version` + 有序 migration，
+  中断会回滚，不会留下半迁移状态）；
+- `Mods`、备份、存档、`Config/` 留在游戏目录，不受影响；
+- 升级前请先退出 rwmod（含后台/托盘进程），否则 exe 被占用会安装失败。
+
 ## ⚠️ 已知限制
 
 - 安装包体积主要来自内置 SteamCMD，与业务代码无关。
